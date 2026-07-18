@@ -1517,7 +1517,10 @@
     transform:translate(-50%,-100%) rotate(calc(var(--p)*3.6deg))}
 
   /* modal */
-  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:200;display:none;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px)}
+  /* No backdrop-filter here: a full-viewport real-time blur can't be cached while the
+     modal animates in, so it re-blurs the whole page every frame — the dominant GPU
+     stall on weaker devices. The opaque .85 dim already hides the page behind it. */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:200;display:none;align-items:center;justify-content:center;padding:24px}
   .overlay.open{display:flex}
   /* ============================================================ *
    *  DETAIL MODAL — cinematic redesign (all .m- prefixed, real tokens).
@@ -1557,9 +1560,15 @@
   .m-hero-bg .art img,.m-hero-bg img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
   /* ambient placeholder = the portrait grid poster, blurred+dimmed so it reads as backdrop art
      (never a stretched poster); the real landscape backdrop crossfades in over it on load */
-  .m-hero-bg .art img.m-ambient{filter:blur(28px) brightness(.45) saturate(1.1);transform:scale(1.15)}
+  /* blur radius drives cost (roughly with its square on the GPU) — 12px reads the same as
+     a soft backdrop but is far cheaper to rasterise than the old 28px on a scaled-up poster */
+  .m-hero-bg .art img.m-ambient{filter:blur(12px) brightness(.45) saturate(1.1);transform:scale(1.15)}
   .m-hero-bg .art img.m-backdrop{opacity:0;transition:opacity .55s ease}
   .m-hero-bg .art img.m-backdrop.rdy{opacity:1}
+  /* The 12s heroKen zoom continuously repaints the (blurred) hero layer for 12s after the
+     overlay opens — pure cost on a GPU-bound device, invisible value under reduced-motion.
+     Land the backdrop at its rest scale and skip the animation. */
+  @media(prefers-reduced-motion:reduce){.m-hero-bg{animation:none;transform:none}}
   /* detail loading veil — covers the modal while /api/meta is in flight so the
      overlay opens already-populated instead of flashing seeded/partial data.
      Sits above the hero (scrim z2, trailer z1); the ambient poster reads through it. */
