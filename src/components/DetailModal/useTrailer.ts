@@ -13,6 +13,18 @@ const REVEAL_DELAY = 4000;
 // so quickly flicking through titles doesn't each mount — and stream — a full trailer.
 const MOUNT_DELAY = 1500;
 
+// Heuristic for "don't spend the frame budget on an autoplay trailer here". Any one
+// signal is enough: ≤4 logical cores, ≤4 GB reported RAM, or the user's Save-Data flag.
+// All three are optional/absent on some browsers — when nothing is known we assume the
+// device is capable (return false) so capable machines still get the trailer.
+function isLowPowerDevice(): boolean {
+  const nav = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
+  if (nav.connection?.saveData) return true;
+  if (typeof nav.hardwareConcurrency === 'number' && nav.hardwareConcurrency <= 4) return true;
+  if (typeof nav.deviceMemory === 'number' && nav.deviceMemory <= 4) return true;
+  return false;
+}
+
 function ytSrc(key: string, muted: boolean): string {
   return 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(key) +
     '?autoplay=1&' + (muted ? 'mute=1' : 'mute=0') +
@@ -42,6 +54,13 @@ export function useTrailer(
     hero?.classList.remove('has-trailer');
     iframeRef.current = null;
     if (!trailerKey || !slot) return;
+    // Skip the trailer on low-power devices: the autoplaying embed is a heavy,
+    // always-animating compositor layer that also software-decodes video (VP8) on the
+    // CPU — the biggest driver of overlay jank on weak hardware. Gate on device-power
+    // signals (few cores / little RAM / Save-Data) rather than prefers-reduced-motion,
+    // so it degrades where the frame budget is actually tight without touching motion
+    // preferences elsewhere. On such devices the modal rests on the static backdrop.
+    if (isLowPowerDevice()) return;
 
     let ifr: HTMLIFrameElement | null = null;
     let onMsg: ((e: MessageEvent) => void) | null = null;
