@@ -9,17 +9,13 @@
 import { EN_BASE } from './en-base';
 
 const SEED: Record<string, string> = {
-  'brand.name': 'STREDIO',
-
   // primary nav (top strip + rail + drawer)
   'nav.home': 'Home',
   'nav.tv': 'TV',
   'nav.tv_shows': 'TV Shows',
   'nav.movies': 'Movies',
-  'nav.new': 'New & Popular',
   'nav.new_popular': 'New & Popular',
   'nav.my_list': 'My List',
-  'nav.mylist': 'My List',
   'nav.search': 'Search',
   'nav.anime': 'Anime',
   // Plural: it labels the rail item for /categories, which lists many. It read
@@ -34,20 +30,12 @@ const SEED: Record<string, string> = {
   'cathub.collections': 'Collections',
   'cathub.genres': 'Genres',
   'cathub.networks': 'Networks',
-  'nav.watch_head': 'WATCH',
-  'nav.menu': 'BROWSE',
-  'nav.catalog': 'Catalog',
   'nav.addons': 'Addons',
   'nav.settings': 'Settings',
   'nav.admin': 'Admin',
   'myspace.title': 'My Space',
 
   // ui chrome
-  'ui.main_nav': 'Main navigation',
-  'ui.aside_close': 'Close menu',
-  'ui.nav_toggle_t': 'Toggle menu (\\)',
-  'ui.nav_toggle_a': 'Toggle navigation menu',
-  'ui.browse_catalog': 'Browse catalog',
   'ui.featured_title': 'Featured title',
   'ui.featured_titles': 'Featured titles',
   'ui.scroll_left': 'Scroll left',
@@ -86,8 +74,6 @@ const SEED: Record<string, string> = {
 
   // hero actions
   'hero.play': 'MORE',
-  'hero.more_info': 'More Info',
-  'hero.add': 'My List',
   'hero.plot_fallback': '',
 
   // footer
@@ -97,8 +83,6 @@ const SEED: Record<string, string> = {
   'footer.legal_link': 'DMCA / Takedown Policy',
 
   // detail modal
-  'modal.now_showing': 'NOW SHOWING',
-  'modal.now_streaming': 'NOW STREAMING',
   'modal.watch': 'WATCH',
   'modal.watch_authed': 'WATCH',
   'modal.resume': 'RESUME',
@@ -107,7 +91,6 @@ const SEED: Record<string, string> = {
   'modal.mute': 'Mute trailer',
   'modal.loading_synopsis': 'Loading synopsis…',
   'modal.no_synopsis': 'No synopsis available.',
-  'modal.synopsis_unavailable': 'Synopsis unavailable.',
   'modal.episodes': 'EPISODES',
   'modal.streams': 'SOURCES',
   'modal.cast_credits': 'CASTS & CREDITS',
@@ -150,14 +133,6 @@ const SEED: Record<string, string> = {
   'ctl.settings_a': 'Playback settings',
   'ctl.pip_a': 'Picture in picture',
   'ctl.fs_a': 'Toggle fullscreen',
-  'ctl.speed': 'Speed',
-  'ctl.quality': 'Quality',
-  'ctl.subtitles': 'Subtitles',
-  'ctl.auto': 'Auto',
-  'ctl.off': 'Off',
-  'ctl.on': 'On',
-  'ctl.normal': 'Normal',
-  'ctl.enhance': 'Picture enhance',
   'ctl.grain': 'Grain',
   'ctl.clarity': 'Clarity',
 
@@ -179,7 +154,6 @@ const SEED: Record<string, string> = {
   'grid.no_results': 'No results for “{q}”.',
   'grid.no_titles': 'No titles found.',
   'cat.page': 'Page {x} of {y}',
-  'cat.results': 'Results for “{q}”',
   'cat.filtered': 'Filtered titles',
   'explore.results': 'Results for “{q}”',
   'explore.trending': 'Trending now',
@@ -193,19 +167,15 @@ const SEED: Record<string, string> = {
 
   // settings
   'settings.title': 'Settings',
-  'settings.interface': 'Interface',
   // AUDIO language, not the UI's. It labels the select bound to settings.audioLang
   // (English / Original) in the Playback card, and Settings already has a separate
   // 'settings.website_language' control — a bare "Language" leaves the reader to guess
   // which is which. en-base and ka.json ("აუდიო ენა") both say audio; this override
   // was the odd one out.
   'settings.language': 'Audio language',
-  'settings.playback': 'Playback',
   'settings.autoplay_next': 'Auto-play next episode',
-  'settings.subtitles': 'Subtitles',
   'settings.sub_size': 'Subtitle size',
   'settings.blur_unwatched': 'Blur unwatched episode stills',
-  'settings.sub_preview': 'The quick brown fox',
   // colour picker — the saturation/brightness square and the hue rail have no visible
   // label of their own, so they carry aria-only names (_a, per ctl.play_a / ui.nav_toggle_a).
   // The trigger reuses the row's visible settings.sub_color / sub_outline key instead.
@@ -215,17 +185,12 @@ const SEED: Record<string, string> = {
 
   // addons
   'addons.title': 'Add-ons',
-  'addons.official': 'Official add-ons',
-  'addons.community': 'Community add-ons',
-  'addons.install_ph': 'Paste an add-on manifest URL…',
   'addons.install': 'Install',
-  'addons.installed': 'Installed',
   'addons.none': 'No community add-ons yet.',
   'addons.sync_note': 'Signed in? Your add-ons sync across your devices.',
   'addons.configure': 'Configure',
   'addons.enable': 'Add',
   'addons.remove': 'Remove',
-  'addons.on': 'On',
 
   // auth
   'auth.kicker': '// sign in to manage add-ons & settings',
@@ -253,8 +218,6 @@ const SEED: Record<string, string> = {
   'auth.err_age': 'You must be at least 13 years old.',
   'auth.err_generic': 'Something went wrong. Please try again.',
   'auth.signin': 'Sign in',
-  'auth.logout': 'Log out',
-  'auth.account': 'Account',
 
   'common.loading': 'Loading…',
 };

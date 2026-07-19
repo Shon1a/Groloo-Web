@@ -22,8 +22,7 @@ import VideoPlayer from './components/VideoPlayer/VideoPlayer';
 import AuthModal from './components/AuthModal';
 
 /* Hash routing (React Router in hash mode) — needs zero server config, so any static
- * host works with no catch-all rewrite. A legacy #home → #/ redirect for old bookmarks
- * gets added in Phase 1. */
+ * host works with no catch-all rewrite. */
 export default function App() {
   const refresh = useAuth((s) => s.refresh);
   const loadConfig = useAuth((s) => s.loadConfig);
@@ -59,7 +58,7 @@ export default function App() {
           <Route path="movies" element={<Browse cat="trending_movie" topLevel />} />
           <Route path="anime" element={<Browse cat="trending_anime" topLevel />} />
           <Route path="browse/:cat" element={<Browse />} />
-          {/* library / add-ons / settings (auth gating applied in Phase 5) */}
+          {/* library / add-ons / settings */}
           <Route path="library" element={<Library />} />
           <Route path="addons" element={<Addons />} />
           <Route path="settings" element={<Settings />} />

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
-import type { HomePayload, Row, MediaItem, MediaType, MetaDetail, SeasonEpisodes } from './types';
+import type { HomePayload, MediaItem, MetaDetail, SeasonEpisodes } from './types';
 import { useLang } from '../i18n/i18n';
 import { usePlayer } from '../stores/player';
 
@@ -22,32 +22,6 @@ export function useHome() {
     // max-age=60 and refresh on tab focus so admin edits appear within ~a minute
     staleTime: 60 * 1000,
     refetchOnWindowFocus: refetchFocusUnlessPlaying,
-  });
-}
-
-export function useBrowse(cat: string, page = 1, opts: { studio?: string; full?: boolean } = {}) {
-  const { lang } = useLang();
-  return useQuery({
-    queryKey: ['browse', cat, page, opts, lang],
-    queryFn: () => {
-      const p = new URLSearchParams({ cat, page: String(page), lang });
-      if (opts.studio) p.set('studio', opts.studio);
-      if (opts.full) p.set('full', '1');
-      return api<{ cat: string; totalPages: number; results: MediaItem[] }>(`/api/browse?${p}`);
-    },
-  });
-}
-
-export function useSearch(q: string, page = 1, type: MediaType | 'all' = 'all') {
-  const { lang } = useLang();
-  return useQuery({
-    queryKey: ['search', q, page, type, lang],
-    enabled: q.trim().length > 0,
-    queryFn: () => {
-      const p = new URLSearchParams({ q, page: String(page), lang });
-      if (type !== 'all') p.set('type', type);
-      return api<Row & { page: number }>(`/api/search?${p}`);
-    },
   });
 }
 

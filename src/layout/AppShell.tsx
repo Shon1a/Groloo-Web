@@ -14,12 +14,9 @@ import { useAuth } from '../stores/auth';
 
 const GATED = ['/addons', '/settings', '/library'];
 
-/* Full chrome, faithful to index.html so app.css styles it identically:
- *   .shell > [ railbar · main > (topbar · <Outlet/> · footer) ]
- * The left icon rail is the desktop primary nav (expands on hover); on phones it
- * re-homes to the floating bottom dock. The topbar collapses to height:0 on both.
- * Nav routes through React Router. The decorative #topbarFrame SVG and the
- * #authControl chip are left as empty hooks (auth lands in Phase 5). */
+/* App shell: .shell > [ railbar · main > (<Outlet/> · footer) ]
+ * The left icon rail is the primary nav on desktop (expands on hover); on phones it
+ * re-homes to the floating bottom dock. Nav routes through React Router. */
 
 const RAIL = [
   { rail: 'home', to: '/', key: 'nav.home' },
@@ -40,14 +37,6 @@ type RailName = (typeof RAIL)[number]['rail'];
  * shape, so the rail drives them all the same way. */
 type RailIconHandle = { startAnimation: () => void; stopAnimation: () => void };
 
-const TOPNAV: Array<{ to: string; key: string }> = [
-  { to: '/', key: 'nav.home' },
-  { to: '/tv', key: 'nav.tv_shows' },
-  { to: '/movies', key: 'nav.movies' },
-  { to: '/categories', key: 'nav.new_popular' },
-  { to: '/library', key: 'nav.my_list' },
-];
-
 /* The active-item highlight is ONE element (layoutId 'railPill') that lives inside whichever
  * rail item is active. When the route changes it unmounts from the old item and mounts in the
  * new one, so motion springs the same box across the gap — Instagram's sliding-dock feel. The
@@ -60,10 +49,8 @@ export default function AppShell() {
   const t = useT();
   const nav = useNavigate();
   const { pathname, search } = useLocation();
-  const [acctOpen, setAcctOpen] = useState(false);
   const user = useAuth((s) => s.user);
   const openAuth = useAuth((s) => s.openAuth);
-  const logout = useAuth((s) => s.logout);
   const reduceMotion = useReducedMotion();
   // The active-item highlight is a shared-layout element (layoutId 'railPill'). On a hard reload
   // Motion takes its FIRST layout snapshot before app.css has positioned the pill — and, under
@@ -196,50 +183,6 @@ export default function AppShell() {
       </nav>
 
       <main>
-        <header id="topbar">
-          <svg className="topbar-frame" id="topbarFrame" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" />
-          <span className="brand-logo" aria-label="stredio" style={{ pointerEvents: 'none' }}>
-            <img src="/assets/stredio-logo.svg" alt="stredio" />
-          </span>
-          <nav className="topnav" id="topnav" aria-label="Primary">
-            {TOPNAV.map((n) => (
-              <a key={n.to} className={`topnav-link${isActive(n.to) ? ' active' : ''}`} role="button" tabIndex={0} onClick={() => go(n.to)}>
-                {t(n.key)}
-              </a>
-            ))}
-          </nav>
-          <button className="nav-icon" id="searchIcon" type="button" aria-label="Search" onClick={() => go('/explore')}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
-          </button>
-          <button className="nav-icon" id="userIcon" type="button" aria-label={t('auth.signin')} onClick={() => openAuth()}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" /></svg>
-          </button>
-          <button className="nav-icon" id="chatIcon" type="button" aria-label="Notifications">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
-          </button>
-          <div className="auth-control" id="authControl">
-            {user && (
-              <div style={{ position: 'relative' }} onMouseLeave={() => setAcctOpen(false)}>
-                <button
-                  type="button" aria-haspopup="menu" aria-expanded={acctOpen} aria-label={t('auth.account')}
-                  onClick={() => setAcctOpen((o) => !o)}
-                  style={{ width: 34, height: 34, borderRadius: '50%', background: '#fff', color: '#000', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 15 }}
-                >
-                  {(user.name || user.email || '?').charAt(0).toUpperCase()}
-                </button>
-                {acctOpen && (
-                  <div role="menu" style={{ position: 'absolute', top: '110%', right: 0, background: '#111', border: '1px solid #2a2a2a', borderRadius: 8, minWidth: 150, padding: 6, zIndex: 50, display: 'flex', flexDirection: 'column' }}>
-                    {user.isAdmin && (
-                      <a role="menuitem" style={{ padding: '8px 10px', color: '#ccc', cursor: 'pointer', fontSize: 14 }} onClick={() => { setAcctOpen(false); window.location.href = '/admin'; }}>{t('nav.admin')}</a>
-                    )}
-                    <button role="menuitem" style={{ padding: '8px 10px', background: 'none', border: 'none', color: '#ccc', textAlign: 'left', cursor: 'pointer', fontSize: 14 }} onClick={() => { setAcctOpen(false); logout(); }}>{t('auth.logout')}</button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </header>
-
         <Outlet />
 
         <footer className="site-footer">

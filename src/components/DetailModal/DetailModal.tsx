@@ -20,8 +20,7 @@ const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080'
 
 /* Detail modal — faithful port of the #overlay markup + openInfoModal/enrichModalMeta/
  * renderCast/renderRecs (assets/js/app.js). Seeded from the clicked card for an instant
- * paint, then enriched from /api/meta. The episode chooser (TV) is Phase 2b and the
- * stream list + player are Phase 2c/4 — a placeholder note holds that slot for now. */
+ * paint, then enriched from /api/meta. */
 
 const SpeakerOff = (
   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z" /><line x1="22" y1="9" x2="16" y2="15" /><line x1="16" y1="9" x2="22" y2="15" /></svg>
@@ -292,10 +291,6 @@ export default function DetailModal() {
   const playBest = () => {
     if (shownStreams.length) playStreamFor(shownStreams[0], pickedEp);
     else if (streams.length) playStreamFor(streams[0], pickedEp);
-    else {
-      const nxt = nextEpOf(pickedEp);
-      playSource({ url: '/assets/demo.mp4', title, subtitle: pickedEp ? `S${pickedEp.season} · E${pickedEp.ep}` : undefined, media: buildMediaFor(pickedEp), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor(pickedEp) });
-    }
   };
 
   // Saved resume position for the current title (movie) or picked episode — only
