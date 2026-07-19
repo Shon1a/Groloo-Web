@@ -138,129 +138,17 @@
        command bar (below), and the account controls (Addons / Admin / Log out) live on the
        My Space page. The <header> element stays in the DOM so its search + auth wiring is
        reused, but it's collapsed to a zero-height, invisible, click-through shell. */
-    #topbar{height:0;min-height:0;padding:0;background:none;pointer-events:none}
-    #topbar.scrolled{background:none;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
-    #topbar .brand-logo,#topbar .topnav,
-    #topbar #searchIcon,#topbar #userIcon,#topbar #chatIcon,
-    #topbar .auth-control,.topbar-frame{display:none}
     .hero{--topbar-h:0px !important}          /* no bar to slide under → hero sits flush at the top.
                                                  MUST be 0px, NOT 0: the hero margin is
                                                  calc((--page-top + --topbar-h)*-1); a unitless 0 makes
                                                  that calc invalid, voiding the WHOLE margin shorthand →
                                                  the hero loses full-bleed and black cuts appear. */
-
-    /* Search: the rail "Search" item toggles #topbar.search-open, floating this centred
-       command bar over the content (right of the rail). Click-away / Esc collapses it. */
-    #topbar .search{position:fixed;top:74px;left:calc(50% + var(--rail-w)/2);margin:0;
-      width:min(620px,60vw);height:54px;padding:0 20px;border-radius:14px;
-      background:rgba(12,12,12,.94);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
-      border:1px solid rgba(255,255,255,.14);box-shadow:0 26px 80px rgba(0,0,0,.62);
-      opacity:0;pointer-events:none;z-index:60;
-      transform:translateX(-50%) translateY(-10px);
-      transition:opacity .2s ease,transform .22s cubic-bezier(.2,.8,.2,1)}
-    #topbar.search-open .search{opacity:1;pointer-events:auto;overflow:visible;
-      border-color:rgba(255,255,255,.28);transform:translateX(-50%) translateY(0)}
-    #topbar.search-open .search input{font-size:15px}
   }
 
-  /* topbar — "HUD" control panel. The centred search field is a recessed cool-dark
-     panel whose top corners flare outward in S-curves ("bent" connectors) to bridge
-     into the logo + icon zones; that shape + its glowing outline are painted
-     by the #topbarFrame SVG (drawn from the live search-box geometry, see JS). */
-  header{position:sticky;top:0;z-index:25;display:flex;align-items:center;gap:6px;
-    margin:0;padding:0 clamp(16px,3vw,48px);height:var(--topbar-h);overflow:visible;
-    /* clean top overlay: dark at the top, fading to transparent over the hero */
-    background:linear-gradient(180deg,rgba(0,0,0,.9) 0%,rgba(0,0,0,.55) 50%,transparent 100%);
-    transition:background .3s ease}
-  /* the SVG canvas that paints the search bay + flared outline; behind the
-     bar content (logo / input / icons all sit at z-index:1) */
-  .topbar-frame{display:none}
-  .topbar-frame .tb-flare{filter:drop-shadow(0 0 4px rgba(255,255,255,.5))}
-  header > :not(.topbar-frame){position:relative;z-index:1}
-  /* soft, layered bloom across the top — ambient light, not a hard band */
-  header::before{content:none}
-  header::after{content:none}
-  header.scrolled{background:rgba(8,8,8,.96);box-shadow:0 2px 18px rgba(0,0,0,.55);
-    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
-  /* stredio wordmark sits bare on the bar (no boxed tab) */
-  .brand-logo{display:flex;align-items:center;flex-shrink:0;height:44px;padding:0 6px;margin-right:2px;
-    background:none;border:none;border-radius:10px;transition:opacity .2s}
-  .brand-logo:hover{opacity:.85}
-  .brand-logo img{height:34px;width:auto;display:block;filter:drop-shadow(0 1px 5px rgba(0,0,0,.6))}
-  /* horizontal primary nav (STREDIO top bar) */
-  .topnav{display:flex;align-items:center;gap:clamp(12px,1.5vw,24px);margin-left:20px;margin-right:auto;flex-wrap:nowrap}
-  .topnav-link{font-size:15px;color:rgba(255,255,255,.82);cursor:pointer;white-space:nowrap;
-    letter-spacing:.01em;transition:color .2s;line-height:1;padding:6px 0;background:none;border:none}
-  .topnav-link:hover{color:#fff}
-  .topnav-link.active{color:#fff;font-weight:700}
-  /* minimal thin-stroke icon buttons — ivory, dimmed until hover */
-  .nav-icon{background:none;border:none;color:rgba(237,230,221,.68);width:38px;height:38px;border-radius:10px;
-    cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:.2s}
-  .nav-icon:hover{color:#fff;background:rgba(255,255,255,.10)}
-  .nav-icon svg{width:19px;height:19px;display:block;stroke-width:1.7}
-  @media (max-width:520px){ .brand-logo img{height:27px} }
-  /* centred search field — transparent; the recessed panel + flares behind it are
-     painted by the SVG. The wide side margins leave room for the flares ("ears"). */
-  /* search collapses to nothing; the magnifier icon (#searchIcon) expands a bar */
-  .search{flex:0 0 auto;min-width:0;align-self:center;height:38px;position:relative;border-radius:5px;
-    width:0;opacity:0;overflow:hidden;pointer-events:none;margin:0;
-    display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.55);border:1px solid transparent;
-    padding:0;transition:width .28s ease,opacity .2s ease,border-color .2s ease}
-  header.search-open .search{width:min(300px,46vw);opacity:1;overflow:visible;pointer-events:auto;
-    padding:0 14px;margin-left:8px;border-color:rgba(255,255,255,.4)}
   .search input{order:1;flex:1;min-width:0;background:none;border:none;outline:none;color:#fff;font-family:inherit;font-size:11.5px}
   .search input::placeholder{color:rgba(255,255,255,.45)}
   .search .mono{display:none}                       /* hide the decorative magnifier / enter glyphs */
   .search .filter-toggle{order:2;flex-shrink:0;color:rgba(255,255,255,.55)}
-  /* mobile: the flared SVG bay is impractical on narrow screens — hide it, collapse
-     the search back to its magnifier (tap to expand), and keep the primary category
-     nav reachable as a swipeable strip instead of dropping it entirely. */
-  /* Tablet + phone header reflow. Below ~900px the inline row (logo + 5-link nav +
-     search bay + icons + language + SIGN IN) stops fitting — at 700px it overflowed
-     ~170px, pushing the language toggle + SIGN IN entirely off-screen — so collapse to
-     a wrapped two-row header: controls on top, the category nav as a swipeable strip
-     beneath. Covers iPad portrait (768/834), split-screen and foldables. */
-  @media (max-width:900px){
-    /* #topbar (id) so these beat the later max-width:860px header{} block */
-    #topbar{flex-wrap:wrap;gap:7px;height:auto;min-height:0;padding:9px 12px}
-    .topbar-frame{display:none}
-    .brand-logo{height:36px;padding:0 2px;margin-right:auto}   /* push the icon cluster to the right edge */
-    /* the account icon only ever appears signed-out (signed-in shows the avatar chip),
-       where it just duplicates SIGN IN; the bell is a placeholder — drop both on phones
-       so the logo, search, language and SIGN IN all sit on one compact row */
-    #userIcon,#chatIcon{display:none}
-    /* collapsed search shouldn't reserve a flex slot/gap; the magnifier brings it back */
-    #topbar .search{display:none}
-    /* primary nav: a horizontally-scrollable tab strip on its own row. Without this the
-       Home / TV Shows / Movies / New & Popular / My List links are unreachable on touch. */
-    .topnav{display:flex;order:10;flex:1 0 100%;gap:22px;margin:7px -12px 0;padding:8px 12px;
-      overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;
-      border-top:1px solid var(--border);
-      -webkit-mask-image:linear-gradient(90deg,#000 90%,transparent);
-      mask-image:linear-gradient(90deg,#000 90%,transparent)}
-    .topnav::-webkit-scrollbar{display:none}
-    .topnav-link{font-size:14px;padding:11px 0;white-space:nowrap}   /* ~40px tap height */
-    /* expanded search becomes a full-width bordered row beneath the controls.
-       #topbar.search-open (id) so it outranks the collapsed #topbar .search above */
-    #topbar.search-open .search{display:flex;order:9;flex:1 0 100%;width:auto;opacity:1;overflow:visible;pointer-events:auto;
-      height:44px;margin:7px 0 0;padding:9px 14px;
-      background:#0d0d0d;border:1px solid var(--border);border-radius:10px}
-    /* touch ergonomics: bigger tap targets across phones + tablets (was 34px icons /
-       26px-tall language buttons — below the ~44px guidance). #topbar prefix outranks
-       the later max-width:520px shrink so these hold on the smallest phones too. */
-    #topbar .nav-icon{width:42px;height:42px}
-    #topbar .signin-btn{padding:11px 18px}
-    /* opening search on a phone/tablet shouldn't keep the category strip visible too —
-       hide it so the header stays two rows (controls + search) and the hero stays higher */
-    #topbar.search-open .topnav{display:none}
-    /* the header is now TWO rows (controls + nav strip ≈ 110px tall), not the 68px
-       desktop bar, so the hero's negative top margin — which uses --topbar-h to slide
-       up behind the overlay — fell ~45px short and left a black strip above the
-       backdrop. Re-point --topbar-h on the hero to the real two-row height so it
-       reaches the very top again (the header stays auto-height; this only feeds the
-       hero's pull-up). */
-    .hero{--topbar-h:114px}
-  }
   .filter-toggle{background:none;border:none;color:rgba(237,230,221,.5);font-size:17px;cursor:pointer;line-height:1;
     padding:0 4px;transition:.2s;display:flex;align-items:center}
   .filter-toggle:hover,.filter-toggle.on{color:#EDE6DD}
@@ -737,7 +625,6 @@
        reference. Forcing --font keeps it proportional (Inter → Segoe UI) and identical. */
     font-family:var(--font);font-weight:500;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .pcard .cap .pc-star{color:var(--text)}
   /* rating + type live in the caption on rail cards → drop the on-cover corner chips */
   .pcard .poster .rate,.pcard .poster .tvtag{display:none}
 
@@ -800,14 +687,12 @@
   #explore .explore-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:38px 26px}
   /* first-class category routes (#tv/#anime/#movies/#categories) match the Explore grid exactly —
      same card size + gutters. id+class outranks the base/mobile .grid rules, so no source-order fuss. */
-  #catGrid.cat-wide{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:38px 26px}
 
   @media(max-width:900px){
     #explore .search{top:calc(env(safe-area-inset-top,0px) + 12px);height:52px;
       width:100%;margin:2px auto 22px;padding:0 16px;border-radius:14px}
     #explore .explore-status{margin-bottom:16px}
     #explore .explore-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:24px 14px}
-    #catGrid.cat-wide{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:24px 14px}
   }
 
   /* ---------- Categories hub — the "browse by category" page ----------
@@ -1039,15 +924,9 @@
     font-size:9px;color:rgba(255,255,255,.82);letter-spacing:.02em;max-height:0;opacity:0;
     transform:translateY(5px);overflow:hidden;transition:max-height .25s ease,opacity .2s ease,transform .25s ease}
   .upcoming-card:hover .uc-info,.upcoming-card:focus-visible .uc-info{max-height:28px;opacity:1;transform:none}
-  .upcoming-card .uc-info .uc-star{color:#e3c414;font-weight:700}
   .upcoming-card .uc-info .uc-genre{border:1px solid rgba(255,255,255,.32);border-radius:50px;
     padding:2px 9px;background:rgba(255,255,255,.08);color:#fff;font-size:8px;
     max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  /* title-logo: exact width/height are set per-image by umFitLogo() to equalise
-     optical footprint; these caps just bound the brief pre-load state (and must be
-     >= the JS box so they never re-clamp/distort the computed size). */
-  .upcoming-card .uc-logo{display:block;width:auto;height:auto;max-height:27px;max-width:134px;
-    object-fit:contain;object-position:left bottom;filter:drop-shadow(0 1px 5px rgba(0,0,0,.75))}
   /* Bold wordmark, upper-cased with wide tracking (THE ODYSSEY look).
      Uniform size for every card; wraps to two lines so full titles stay visible. */
   .upcoming-card .uc-title{font-family:var(--font);font-size:8px;font-weight:700;
@@ -1083,60 +962,6 @@
   .reveal.in{opacity:1;transform:none}
 
   /* ---------- skeleton loading + loaders (shown before live data arrives) ---------- */
-  /* skeleton surfaces: a dark base block with a soft violet sheen sweeping across.
-     Sizes are driven by the host element (.poster, .gcard, inline width/height) so
-     the real card drops in with zero layout shift. */
-  .sk,.sk-line{position:relative;overflow:hidden;isolation:isolate;
-    background:
-      radial-gradient(120% 80% at 50% 0%,rgba(255,255,255,.04),transparent 60%),
-      linear-gradient(180deg,#161616 0%,#0e0e0e 100%)}
-  .sk-line{border-radius:7px;height:14px;
-    background:linear-gradient(90deg,#1b1b1b,#121212)}
-  /* a single bright highlight sweeps diagonally across — wide + soft so it reads as a
-     polished "loading" sheen on near-black. Pure monochrome (no pigment) to match the
-     monochrome grade — the drill-down grid + search load identically to Movies/TV/Anime. */
-  .sk::after,.sk-line::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:2;
-    background:linear-gradient(105deg,
-      transparent 25%,
-      rgba(255,255,255,.04) 42%,
-      rgba(255,255,255,.10) 49%,
-      rgba(255,255,255,.17) 50.5%,
-      rgba(255,255,255,.10) 52%,
-      rgba(255,255,255,.04) 59%,
-      transparent 75%);
-    transform:translateX(-110%);animation:sfSheen 1.7s cubic-bezier(.45,.05,.35,1) infinite}
-  @keyframes sfSheen{0%{transform:translateX(-110%)}55%,100%{transform:translateX(110%)}}
-  /* skeleton poster keeps the exact .poster / .gcard footprint but is inert.
-     The "loading" look is a neutral near-black gradient with a faint white glow bleeding
-     from the top and a light shimmer sweeping across — NO red (monochrome grade). */
-  .poster.sk{cursor:default;pointer-events:none;border-color:rgba(255,255,255,.08);
-    background:
-      radial-gradient(120% 82% at 50% 16%,rgba(255,255,255,.05),rgba(255,255,255,.015) 46%,transparent 72%),
-      linear-gradient(155deg,#151515 0%,#0f0f0f 48%,#0a0a0a 100%)}
-  .poster.sk:hover{transform:none;box-shadow:none}
-  /* a light shimmer sweeps across the card */
-  .poster.sk::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
-    background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,.06) 48%,rgba(255,255,255,.02) 56%,transparent 72%);
-    transform:translateX(-110%);animation:sfSheen 1.9s ease-in-out infinite}
-
-  /* the brand loader — a swept gradient ring with a softly pulsing core. Use
-     <span class="sf-loader"></span> (add .sm for a compact inline variant). */
-  .sf-loader{width:46px;height:46px;display:inline-block;position:relative;flex:0 0 auto;vertical-align:middle}
-  .sf-loader::before{content:"";position:absolute;inset:0;border-radius:50%;
-    background:conic-gradient(from 90deg,rgba(255,255,255,0) 0deg,rgba(255,255,255,.18) 130deg,var(--accent) 330deg,var(--accent-h) 360deg);
-    -webkit-mask:radial-gradient(farthest-side,#0000 calc(100% - 3.5px),#000 calc(100% - 3.5px));
-            mask:radial-gradient(farthest-side,#0000 calc(100% - 3.5px),#000 calc(100% - 3.5px));
-    filter:drop-shadow(0 0 7px rgba(255,255,255,.45));animation:sfSpin .9s linear infinite}
-  .sf-loader::after{content:"";position:absolute;inset:35%;border-radius:50%;background:var(--accent);
-    box-shadow:0 0 10px rgba(255,255,255,.55);animation:sfCore 1.15s ease-in-out infinite}
-  @keyframes sfSpin{to{transform:rotate(1turn)}}
-  @keyframes sfCore{0%,100%{transform:scale(.5);opacity:.4}50%{transform:scale(1);opacity:.95}}
-  .sf-loader.sm{width:18px;height:18px}
-  .sf-loader.sm::before{-webkit-mask:radial-gradient(farthest-side,#0000 calc(100% - 2px),#000 calc(100% - 2px));mask:radial-gradient(farthest-side,#0000 calc(100% - 2px),#000 calc(100% - 2px));filter:none}
-  .sf-loader.sm::after{display:none}
-  /* centred section loader: loader + label, for any "loading…" panel */
-  .sf-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:15px;padding:54px 20px;width:100%}
-  .sf-loading .lbl{font-family:var(--font-mono);font-size:13px;letter-spacing:.22em;text-transform:uppercase;color:var(--text-muted);animation:sfFade 1.6s ease-in-out infinite}
   @keyframes sfFade{0%,100%{opacity:.45}50%{opacity:.9}}
   /* drill-down / Explore / catalog grid loader: a gooey "metaball" of white dots that
      merge and drift, centred in the results area.
@@ -1158,12 +983,6 @@
   @keyframes l14{100%{background-position:right,left,center,right}}
 
   @media(prefers-reduced-motion:reduce){
-    .sk::after,.sk-line::after{animation:none;transform:none;
-      background:linear-gradient(100deg,transparent,rgba(var(--accent-rgb),.10) 50%,transparent)}
-    .poster.sk::after{animation:none;transform:none;
-      background:linear-gradient(105deg,transparent,rgba(var(--accent-rgb),.08) 50%,transparent)}
-    .sf-loader::before{animation-duration:1.8s}
-    .sf-loader::after,.sf-loading .lbl{animation:none}
     /* drop the drifting goo — a gentle opacity pulse reads as "loading" without motion */
     .cat-loader{animation:sfFade 1.6s ease-in-out infinite}
   }
@@ -1218,24 +1037,15 @@
   }
   .addon .ic{width:40px;height:40px;border-radius:9px;background:rgba(255,255,255,.1);display:grid;place-items:center;
     color:var(--accent);font-size:19px;flex-shrink:0;overflow:hidden}
-  .addon .ic img{width:100%;height:100%;object-fit:cover;display:block;background:#0d0d0d}
   /* "Upcoming Radar" — red jigsaw puzzle piece, gentle breathing glow */
   .addon .ic.puzzle{position:relative;overflow:hidden;
     background:radial-gradient(circle at 50% 50%,rgba(var(--accent-rgb),.20),rgba(var(--accent-rgb),.05) 72%)}
   .addon .ic.puzzle .pzPieceIc{width:24px;height:24px;overflow:visible;
     animation:pz-pulse 2.6s ease-in-out infinite}
   .addon .ic.puzzle .pzPieceIc rect[data-fill]{fill:var(--accent)}
-  /* Community add-ons — same puzzle/flower glyph tinted green */
-  .addon .ic.puzzle.green{background:radial-gradient(circle at 50% 50%,rgba(92,210,160,.20),rgba(92,210,160,.05) 72%)}
-  .addon .ic.puzzle.green .pzPieceIc{animation:pz-pulse-green 2.6s ease-in-out infinite}
-  .addon .ic.puzzle.green .pzPieceIc rect[data-fill]{fill:var(--success)}
   @keyframes pz-pulse{
     0%,100%{transform:scale(.9);filter:drop-shadow(0 0 1px rgba(var(--accent-rgb),.35))}
     50%{transform:scale(1);filter:drop-shadow(0 0 4px rgba(var(--accent-rgb),.7))}
-  }
-  @keyframes pz-pulse-green{
-    0%,100%{transform:scale(.9);filter:drop-shadow(0 0 1px rgba(92,210,160,.35))}
-    50%{transform:scale(1);filter:drop-shadow(0 0 4px rgba(92,210,160,.7))}
   }
   @media(prefers-reduced-motion:reduce){
     .addon .ic.puzzle .pzPieceIc{animation:none;transform:scale(.96)}
@@ -1250,7 +1060,6 @@
   .tag{font-size:12px;padding:2px 8px;border-radius:4px;background:rgba(var(--accent-rgb),.07);color:var(--text-muted);font-family:var(--font-mono)}
   .badge{font-size:12px;padding:3px 9px;border-radius:20px;white-space:nowrap;font-weight:500}
   .badge.ok{background:rgba(92,210,160,.13);color:var(--success)}
-  .badge.warn{background:rgba(234,100,121,.12);color:var(--danger)}
   .badge.muted{background:rgba(255,255,255,.06);color:var(--text-muted)}
   .addon .acts{display:flex;flex-direction:row;gap:8px;flex-shrink:0;align-items:center}
   .minibtn{font-size:13.5px;padding:7px 15px;border-radius:5px;border:1px solid var(--border);background:none;
@@ -1299,7 +1108,6 @@
   .settings-grid{column-width:340px;column-gap:18px;max-width:1180px;margin:6px auto 0}
   .set-card{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid;margin-bottom:18px;width:100%}
   /* PROFILE card — identity at the top of the grid */
-  .set-profile .set-card-body{display:flex;align-items:center;gap:16px;padding:20px 22px}
   .profile-avatar{width:60px;height:60px;border-radius:50%;flex:none;display:grid;place-items:center;
     font-family:var(--font-mono);font-size:24px;font-weight:700;text-transform:uppercase;color:var(--accent);
     background:radial-gradient(circle at 50% 36%,rgba(var(--accent-rgb),.30),rgba(var(--accent-rgb),.10));
@@ -1327,14 +1135,6 @@
   .set-action-danger:hover{background:rgba(234,100,121,.14);border-color:rgba(234,100,121,.6)}
   .set-action-signin{background:var(--accent);color:var(--ink);border-color:transparent}
   .set-action-signin:hover{background:var(--accent-h);border-color:transparent}
-  /* visibility gating: sign-in only when signed-out; addons/log-out only when signed-in;
-     admin only for admins. Driven by the `authed`/`is-admin` body classes AppShell sets. */
-  .set-action[data-act="signin"]{display:none}
-  body:not(.authed) .set-action[data-act="signin"]{display:inline-flex}
-  body:not(.authed) .set-action[data-act="addons"],
-  body:not(.authed) .set-action[data-act="logout"]{display:none}
-  .set-action.admin-only{display:none}
-  body.is-admin .set-action.admin-only{display:inline-flex}
   .set-card{position:relative;background:linear-gradient(180deg,rgba(255,255,255,.018),transparent),var(--surface);
     border:1px solid var(--border);border-radius:16px;overflow:hidden;
     transition:border-color .25s,box-shadow .25s,transform .25s}
@@ -1597,7 +1397,6 @@
   .m-hero-inner{position:absolute;left:clamp(16px,3vw,34px);right:clamp(16px,3vw,34px);
     bottom:clamp(14px,2.4vw,28px);z-index:3;max-width:min(74%,660px)}
   .m-hero-inner>*{animation:heroRise .7s cubic-bezier(.2,.7,.2,1) both}
-  .m-hero-inner>.m-kicker{animation-delay:.04s}
   .m-hero-inner>#mTitle{animation-delay:.10s}
   .m-hero-inner>.m-meta{animation-delay:.16s}
   .m-hero-inner>.m-genres{animation-delay:.20s}
@@ -1611,9 +1410,6 @@
   /* the speaker glyph is geometrically centred, but its solid cone (left) outweighs the
      thin ✕ / waves (right), so it reads as pushed left — nudge it right to optically centre */
   .m-mute .m-mute-ic{display:flex;transform:translateX(1.5px)}
-  .m-kicker{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-mono);font-size:12px;
-    letter-spacing:.28em;color:var(--accent);margin-bottom:12px;text-transform:uppercase}
-  .m-kicker::before{content:"";width:22px;height:1px;background:var(--accent);opacity:.7}
   /* title: gradient-clipped display wordmark in the primary UI face;
      the .has-logo path swaps in the TMDB title-logo exactly like the old modal did */
   #mTitle{font-family:var(--font);font-weight:700;background:var(--grad);-webkit-background-clip:text;
@@ -1627,7 +1423,6 @@
   .m-meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);
     font-size:14px;letter-spacing:.04em;color:#cdcdcd;margin:0 0 10px}
   .m-meta .star{color:var(--accent)}
-  .m-meta .m-tv-ic{width:15px;height:15px;opacity:.85;margin-right:5px;vertical-align:-3px}
   .m-genres{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
   .m-genres .chip{border:1px solid rgba(255,255,255,.22);border-radius:3px;padding:2px 9px;
     font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;color:#dddddd;white-space:nowrap}
@@ -1653,7 +1448,7 @@
   .m-rail-label{font-family:var(--font-mono);font-size:13px;letter-spacing:.2em;color:var(--text-muted);
     text-transform:uppercase;display:flex;align-items:center;gap:12px;margin:0 0 14px}
   .m-rail-label::after{content:"";flex:1;height:1px;background:var(--border)}
-  :root[data-lang="ka"] .m-rail-label,:root[data-lang="ka"] .m-kicker{text-transform:none;letter-spacing:.12em;color:var(--accent)}
+  :root[data-lang="ka"] .m-rail-label{text-transform:none;letter-spacing:.12em;color:var(--accent)}
 
   /* STREAMS rail head: label + lang dropdown on one row (wide screens) */
   .m-streams .m-rail-head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px}
@@ -1684,8 +1479,6 @@
     display:block;background:none}
   #epList.ep-grid .ep-name{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
     font-size:15px;font-weight:600;color:var(--text);line-height:1.32;white-space:normal;overflow:hidden}
-  #epList.ep-grid .ep-sub{display:block;font-family:var(--font-mono);font-size:12px;color:var(--text-muted);
-    margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #epList.ep-grid .ep-row.on .ep-name{color:var(--highlight)}
 
   /* ---------- "You may like" recommendations row (landscape cards) ---------- */
@@ -1703,7 +1496,6 @@
      behind as the only outline still drawn anywhere. The lift + shadow carry the hover. */
   .rec-card:hover .rec-thumb{box-shadow:0 12px 30px rgba(0,0,0,.5)}
   .rec-card:hover .rec-thumb img,.rec-card:focus-visible .rec-thumb img{transform:scale(1.06)}
-  .rec-thumb.no-img{background:linear-gradient(150deg,#141414,#000)}
   .rec-rate{position:absolute;left:8px;bottom:8px;z-index:2;font-family:var(--font-mono);font-size:12px;font-weight:700;
     color:#fff;background:var(--badge);border:1px solid var(--border);padding:2px 8px;border-radius:5px;
     -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
@@ -1868,16 +1660,6 @@
   .flag-ru{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 6'><rect width='9' height='6' fill='%23fff'/><rect y='2' width='9' height='2' fill='%230039A6'/><rect y='4' width='9' height='2' fill='%23D52B1E'/></svg>")}
   .flag-ka{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 200'><rect width='300' height='200' fill='%23fff'/><g fill='%23ff0000'><rect x='130' width='40' height='200'/><rect y='80' width='300' height='40'/><rect x='55' y='30' width='20' height='8'/><rect x='61' y='24' width='8' height='20'/><rect x='225' y='30' width='20' height='8'/><rect x='231' y='24' width='8' height='20'/><rect x='55' y='162' width='20' height='8'/><rect x='61' y='156' width='8' height='20'/><rect x='225' y='162' width='20' height='8'/><rect x='231' y='156' width='8' height='20'/></g></svg>")}
   .flag-en{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 30'><clipPath id='a'><path d='M0 0v30h60V0z'/></clipPath><clipPath id='b'><path d='M30 15h30v15zv15H0zH0V0zV0h30z'/></clipPath><g clip-path='url(%23a)'><path d='M0 0v30h60V0z' fill='%23012169'/><path d='M0 0l60 30m0-30L0 30' stroke='%23fff' stroke-width='6'/><path d='M0 0l60 30m0-30L0 30' clip-path='url(%23b)' stroke='%23C8102E' stroke-width='4'/><path d='M30 0v30M0 15h60' stroke='%23fff' stroke-width='10'/><path d='M30 0v30M0 15h60' stroke='%23C8102E' stroke-width='6'/></g></svg>")}
-  .lang-empty{font-size:16px;color:var(--text-muted);padding:18px 4px;line-height:1.5}
-  /* Catalog-only / empty-state notice styling (reused by renderCatalogOnly) */
-  .streams-locked{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.18);
-    border-radius:8px;padding:22px 22px;text-align:center}
-  .streams-locked .sl-ico{font-size:30px;line-height:1;margin-bottom:10px}
-  .streams-locked .sl-title{font-size:18px;color:var(--text);letter-spacing:.04em}
-  .streams-locked .sl-sub{font-size:15px;color:var(--text-muted);margin:8px 0 16px;line-height:1.55}
-  .streams-locked .sl-btn{background:var(--accent);color:var(--ink);border:none;border-radius:5px;
-    padding:11px 22px;font-family:var(--font-mono);font-size:14px;letter-spacing:.1em;cursor:pointer;transition:.2s}
-  .streams-locked .sl-btn:hover{background:var(--accent-h)}
   .ep-list{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;padding-right:4px}
   .ep-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);
     border-radius:4px;background:var(--card);cursor:pointer;transition:border-color .15s,background .15s;text-align:left;width:100%}
@@ -1886,8 +1668,6 @@
   .ep-num{font-family:var(--font-mono);font-size:13px;color:var(--accent);flex-shrink:0;min-width:38px}
   .ep-body{flex:1;min-width:0}
   .ep-name{font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .ep-sub{font-family:var(--font-mono);font-size:12px;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .ep-loading{font-family:var(--font-mono);font-size:13px;color:var(--text-muted);padding:8px 0}
   .stream-source-label{font-family:var(--font-mono);font-size:13px;color:var(--text-muted);
     letter-spacing:.15em;text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:8px}
   .stream-source-label::after{content:"";flex:1;height:1px;background:var(--border)}
@@ -2075,10 +1855,6 @@
   .vp-thumb{position:absolute;top:50%;transform:translate(-50%,-50%) scale(0);left:0;width:14px;height:14px;border-radius:50%;
     background:#fff;box-shadow:0 0 10px rgba(255,255,255,.7);transition:transform .15s}
   .vp-progress:hover .vp-thumb{transform:translate(-50%,-50%) scale(1)}
-  .vp-tooltip{position:absolute;bottom:24px;transform:translateX(-50%);background:#151515;border:1px solid var(--border);
-    color:#fff;font-family:var(--font-mono);font-size:15px;padding:3px 7px;border-radius:4px;opacity:0;
-    pointer-events:none;transition:opacity .12s;white-space:nowrap}
-  .vp-progress:hover .vp-tooltip{opacity:1}
 
   .vp-controls{display:flex;align-items:center;gap:8px;margin-top:4px}
   .vp-icon{background:none;border:none;color:#e8e8e8;font-size:17px;cursor:pointer;padding:7px;border-radius:6px;
@@ -2129,10 +1905,6 @@
   .vp-opt .ck{width:13px;color:var(--accent);flex-shrink:0;font-size:13px;text-align:center}
   .vp-opt.on{color:#fff;font-weight:600}
   .vp-opt .sub{margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--text-muted)}
-  .vp-opt .vp-instant{display:inline-flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:10px;font-weight:700;
-    letter-spacing:.06em;text-transform:uppercase;color:var(--accent);background:rgba(var(--accent-rgb),.12);
-    border:1px solid rgba(var(--accent-rgb),.38);border-radius:4px;padding:2px 6px;line-height:1;flex-shrink:0}
-  .vp-opt .vp-instant svg{width:9px;height:9px;fill:currentColor}
   .vp-speeds{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:2px 14px 6px}
   .vp-speed{font-family:var(--font-mono);font-size:13px;padding:7px 0;border-radius:8px;cursor:pointer;text-align:center;
     border:1px solid var(--border);color:var(--text-muted);background:none;transition:.15s}
@@ -2142,11 +1914,6 @@
   /* subtitle cue styling */
   #playerVideo::cue{background:rgba(0,0,0,.55);color:#fff;font-family:var(--font);
     font-size:inherit;line-height:1.35;text-shadow:0 1px 3px rgba(0,0,0,.9)}
-  .vp-overlay.subs-lg
-  .vp-toast{position:absolute;bottom:96px;left:50%;transform:translateX(-50%);background:rgba(15,15,15,.95);
-    border:1px solid var(--border);color:#fff;font-family:var(--font-mono);font-size:16px;padding:8px 16px;
-    border-radius:6px;z-index:7;opacity:0;transition:opacity .2s;pointer-events:none}
-  .vp-toast.show{opacity:1}
 
   /* ---- mobile gesture layer (touch only; enabled by JS via .gestures-on) ---- */
   /* surface sits above the video (z2), below .vp-loading (z3) + .vp-ui (z4) */
@@ -2245,7 +2012,6 @@
   /* ---------- responsive ---------- */
   @media(max-width:860px){
     main{margin-left:0!important}
-    header{padding:12px 14px;gap:10px}
     .page{--page-pad:14px;--page-top:20px;--rail-fade:36px;padding:var(--page-top) var(--page-pad) 80px}
     .section-title{padding-top:34px}
     .set-card-head{padding:15px 16px}
@@ -2293,55 +2059,6 @@
   /* the [hidden] attribute must win over explicit display rules (e.g. .spinner) */
   [hidden]{display:none!important}
 
-  /* ---------- auth: topbar control ---------- */
-  /* SIGN IN crowds the single mobile row alongside the logo, language toggle and search
-     magnifier — trim its horizontal bulk + type on phones. #topbar prefix beats the
-     #topbar .signin-btn{padding:11px 18px} rule in the max-width:900px block. The 44px
-     min-height from the (pointer:coarse) block still holds the tap target. */
-  @media (max-width:520px){ #topbar .signin-btn{padding:11px 14px;font-size:13px;letter-spacing:.05em} }
-  @media (max-width:420px){ #topbar .signin-btn{padding:10px 12px;font-size:12px;letter-spacing:.03em} }
-  .auth-control{display:flex;align-items:center;flex-shrink:0;margin-left:2px}
-  /* sign-in: solid white rounded pill */
-  .signin-btn{background:var(--accent);border:none;border-radius:6px;color:var(--ink);letter-spacing:.02em;
-    font-weight:700;font-size:14px;cursor:pointer;padding:9px 20px;transition:.2s}
-  .signin-btn:hover{background:var(--accent-h)}
-  /* signed-in: a compact avatar chip — email stays hidden until the dropdown opens.
-     When authed, the redundant nav person-icon collapses so this is the only account control. */
-  body.authed #userIcon{display:none}
-  .user-menu{position:relative;display:flex;align-items:center}
-  /* no surrounding pill — the avatar IS the button (a boxed circle looked clunky) */
-  .user-chip{display:flex;align-items:center;gap:5px;border:0;background:none;border-radius:999px;
-    padding:3px 2px 3px 3px;cursor:pointer;transition:.2s;-webkit-tap-highlight-color:transparent}
-  .user-chip:focus-visible{outline:2px solid rgba(255,255,255,.75);outline-offset:2px}
-  /* avatar mirrors the language toggle: flat dark fill, square 4px corners,
-     same hairline border and mono lettering — a matching segmented-control look, not a gem */
-  .user-chip .u-avatar{width:32px;height:30px;border-radius:4px;display:flex;align-items:center;justify-content:center;
-    font-family:var(--font-mono);font-size:13px;font-weight:700;line-height:1;flex-shrink:0;text-transform:uppercase;
-    color:#fff;letter-spacing:.06em;background:var(--crimson-bright);
-    border:1px solid rgba(255,255,255,.22);
-    transition:background .2s,border-color .2s,transform .2s}
-  .user-chip:hover .u-avatar,.user-menu.open .user-chip .u-avatar{border-color:rgba(255,255,255,.55);
-    background:var(--accent-h)}
-  .user-chip:active .u-avatar{transform:scale(.95)}
-  .user-chip .u-caret{color:rgba(237,230,221,.5);font-size:9px;line-height:1;transition:transform .2s,color .2s}
-  .user-chip:hover .u-caret,.user-menu.open .user-chip .u-caret{color:#EDE6DD}
-  .user-menu.open .user-chip .u-caret{transform:rotate(180deg)}
-  .user-dropdown{position:absolute;top:calc(100% + 9px);right:0;min-width:212px;z-index:50;
-    background:#15110f;border:1px solid rgba(255,255,255,.12);border-radius:11px;padding:6px;
-    box-shadow:0 18px 44px rgba(0,0,0,.6);
-    opacity:0;visibility:hidden;transform:translateY(-6px);
-    transition:opacity .16s ease,transform .16s ease,visibility .16s}
-  .user-menu.open .user-dropdown{opacity:1;visibility:visible;transform:translateY(0)}
-  .user-dropdown .ud-email{display:flex;flex-direction:column;gap:3px;padding:9px 12px 11px;margin-bottom:5px;
-    border-bottom:1px solid rgba(255,255,255,.08);max-width:100%}
-  .user-dropdown .ud-email .ud-label{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:rgba(237,230,221,.38)}
-  .user-dropdown .ud-email .ud-addr{font-size:13.5px;color:rgba(237,230,221,.92);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .user-dropdown .ud-item{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:none;border:none;
-    border-radius:8px;color:rgba(237,230,221,.85);font-size:14px;padding:9px 12px;cursor:pointer;transition:.15s}
-  .user-dropdown .ud-item:hover{background:rgba(255,255,255,.08);color:#fff}
-  .user-dropdown .ud-item svg{width:17px;height:17px;flex-shrink:0;opacity:.72}
-  .user-dropdown .ud-logout{color:rgba(229,128,128,.92)}
-  .user-dropdown .ud-logout:hover{background:rgba(255,255,255,.18);color:#ff9090}
 
   /* ---------- auth: full-screen overlay ---------- */
   .auth-overlay{position:fixed;inset:0;z-index:2500;display:none;align-items:center;justify-content:center;
@@ -2358,7 +2075,6 @@
   .auth-dismiss:hover{color:var(--accent)}
   .auth-brand{display:flex;align-items:center;gap:12px;margin-bottom:4px}
   .auth-logo{height:44px;width:auto;display:block;filter:drop-shadow(0 1px 5px rgba(0,0,0,.6))}
-  .auth-omega{font-size:26px;color:var(--accent);line-height:1}
   .auth-word{font-size:19px;letter-spacing:.18em;font-weight:300}
   .auth-word b{font-weight:500;background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
   .auth-kicker{font-size:15px;letter-spacing:.12em;color:var(--text-muted);margin:2px 0 24px}
@@ -2383,15 +2099,12 @@
     padding:12px 13px;border-radius:5px;font-family:var(--font-mono);font-size:17px;outline:none;transition:.2s}
   .auth-field input::placeholder{color:var(--text-muted)}
   .auth-field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,255,255,.12)}
-  .auth-field input.invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(234,100,121,.1)}
   .auth-pass-wrap{position:relative;display:flex;align-items:center}
   .auth-pass-wrap input{padding-right:60px}
   .auth-pass-toggle{position:absolute;right:8px;background:none;border:none;color:var(--text-muted);
     font-size:13px;letter-spacing:.1em;cursor:pointer;padding:6px;transition:.2s}
   .auth-pass-toggle:hover{color:var(--accent)}
   .auth-hint{font-size:15px;color:var(--text-muted);margin-top:7px;opacity:.85}
-  .auth-field-error{font-size:16px;color:var(--danger);margin-top:7px;min-height:0;line-height:1.4}
-  .auth-field-error:empty{margin-top:0}
   .auth-error{font-size:16px;color:var(--danger);text-align:center;min-height:0;line-height:1.5;
     margin:2px 0 14px}
   .auth-error:empty{margin:0}
@@ -2406,12 +2119,6 @@
   .auth-foot a:hover{color:var(--accent-h)}
   .auth-note{text-align:center;font-size:15px;color:var(--text-muted);opacity:.9;margin-top:14px;line-height:1.5}
   @media(max-width:480px){ .auth-card{padding:32px 22px 24px} }
-  /* ---- direct-to-sources sheet (add-on catalog cards → add-on streams → player) ---- */
-  .sources-card{max-width:560px;width:min(560px,92vw)}
-  .sources-card #sourcesSub{margin-bottom:16px}
-  .sources-list{max-height:min(56vh,440px);overflow-y:auto;margin-top:4px}
-  .sources-list .stream-source-label:first-child{margin-top:0}
-  .addon .ic.studios{background:radial-gradient(circle at 50% 50%,rgba(var(--accent-rgb),.20),rgba(var(--accent-rgb),.05) 72%);font-size:21px}
   /* ---- option-row checkbox list (add-on configure: catalog-row / provider pickers) ---- */
   .optrow-list{display:flex;flex-direction:column;gap:8px;margin:6px 0 4px}
   .optrow{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--border);
@@ -2498,13 +2205,9 @@
     /* a tap shouldn't leave a stuck focus ring; desktop keyboard focus keeps it,
        and text fields keep it here for accessibility */
     a:focus-visible,button:focus-visible,select:focus-visible,[role=button]:focus-visible,
-    [tabindex]:focus-visible,.poster:focus-visible,.topnav-link:focus-visible{outline:none}
+    [tabindex]:focus-visible,.poster:focus-visible{outline:none}
     input:focus-visible,textarea:focus-visible{outline:none}
 
-    /* keep a comfortable tap target but don't let the 44px floor make the pill
-       TALLER than the ~36px desktop button — that bulk read as oversized on phones */
-    #topbar .signin-btn{min-height:36px}
-    .topnav-link{min-height:44px;display:flex;align-items:center}
     .strip-title:not(.static){min-height:44px;padding-top:8px;padding-bottom:8px}
 
     /* posters: drop the sticky hover lift/zoom/ring that would otherwise hang after a tap
@@ -2551,18 +2254,6 @@
     /* shell tracks the visible viewport and clears the notch / home bar */
     .shell{min-height:100vh;min-height:100dvh}
 
-    /* topbar clears the Dynamic Island (portrait) and the left notch (landscape) */
-    #topbar{padding-top:calc(9px + env(safe-area-inset-top,0px));
-      padding-left:calc(12px + env(safe-area-inset-left,0px));
-      padding-right:calc(12px + env(safe-area-inset-right,0px))}
-
-    /* category strip: edge breathing room, both-side fade + clean swipe snap so
-       "My List" no longer rests half-cut at the row edge */
-    .topnav{padding-left:14px;padding-right:14px;scroll-snap-type:x proximity;scroll-padding-left:14px;
-      -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 88%,transparent 100%);
-      mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 88%,transparent 100%)}
-    .topnav-link{scroll-snap-align:start}
-
     /* hero pull-up = real two-row header height (logo/icons row + 44px-tap
        category strip = 128px, measured stable across phone widths) + the island
        inset on device, so no black sliver shows above the backdrop */
@@ -2583,7 +2274,6 @@
     .auth-overlay{align-items:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;
       padding:calc(24px + env(safe-area-inset-top,0px)) calc(24px + env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) calc(24px + env(safe-area-inset-left,0px))}
     .auth-card{max-height:none;margin:auto}
-    .sources-list{max-height:min(56vh,440px);max-height:min(56dvh,440px);-webkit-overflow-scrolling:touch;padding-bottom:env(safe-area-inset-bottom,0px)}
   }
 
   /* ---- small phones (<=640px) ---- */
@@ -2668,13 +2358,6 @@
      Appended last so these win the cascade over the earlier mobile blocks.
      ========================================================================== */
 
-  .m-readmore{display:inline-flex;align-items:center;gap:6px;background:none;border:0;cursor:pointer;
-    padding:0;margin-top:9px;font-family:var(--font-mono);font-size:12.5px;letter-spacing:.12em;
-    text-transform:uppercase;color:var(--accent);transition:color .2s}
-  :root[data-lang="ka"] .m-readmore{text-transform:none;letter-spacing:.04em}
-  .m-readmore:hover{color:var(--accent-h)}
-  .m-readmore::after{content:"▾";font-size:11px;line-height:1}
-  .m-readmore.is-less::after{content:"▴"}
 
   /* #mPoster carries BOTH .poster and .m-hero-bg — the responsive .poster{width/height}
      overrides above (same specificity, later in source) were shrinking the modal hero
@@ -2683,16 +2366,9 @@
   .m-hero .m-hero-bg{width:100%;height:100%}
 
   @media (max-width:900px){
-    /* hide the horizontal STREDIO strip — the bottom dock owns navigation here */
-    #topbar .topnav{display:none}
     /* the header is now a single control row (~56px), not the old two-row strip — re-point
        the homepage hero pull-up so its backdrop still meets the top with no black sliver */
     .hero{--topbar-h:calc(56px + env(safe-area-inset-top,0px))}
-    /* tapping the search icon adds a full-width second header row (~53px). Grow the hero
-       pull-up by that row so the backdrop still meets the top instead of dropping a dark
-       band ("cut") at the top while search is open (before the topnav was hidden, opening
-       search just replaced the category row, so the height — and the hero — never moved) */
-    #topbar.search-open ~ .page .hero{--topbar-h:calc(109px + env(safe-area-inset-top,0px))}
     /* the animated placeholder reads oversized at the 16px the input needs to dodge iOS
        focus-zoom — shrink just the placeholder text (the input value itself stays 16px) */
     #searchInput::placeholder{font-size:13.5px}
@@ -2702,8 +2378,6 @@
   @media (max-width:640px){
     .m-hero-inner{left:clamp(14px,4vw,22px);right:clamp(14px,4vw,22px);
       bottom:clamp(26px,6vw,40px);max-width:100%}
-    .m-kicker{font-size:10.5px;letter-spacing:.2em;margin-bottom:8px}
-    .m-kicker::before{width:16px}
     #mTitle{font-size:clamp(20px,6.2vw,30px);line-height:1.12;margin:0 0 9px;letter-spacing:.03em}
     #mTitle .title-logo{height:clamp(34px,11vw,52px);max-width:min(76%,260px)}
     .m-meta{font-size:11.5px;gap:8px;margin:0 0 8px}
@@ -2713,8 +2387,6 @@
     .m-hero-actions .hero-play{padding:10px 20px;font-size:13.5px}
     /* synopsis: smaller body + a 5-line clamp the JS toggles on overflow */
     .m-plot{font-size:14.5px;line-height:1.6}
-    .m-plot.clamped{display:-webkit-box;-webkit-line-clamp:5;line-clamp:5;
-      -webkit-box-orient:vertical;overflow:hidden}
   }
 
   /* ---- portrait phones: tall full-bleed hero media (the 16:9 cap made it a thin band
@@ -2793,47 +2465,7 @@
      ========================================================================== */
   @media (max-width:900px){
 
-    /* ---- 1 · remove the top bar -------------------------------------------
-       The <header id="topbar"> stays in the DOM ONLY to host the search field and
-       its wiring — the dock's Search item programmatically clicks #searchIcon,
-       which toggles #topbar.search-open. The bar is collapsed to a zero-height,
-       invisible, click-through shell (mirrors the desktop treatment) and every
-       visible child is hidden. */
-    #topbar{position:fixed;top:0;left:0;right:0;height:0;min-height:0;
-      padding:0;margin:0;background:none;border:none;box-shadow:none;
-      pointer-events:none;overflow:visible;z-index:65}
-    #topbar.scrolled{background:none;box-shadow:none;
-      -webkit-backdrop-filter:none;backdrop-filter:none}
-    #topbar .brand-logo,#topbar .topnav,#topbar #searchIcon,
-    #topbar #userIcon,#topbar #chatIcon,#topbar .auth-control,
-    #topbar .signin-btn,.topbar-frame{display:none}
-    /* hero sits flush at the very top — no bar to slide under. MUST be 0px (never a
-       unitless 0, or the hero's calc() margin voids and black cuts appear). This also
-       neutralises the search-open pull-up guess from the earlier 900px block, since
-       the search bar is now floating (out of flow) and no longer grows the header. */
     .hero{--topbar-h:0px}
-    #topbar.search-open ~ .page .hero{--topbar-h:0px}
-
-    /* ---- 2 · search opens as a centred floating command bar ---------------
-       With the top bar gone the old in-flow "second header row" has nowhere to
-       sit, so float the bar down from the top of the viewport (the desktop
-       command-palette pattern). The combined selector below carries the geometry
-       at #topbar.search-open specificity so it beats the earlier 900px block's
-       `#topbar.search-open .search{width:auto;height:44px;…}` rule. */
-    #topbar .search,
-    #topbar.search-open .search{display:flex;position:fixed;
-      top:calc(env(safe-area-inset-top,0px) + 12px);left:50%;
-      width:min(560px,92vw);height:52px;margin:0;padding:0 16px;border-radius:14px;
-      background:rgba(12,12,12,.96);
-      -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
-      border:1px solid rgba(255,255,255,.14);box-shadow:0 24px 70px rgba(0,0,0,.62);
-      overflow:visible;z-index:70}
-    #topbar .search{opacity:0;pointer-events:none;
-      transform:translateX(-50%) translateY(-12px);
-      transition:opacity .2s ease,transform .22s cubic-bezier(.2,.8,.2,1)}
-    #topbar.search-open .search{opacity:1;pointer-events:auto;
-      border-color:rgba(255,255,255,.28);transform:translateX(-50%) translateY(0)}
-    #topbar .search input{font-size:16px}   /* ≥16px so iOS never zoom-jumps on focus */
 
     /* ---- 3 · the icon rail becomes a floating bottom dock ----------
        #railbar keeps ALL its markup + JS wiring; only its box is restyled from a

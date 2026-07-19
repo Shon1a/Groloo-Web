@@ -33,7 +33,7 @@ export default defineConfig({
         // The rail's PNGs used to be listed here too; the rail is all inline SVG components now.
         globPatterns: ['**/*.{js,css,html,woff2,svg,ico,webmanifest}'],
         // Big, rarely-touched, or not needed offline — fetched normally instead.
-        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/stredio-logo.jpeg', '**/hls.min.js'],
+        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [

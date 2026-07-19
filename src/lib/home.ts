@@ -1,7 +1,5 @@
 /* Home layout config — the row order and the studio logo set, ported from
- * assets/js/app.js (HOME_ROWS / STUDIOS). Add-on gating (Catalog Rows /
- * Providers / Studios / Upcoming toggles) arrives with Phase 4; for now every
- * row that the /api/home payload returns is shown. */
+ * assets/js/app.js (HOME_ROWS / STUDIOS). */
 
 export interface HomeRow {
   cat: string;

@@ -4,8 +4,7 @@ import type { SeasonInfo } from '../lib/types';
 /* What the video player is currently playing. null → closed. A source can be an
  * HLS manifest (.m3u8) or a progressive file (mp4/mkv/webm); the player probes
  * window.Hls for HLS and falls back to native. Real add-on streams (and their
- * subtitle tracks) are fed in from Phase 4; for now the detail modal opens the
- * bundled demo. */
+ * subtitle tracks) come from DetailModal's collectAddonStreams. */
 
 export interface SubtitleTrack {
   lang: string;

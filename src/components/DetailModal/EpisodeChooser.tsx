@@ -5,7 +5,7 @@ import type { MetaDetail, Episode, SeasonInfo } from '../../lib/types';
 
 /* Port of setupSeriesChooser / selectSeason / selectEpisode (assets/js/app.js).
  * Season tabs + a 16:9 still-card episode grid. Picking an episode raises
- * onEpisode(season, ep) so the modal can load that S:E's sources (Phase 4). */
+ * onEpisode(season, ep) so the modal can load that S:E's sources. */
 
 function EpCard({ ep, season, active, onPick }: { ep: Episode; season: number; active: boolean; onPick: () => void }) {
   const t = useT();

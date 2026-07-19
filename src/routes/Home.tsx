@@ -15,10 +15,8 @@ import { useModal, openItem } from '../stores/modal';
 import { useLibrary } from '../stores/library';
 import type { MediaItem } from '../lib/types';
 
-/* Home = the featured hero + the categorised rows. This Phase-1 pass ships the
- * real rows (via /api/home) with faithful PosterCards and rail scrolling. The
- * Hero, the Upcoming marquee, Continue Watching and add-on rows are the
- * Phase-1b / Phase-4 follow-ups noted below. */
+/* Home = the featured hero + the categorised rows (via /api/home): Hero,
+ * the Upcoming marquee, Continue Watching, and gated catalog/add-on rows. */
 
 export default function Home() {
   const t = useT();
