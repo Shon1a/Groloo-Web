@@ -1,5 +1,5 @@
 /* groloo-core — the shared Rust domain core, compiled to WebAssembly
- * (github.com/Shon1a/groloo-core). Successor to Stredio-Heart.
+ * (github.com/Shon1a/groloo-core). Successor to Groloo-Heart.
  *
  * WHAT CHANGED, AND WHY THE FILE STILL LIVES AT lib/heart.ts.
  *
@@ -18,7 +18,7 @@
  * import from './heart' and renaming files is not what this change is about.
  *
  * VENDORED ON PURPOSE — unchanged from Phase 0. This used to be `import()`ed straight
- * off cdn.jsdelivr.net/gh/Shon1a/Stredio-Heart@master, a MUTABLE ref. That made whoever
+ * off cdn.jsdelivr.net/gh/Shon1a/Groloo-Heart@master, a MUTABLE ref. That made whoever
  * can push to that repo (or to jsDelivr's cache) able to run arbitrary JS in the origin
  * that holds localStorage['groloo_session'], and a moving ref cannot carry a
  * subresource-integrity hash, so there was nothing to pin it against. Serving the exact
@@ -55,9 +55,9 @@
  * runtime by the manifest fallback below on an origin with no SubtleCrypto.
  *
  * All four lines are printed together by the build script; bump them together. */
-const CORE_BUILD = '0.2.0-7a0f7f93002fe36c';
+const CORE_BUILD = '0.2.0-072ba5db63c5645b';
 const CORE_VERSION = '0.2.0';
-const CORE_WASM_SHA256 = '7a0f7f93002fe36c4f714d79f6efd01c7529ab4abbaefd455db845f892f6d909';
+const CORE_WASM_SHA256 = '072ba5db63c5645b3a1bc6aeb6cc95c1d78af8d10b8c3a4c64325117a779bbf0';
 const CORE_JS = `/assets/groloo-core/${CORE_BUILD}/groloo_core.js`;
 /* The glue derives these two itself (`new URL('groloo_core_bg.wasm', import.meta.url)`),
  * so naming them again here is a second copy — but the verifier has to fetch the bytes
@@ -77,7 +77,7 @@ const CORE_MANIFEST = `/assets/groloo-core/${CORE_BUILD}/manifest.json`;
  * INVISIBLY. 0.2.0-a14b535a824c4e55 added five functions; until they were listed here they
  * existed in the module and did not exist in TypeScript, which is the same as not shipping
  * them. The build script prints the export list — when the pin moves, diff it against this
- * block. Done for 0.2.0-7a0f7f93002fe36c: the same 22, in the same order. That build adds
+ * block. Done for 0.2.0-072ba5db63c5645b: the same 22, in the same order. That build adds
  * no surface at all; it is three BEHAVIOUR fixes (see the two notes below), which is the
  * other way a new core lands invisibly and the reason the parity corpus exists. */
 export interface CoreExports {

@@ -7,7 +7,7 @@ import { EN } from './en';
 /* ------------------------------------------------------------------ *
  *  i18n — React port of assets/js/i18n.js.
  *
- *  UI strings live in the external repo Shon1a/stredio-translations
+ *  UI strings live in the external repo Shon1a/groloo-translations
  *  (JSON-per-language + index.json manifest), served via jsDelivr. EN is
  *  bundled here as the offline fallback.
  *
@@ -22,7 +22,7 @@ import { EN } from './en';
  *  that is now the one and only step, and it is reviewable.
  * ------------------------------------------------------------------ */
 
-const CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/stredio-translations@c8eee65e4e16e4fae8c1ce4ed3bb644581f057d0/';
+const CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/groloo-translations@c8eee65e4e16e4fae8c1ce4ed3bb644581f057d0/';
 const cdnUrl = (file: string) => `${CDN}${file}`;
 const LANG_KEY = 'sf-lang';
 

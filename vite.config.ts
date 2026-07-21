@@ -11,7 +11,7 @@ import { VitePWA } from 'vite-plugin-pwa'
  * typechecks, and it does nothing. Verify with: grep -c 'const.*API' dist/sw.js
  *
  * The two route groups mirror ADMIN_CURATED_GET and PUBLIC_CATALOG_GET in
- * Stredio-server/server/server.js — keep them in step. ONLY routes matched below may be
+ * Groloo-server/server/server.js — keep them in step. ONLY routes matched below may be
  * cached. Everything else — /api/auth/*, /api/addons, /api/addon-state, /api/library-state,
  * /api/config — is per-user and must always hit the network: a cached /api/auth/me would hand
  * one person's session to the next user of a shared device. It is an allowlist, so a route

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { loadCore, callCore } from '../lib/heart';
 
-/* Official add-on collection, sourced from the external repo Shon1a/Stredio-official-addons
+/* Official add-on collection, sourced from the external repo Shon1a/Groloo-official-addons
  * via jsDelivr (like the translations repo). The merge runs through the groloo-core WASM
  * boundary — two free functions where the old core needed a stateful AddonRuntime, three
  * calls and a walk over an *effect array* invented to describe performing I/O the shell
@@ -20,7 +20,7 @@ import { loadCore, callCore } from '../lib/heart';
  * immutable ref means a push to the add-ons repo cannot change what an already-shipped
  * build renders, and jsDelivr can cache it forever instead of revalidating a moving
  * head. Bump the sha to adopt a new collection — that is a reviewable code change. */
-const ADDONS_CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/Stredio-official-addons@6109632bd4eae8bf532d82eac2ceff2fbec4d987/';
+const ADDONS_CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/Groloo-official-addons@6109632bd4eae8bf532d82eac2ceff2fbec4d987/';
 
 export interface OfficialAddon {
   id: string;

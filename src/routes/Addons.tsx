@@ -8,7 +8,7 @@ import ConfigModal, { type ConfigTarget } from '../components/ConfigModal';
 import PreviewModal from '../components/PreviewModal';
 
 /* Add-on Catalog — faithful port of the vanilla #addons. The OFFICIAL list is now
- * sourced from the Shon1a/Stredio-official-addons repo via the Stredio-Heart WASM
+ * sourced from the Shon1a/Groloo-official-addons repo via the Groloo-Heart WASM
  * merge (useOfficial store) instead of being hardcoded, so it's the repo's source of
  * truth (and future official add-ons appear automatically). The four protected
  * home-feature ids gate the home blocks (home-config store); any appended official
