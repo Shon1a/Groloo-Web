@@ -27,7 +27,7 @@ import { apiPost, errorCode, errorMessage } from '../lib/api';
  *     opens it. Hence one field, thumb-sized targets, and no chrome to navigate.
  * ------------------------------------------------------------------ */
 
-/* Mirrors LINK_ALPHABET in Stredio-server/server/auth.js — 25 symbols with 0 O 1 I L
+/* Mirrors LINK_ALPHABET in Groloo-server/server/auth.js — 25 symbols with 0 O 1 I L
  * (classic ambiguity) and B G S U Z Q (B/8, G/6, S/5, U/V, Z/2, Q/O across a living
  * room) removed. Kept here only to normalize input the same way the server does; the
  * server remains the authority and re-normalizes everything it is sent. */

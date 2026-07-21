@@ -131,7 +131,7 @@ if (!js.includes('wasm_bindgen') && !js.includes('__wbg_init')) {
  * The glue is a `--target web` ESM module, so it cannot fetch() under node — but it also
  * exports initSync(), which compiles raw bytes synchronously. Handing them over directly
  * means nothing here is testing its own scaffolding. Staged inside public/assets so the
- * import resolves against Stredio-Web's own `"type": "module"`. */
+ * import resolves against Groloo-Web's own `"type": "module"`. */
 const staging = join(ASSETS, `.staging-${process.pid}`);
 await mkdir(staging, { recursive: true });
 await writeFile(join(staging, `${name}.js`), js);
