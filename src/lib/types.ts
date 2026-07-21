@@ -8,7 +8,16 @@ export type MediaType = 'movie' | 'tv';
 /** A card as returned by /api/home rows, /api/browse, /api/catalog, /api/search. */
 export interface MediaItem {
   id: string | number;
-  /** some feeds send 'series' as an alias for 'tv' */
+  /** some feeds send 'series' as an alias for 'tv'.
+   *
+   *  TWO VOCABULARIES MEET IN THIS FIELD, AND THAT IS DELIBERATE. Our own /api/ answers in
+   *  `movie | tv`; the add-on wire protocol answers in `movie | series`. Cards that come off
+   *  an installed add-on are mapped by the core now (`catalog_metas`), which routes every
+   *  token through one `movie | series` vocabulary in which `tv`, `series` and `show` are
+   *  all series — so a card typed `series` here is add-on-sourced and its streams are asked
+   *  for at `stream/series/…`, which is the request that actually answers. The deleted TS
+   *  mapper tested `m.type === 'series'` and typed everything else `movie`, which is how a
+   *  show labelled `"tv"` used to get a film's chrome and no sources at all. */
   type?: MediaType | 'series';
   title?: string;
   year?: string | number;

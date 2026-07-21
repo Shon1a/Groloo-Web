@@ -14,7 +14,7 @@
  *  Override via <meta name="api-base" content="…"> or VITE_API_BASE.
  * ------------------------------------------------------------------ */
 
-const TOKEN_KEY = 'stredio_session';
+const TOKEN_KEY = 'groloo_session';
 
 function resolveApiBase(): string {
   // build-time override wins (Vite env), then a runtime <meta>, then host heuristic
@@ -51,7 +51,7 @@ export class ApiError extends Error {
   }
 }
 
-/** Low-level fetch with the STREDIO contract applied. `path` is a /api/… path. */
+/** Low-level fetch with the GROLOO contract applied. `path` is a /api/… path. */
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers || {});
   const tok = getToken();
@@ -72,4 +72,37 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
   const body = isJson ? await res.json().catch(() => null) : await res.text();
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;
+}
+
+/** POST a JSON body and read JSON back — every mutating call needs the same three
+ *  lines, and forgetting the Content-Type is silent: express.json() ignores the body
+ *  and the route sees `{}`, which reads as a validation bug rather than a client one. */
+export function apiPost<T = unknown>(path: string, body?: unknown): Promise<T> {
+  return api<T>(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
+/* Every /api error answers with { error: "<human>", code: "<MACHINE_CODE>" }. Branch on
+ * `code`, never on `error`: the human half is translated and reworded freely, so any UI
+ * that matches on it breaks the moment someone improves the copy. */
+export interface ApiErrorBody { error?: string; code?: string }
+
+const errBody = (err: unknown): ApiErrorBody =>
+  (err instanceof ApiError && err.body && typeof err.body === 'object' ? err.body as ApiErrorBody : {});
+
+/** Machine code off a thrown error, or '' when the failure carried none — a dropped
+ *  connection, or an HTML error page served by a proxy that never reached Express. */
+export function errorCode(err: unknown): string {
+  const c = errBody(err).code;
+  return typeof c === 'string' ? c : '';
+}
+
+/** The server's own human message, or '' — callers supply a translated fallback, since
+ *  these come back in English regardless of the UI language. */
+export function errorMessage(err: unknown): string {
+  const m = errBody(err).error;
+  return typeof m === 'string' ? m : '';
 }

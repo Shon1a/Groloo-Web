@@ -1,0 +1,251 @@
+# Guards the SPA against the two failures that only ever show up after a deploy:
+# a lint regression nobody ran locally, and a type error that Vercel would happily
+# build past because `vite build` alone does not type-check. `npm run build` is
+# `tsc -b && vite build`, so this job is the only place the strict type-check is
+# actually enforced before the code reaches production.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # Restores ~/.npm between runs; without it `npm ci` re-downloads the
+          # whole tree every push and this job stops being cheap enough to keep.
+          cache: npm
+
+      # The WASM core is vendored into public/assets/groloo-core/<build>/ and served from
+      # our own origin; the CDN import that used to cover a missing copy was removed on
+      # purpose (see the header of src/lib/heart.ts). So an incomplete `git add` does not
+      # break anything visibly — it ships a 404 where the Rust core should be, loadCore()
+      # records an 'import' failure, and every client silently runs the JS fallback forever.
+      # Locally the files are on disk either way, which is why this can only be caught on a
+      # fresh checkout: that is exactly what this job is. Runs before `npm ci` so it fails in
+      # seconds.
+      #
+      # NOTHING about the artifact is written down in this file. The path is DERIVED from
+      # src/lib/heart.ts (the same constants the browser resolves its import against) and the
+      # contents are checked against the manifest.json the vendor script writes beside the
+      # bytes. That is the whole point: this guard was previously pinned at `heart/`, and when
+      # the app was repointed at the successor core it went on cheerfully proving that the
+      # dead rollback folder was intact. Deriving both ends means the next rename carries the
+      # check with it, and anything that CANNOT be derived is a hard failure with a message
+      # saying what to teach it — never a skipped check, because a guard that passes when it
+      # should fail is worse than no guard at all.
+      #
+      # Hashes rather than sizes, because size alone cannot tell a stale artifact from a
+      # current one: re-vendoring a rebuilt core into an existing folder, or a half-finished
+      # `git add`, both leave a file of an entirely plausible length.
+      - name: Verify the vendored groloo-core WASM artifact is committed and intact
+        run: |
+          node - <<'NODE'
+          const { readFileSync, statSync } = require('node:fs');
+          const { createHash } = require('node:crypto');
+
+          const fail = (msg) => { console.error(`core: ${msg}`); process.exit(1); };
+          /* First value present under any of `keys`. The manifest is written by a sibling
+           * script, so this reads the two or three spellings each field plausibly has rather
+           * than coupling CI to one of them — but a field that is absent under EVERY spelling
+           * is still a failure below, never a shrug. */
+          const pick = (obj, keys) => {
+            for (const k of keys) if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
+            return undefined;
+          };
+
+          /* ── 1. where the artifact lives, according to the code that loads it ────────── */
+
+          const src = readFileSync('src/lib/heart.ts', 'utf8');
+          const literal = (name) => {
+            const m = new RegExp(`const\\s+${name}\\s*=\\s*(?:'([^']*)'|\`([^\`]*)\`)`).exec(src);
+            if (!m) return null;
+            return m[1] !== undefined ? m[1] : m[2];
+          };
+
+          const build = literal('CORE_BUILD');
+          const version = literal('CORE_VERSION');
+          const template = literal('CORE_JS');
+          if (!build || !version || !template) {
+            fail(
+              'src/lib/heart.ts no longer declares CORE_BUILD / CORE_VERSION / CORE_JS as plain ' +
+              `string literals (got ${JSON.stringify({ build, version, template })}). This guard ` +
+              'derives the vendored path from them so a folder rename carries the check with it; ' +
+              'teach it the new shape rather than deleting it.',
+            );
+          }
+
+          // CORE_JS is a template literal interpolating CORE_BUILD. Resolve it the same way the
+          // bundler will, and refuse to guess at anything else it might grow.
+          const url = template.replace(/\$\{CORE_BUILD\}/g, build);
+          if (url.includes('${')) {
+            fail(`CORE_JS is \`${template}\` and interpolates something other than CORE_BUILD, which this guard cannot resolve`);
+          }
+          if (!url.startsWith('/assets/') || !url.endsWith('.js')) {
+            fail(`CORE_JS resolves to '${url}', which is not a .js under /assets/ — the artifact is served verbatim out of public/, so it has to be one`);
+          }
+          const cut = url.lastIndexOf('/');
+          const dir = `public${url.slice(0, cut)}`;
+          const glueName = url.slice(cut + 1);
+
+          /* ── 2. the manifest, which is the thing being checked against ───────────────── */
+
+          const manifestPath = `${dir}/manifest.json`;
+          let manifest;
+          try {
+            manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+          } catch (err) {
+            fail(
+              `${manifestPath} is missing or unreadable (${err.message}). src/lib/heart.ts pins ` +
+              `CORE_BUILD '${build}', so that folder is what the deploy serves; re-vendor with ` +
+              '`node scripts/vendor-heart.mjs` to produce the artifact and its manifest together.',
+            );
+          }
+
+          // A manifest naming a different build than heart.ts means one of the two was bumped
+          // and the other was not — precisely the "behaves like an old build" bug that has no
+          // symptom at runtime.
+          const claimedBuild = pick(manifest, ['build', 'id', 'folder']);
+          if (claimedBuild !== undefined && claimedBuild !== build) {
+            fail(`${manifestPath} declares build '${claimedBuild}' but src/lib/heart.ts pins CORE_BUILD '${build}' — one of them was not updated`);
+          }
+          const claimedVersion = pick(manifest, ['version', 'coreVersion', 'core_version']);
+          if (claimedVersion !== undefined && claimedVersion !== version) {
+            fail(`${manifestPath} declares version '${claimedVersion}' but src/lib/heart.ts pins CORE_VERSION '${version}' — one of them was not updated`);
+          }
+
+          // Accept either { files: { name: {...} } } or { files: [ { name, ... } ] }; both are
+          // reasonable and neither is worth a CI failure on its own.
+          const raw = pick(manifest, ['files', 'artifacts', 'entries']);
+          let files;
+          if (Array.isArray(raw)) {
+            files = raw.map((e) => ({ ...e, name: pick(e, ['name', 'file', 'path']) }));
+          } else if (raw && typeof raw === 'object') {
+            files = Object.entries(raw).map(([name, e]) => (typeof e === 'string' ? { name, sha256: e } : { ...e, name }));
+          } else {
+            fail(`${manifestPath} has no file list under 'files' / 'artifacts' / 'entries' — there is nothing here to check the bytes against`);
+          }
+          if (files.length === 0) fail(`${manifestPath} lists zero files — an empty manifest verifies nothing`);
+
+          /* ── 3. the bytes ────────────────────────────────────────────────────────────── */
+
+          // Floors, not estimates: the glue is ~24 KB and the core ~350 KB, so anything under
+          // these is a truncated write or an error page saved to disk. The digest below would
+          // catch both, but the floor names the failure in one line instead of "hash mismatch".
+          const FLOOR = { '.js': 8 * 1024, '.wasm': 100 * 1024 };
+          const seen = new Map();
+          let failed = false;
+          const bad = (msg) => { console.error(`core: ${msg}`); failed = true; };
+
+          for (const entry of files) {
+            const name = entry.name;
+            if (typeof name !== 'string' || name.length === 0 || name.includes('/') || name.includes('\\')) {
+              bad(`${manifestPath} has an entry with no plain filename (${JSON.stringify(entry)}) — the glue resolves its siblings relative to itself, so every entry must be a bare name in this folder`);
+              continue;
+            }
+            const path = `${dir}/${name}`;
+
+            let bytes;
+            try {
+              bytes = readFileSync(path);
+            } catch {
+              bad(`${path} is listed in manifest.json but is MISSING from the checkout — the vendored core is not fully in the commit`);
+              continue;
+            }
+            seen.set(name, bytes);
+
+            const floor = Object.entries(FLOOR).find(([ext]) => name.endsWith(ext))?.[1];
+            if (floor !== undefined && bytes.length < floor) {
+              bad(`${path} is ${bytes.length} bytes, expected >= ${floor} — truncated, or an error page saved to disk`);
+              continue;
+            }
+
+            const declaredSize = pick(entry, ['bytes', 'size', 'length']);
+            if (declaredSize !== undefined && Number(declaredSize) !== bytes.length) {
+              bad(`${path} is ${bytes.length} bytes but manifest.json declares ${declaredSize} — the file on disk is not the one that was vendored`);
+              continue;
+            }
+            // statSync is not redundant with readFileSync above: it is the assertion that the
+            // path is a regular file rather than something the runner happened to read.
+            if (!statSync(path).isFile()) {
+              bad(`${path} is not a regular file`);
+              continue;
+            }
+
+            const declaredHash = pick(entry, ['sha256', 'hash', 'digest', 'integrity']);
+            if (declaredHash === undefined) {
+              bad(`${manifestPath} lists ${name} without a digest — a size-only manifest cannot tell a stale artifact from a current one, which is the failure this check exists for`);
+              continue;
+            }
+            const got = String(declaredHash).trim();
+            const hex = createHash('sha256').update(bytes).digest('hex');
+            const sri = `sha256-${createHash('sha256').update(bytes).digest('base64')}`;
+            if (/^[0-9a-f]{64}$/i.test(got)) {
+              if (got.toLowerCase() !== hex) bad(`${path} hashes to ${hex} but manifest.json declares ${got.toLowerCase()} — stale, tampered, or re-vendored without bumping the folder`);
+            } else if (/^sha256-/i.test(got)) {
+              if (got !== sri) bad(`${path} hashes to ${sri} but manifest.json declares ${got} — stale, tampered, or re-vendored without bumping the folder`);
+            } else {
+              bad(`${manifestPath} declares a digest for ${name} in a form this guard does not recognise ('${got}') — expected 64 hex characters or an SRI 'sha256-<base64>'`);
+            }
+
+            if (name.endsWith('.wasm') && bytes.subarray(0, 4).toString('binary') !== '\0asm') {
+              bad(`${path} has no \\0asm magic — it is not a WebAssembly module`);
+            }
+          }
+
+          /* ── 4. does the manifest describe the thing the app actually imports? ────────── */
+
+          // A manifest that hashes two files perfectly while heart.ts imports a third is the
+          // vacuous pass this whole step is written to avoid.
+          const glue = seen.get(glueName);
+          if (!glue) {
+            bad(`${manifestPath} does not cover ${glueName}, which is the module src/lib/heart.ts imports — the manifest and the pin describe different artifacts`);
+          }
+          const wasms = [...seen.keys()].filter((n) => n.endsWith('.wasm'));
+          if (wasms.length === 0) {
+            bad(`${manifestPath} lists no .wasm — the glue is only a loader, the core itself is missing`);
+          }
+          if (glue) {
+            // wasm-bindgen bakes the sibling filename into the glue and resolves it against its
+            // own import.meta.url, so a pair that does not name each other 404s at runtime
+            // while both files sit right there in the commit.
+            const text = glue.toString('utf8');
+            for (const name of wasms) {
+              if (!text.includes(name)) bad(`${glueName} never mentions ${name}, so it will not load it — the .js and .wasm in ${dir} are from different builds`);
+            }
+          }
+
+          if (failed) process.exit(1);
+          console.log(`core: ${dir} matches manifest.json — ${files.length} file(s), build ${build}, version ${version}`);
+          NODE
+
+      - name: Guard the rename migration against a future bulk find-and-replace
+        run: |
+          # src/lib/nameMigration.ts moves a user's stored auth token, add-on list
+          # (which carries their debrid keys), home layout and settings from the
+          # pre-rename key names to the groloo.* ones. It is the ONE file that has to
+          # keep the old product name as a literal. A project-wide rename already
+          # clobbered it once, rewriting the source name to the destination name and
+          # turning the whole migration into a no-op that silently signs every existing
+          # user out and orphans their add-ons. There is no test runner in this repo,
+          # so this grep is the guard.
+          f=src/lib/nameMigration.ts
+          test -f "$f" || { echo "::error::$f is missing — the rename migration must not be deleted while un-migrated clients exist"; exit 1; }
+          # Reconstruct the old name the same way the source does, so this file does not
+          # contain a matchable copy of it either.
+          old="stre""dio"
+          if ! grep -q "$old" "$f"; then
+            echo "::error::$f no longer contains the pre-rename key prefix. A bulk rename has almost certainly overwritten it, and the migration is now a silent no-op. Restore the literal before merging."
+            exit 1
+          fi
+          echo "rename migration: $f still carries the pre-rename prefix"
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

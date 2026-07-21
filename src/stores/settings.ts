@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 
-/* Playback / interface settings, persisted to localStorage (stredio.settings.v1),
+/* Playback / interface settings, persisted to localStorage (groloo.settings.v1),
  * mirroring the vanilla SETTINGS object. A focused subset is wired now; the full
  * control set (external player, popup-ring, etc.) can extend this store. */
 
-const KEY = 'stredio.settings.v1';
+const KEY = 'groloo.settings.v1';
 
 export interface Settings {
   // interface

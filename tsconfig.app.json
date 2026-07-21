@@ -22,6 +22,11 @@
     "jsx": "react-jsx",
 
     /* Linting */
+    /* Strict costs us nothing today — the app was written against strict-shaped
+     * types from the start — and it is the only thing that keeps null/undefined
+     * from a flaky addon response reaching the player as a runtime crash on a TV,
+     * where there is no console to read and no way to ship a hotfix quickly. */
+    "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,

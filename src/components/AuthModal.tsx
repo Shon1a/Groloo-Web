@@ -10,7 +10,17 @@ import { ApiError } from '../lib/api';
 
 const emailOk = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 const passOk = (p: string) => p.length >= 8 && /[a-zA-Z]/.test(p) && /\d/.test(p);
-const ageOk = (dob: string) => { if (!dob) return false; const d = new Date(dob); const age = (Date.now() - d.getTime()) / (365.25 * 864e5); return age >= 13; };
+/* 18, not 13. The Terms have always said 18+ while this gate and the server both let
+ * 13-year-olds through, and declaring a 13+ audience drags an app whose add-on
+ * installer accepts arbitrary URLs into Play's Families policy. The server is the
+ * authority; this check only has to be no LOOSER than it, so raising the client first
+ * is safe — a stricter client can never be surprised by a server rejection. */
+const MIN_AGE = 18;
+const ageOk = (dob: string) => { if (!dob) return false; const d = new Date(dob); const age = (Date.now() - d.getTime()) / (365.25 * 864e5); return age >= MIN_AGE; };
+// Latest birth date that still clears the gate. Fed to the date input's `max` so the
+// native picker refuses under-age dates outright — on a D-pad, where scrubbing a date
+// field costs dozens of presses, being stopped at entry beats a rejection afterwards.
+const maxDob = () => { const d = new Date(); d.setFullYear(d.getFullYear() - MIN_AGE); return d.toISOString().slice(0, 10); };
 
 // minimal shape of the Google Identity Services we use
 type GsiId = { initialize: (o: unknown) => void; renderButton: (el: HTMLElement, o: unknown) => void };
@@ -75,7 +85,7 @@ export default function AuthModal() {
     <div className={`auth-overlay${authOpen ? ' open' : ''}`} id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle" aria-hidden={!authOpen} onClick={(e) => { if (e.target === e.currentTarget) closeAuth(); }}>
       <div className="auth-card">
         <button className="auth-dismiss" type="button" aria-label={t('auth.dismiss_aria')} onClick={closeAuth}>✕</button>
-        <div className="auth-brand"><img className="auth-logo" src="/assets/stredio-logo.svg" alt="stredio" /></div>
+        <div className="auth-brand"><img className="auth-logo" src="/assets/groloo-logo.svg" alt="groloo" /></div>
         <div className="auth-kicker mono">{t('auth.kicker')}</div>
 
         <div className="auth-tabs" role="tablist">
@@ -91,7 +101,7 @@ export default function AuthModal() {
         )}
 
         <form className="auth-form" onSubmit={submit} noValidate>
-          <h2 id="authTitle" className="sr-only">STREDIO</h2>
+          <h2 id="authTitle" className="sr-only">GROLOO</h2>
           {mode === 'signup' && (
             <div id="signupFields">
               <div className="auth-row">
@@ -106,7 +116,8 @@ export default function AuthModal() {
               </div>
               <div className="auth-field">
                 <label className="mono">{t('auth.dob')}</label>
-                <input type="date" autoComplete="bday" value={f.dob} onChange={set('dob')} />
+                <input type="date" autoComplete="bday" max={maxDob()} value={f.dob} onChange={set('dob')} />
+                <div className="auth-hint mono">{t('auth.dob_hint')}</div>
               </div>
             </div>
           )}
