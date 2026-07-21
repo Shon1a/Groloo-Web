@@ -15,8 +15,15 @@ import Browse from './routes/Browse';
 import Library from './routes/Library';
 import Addons from './routes/Addons';
 import Settings from './routes/Settings';
+/* Aliased on the way in. The route's own default export is named `Link`, which is also
+ * the name of react-router-dom's link component — the one import this file is most
+ * likely to grow next. Renaming here means that day is a one-line addition rather than
+ * a rename under a shadowed identifier that still compiles and renders the wrong thing. */
+import LinkRoute from './routes/Link';
+import DeleteAccount from './routes/DeleteAccount';
 import Legal from './routes/Legal';
 import Terms from './routes/Terms';
+import Attributions from './routes/Attributions';
 import DetailModal from './components/DetailModal/DetailModal';
 import VideoPlayer from './components/VideoPlayer/VideoPlayer';
 import AuthModal from './components/AuthModal';
@@ -62,9 +69,23 @@ export default function App() {
           <Route path="library" element={<Library />} />
           <Route path="addons" element={<Addons />} />
           <Route path="settings" element={<Settings />} />
-          {/* public footer pages */}
+          {/* Device-link claim page. Deliberately NOT gated in AppShell's GATED list:
+              the URL is typed off a TV screen by a user who may not be signed in yet,
+              and the route itself has to hold the code they came to enter while the
+              auth modal runs — a gate that bounced them home would lose it. */}
+          <Route path="link" element={<LinkRoute />} />
+          {/* Account deletion, publicly reachable and deliberately NOT gated. Play has
+              required a deletion URL that works with the app uninstalled since 2024, so
+              this one has to answer for a visitor who arrives cold from a store listing:
+              it explains itself first and routes through sign-in on its own terms. The
+              in-app control in Settings stays — this is the second door, not a move. */}
+          <Route path="delete-account" element={<DeleteAccount />} />
+          {/* public footer pages — /attributions is also its own route (not a Legal
+              section) because TMDB and the stores both want a citable standalone URL,
+              and the TV shells that drop the web footer link straight to it. */}
           <Route path="legal" element={<Legal />} />
           <Route path="terms" element={<Terms />} />
+          <Route path="attributions" element={<Attributions />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

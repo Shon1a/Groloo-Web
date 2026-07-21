@@ -190,6 +190,12 @@ export default function AppShell() {
           <div className="sf-links">
             <a id="footerTerms" role="button" tabIndex={0} onClick={() => go('/terms')}>{t('footer.terms_link')}</a>
             <a id="footerLegal" role="button" tabIndex={0} onClick={() => go('/legal')}>{t('footer.legal_link')}</a>
+            {/* Third link, not a line inside /legal: TMDB's terms require the attribution
+                to be displayed, and this footer is the only chrome that follows the user
+                onto every screen — so the notice is one press away from anywhere rather
+                than two, behind a page about takedowns. Losing that grant darks the
+                catalog on every installed device at once. */}
+            <a id="footerAttrib" role="button" tabIndex={0} onClick={() => go('/attributions')}>{t('legal.attrib_link')}</a>
           </div>
         </footer>
       </main>
