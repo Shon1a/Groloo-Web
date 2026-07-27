@@ -22,7 +22,7 @@ import { EN } from './en';
  *  that is now the one and only step, and it is reviewable.
  * ------------------------------------------------------------------ */
 
-const CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/groloo-translations@c8eee65e4e16e4fae8c1ce4ed3bb644581f057d0/';
+const CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/groloo-translations@a2937489a35c76bd42fb8a051b2a6c0feecc7720/';
 const cdnUrl = (file: string) => `${CDN}${file}`;
 const LANG_KEY = 'sf-lang';
 
