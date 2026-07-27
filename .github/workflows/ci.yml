@@ -17,7 +17,25 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # READ FROM .nvmrc, NOT PINNED HERE — and the version itself is load-bearing.
+          #
+          # This job's first ever run failed at `npm ci` with "package.json and
+          # package-lock.json are not in sync — Missing: @emnapi/core, @emnapi/runtime,
+          # @emnapi/wasi-threads". Nothing was wrong with the lockfile. It was pinned to
+          # node 20, which ships npm 10, while the lockfile is written by npm 11. The two
+          # disagree about optional platform-specific dependencies — the @emnapi/* packages
+          # are optional deps of a wasm fallback binding — so npm 10 reads an npm 11
+          # lockfile as incomplete and refuses.
+          #
+          # That failure mode is worth recognising because it lies: it names packages and
+          # implicates the lockfile, and every instinct is to regenerate the lockfile. Doing
+          # so on a Windows dev machine makes it strictly worse — a from-scratch regen drops
+          # the Linux-only optional deps CI needs, and `--os=linux --cpu=x64` drops the
+          # Windows ones. The lockfile was never the problem.
+          #
+          # .nvmrc is now the single source of truth, so the CI runtime and the developer's
+          # runtime cannot drift apart again without someone editing one visible file.
+          node-version-file: '.nvmrc'
           # Restores ~/.npm between runs; without it `npm ci` re-downloads the
           # whole tree every push and this job stops being cheap enough to keep.
           cache: npm
