@@ -13,11 +13,26 @@ import { usePlayer } from '../stores/player';
 // trailer iframe) must NOT fan out into home/meta refetches. Resumes on close.
 const refetchFocusUnlessPlaying = () => !usePlayer.getState().source;
 
+/* THE TV BUILD ASKS FOR TITLE LOGOS ON THE ROWS; the web build does not.
+ *
+ * /api/home ships the stylised wordmark (`titleLogo`) with the hero and the Upcoming feed only —
+ * every other row arrives with nothing but a text title, which is why on TV one row's billboard
+ * showed a logo and the rest showed plain type. The TV home puts a billboard at the head of
+ * EVERY row, so it needs the logo everywhere.
+ *
+ * Opt-in rather than always-on because the cost is real and one-sided: the server resolves a
+ * logo per title, and the web build renders small poster tiles that have never shown one. So
+ * the TV pays for what it uses and the website's payload is untouched.
+ *
+ * A server that does not know the flag simply ignores it and the billboards fall back to text,
+ * exactly as they do today — so this is safe to ship ahead of the backend. */
+const HOME_QUERY = import.meta.env.MODE === 'tv' ? '&logos=1' : '';
+
 export function useHome() {
   const { lang } = useLang();
   return useQuery({
     queryKey: ['home', lang],
-    queryFn: () => api<HomePayload>(`/api/home?lang=${encodeURIComponent(lang)}`),
+    queryFn: () => api<HomePayload>(`/api/home?lang=${encodeURIComponent(lang)}${HOME_QUERY}`),
     // admin-editable content (covers, titles, Featured Hero) — mirror the API's
     // max-age=60 and refresh on tab focus so admin edits appear within ~a minute
     staleTime: 60 * 1000,

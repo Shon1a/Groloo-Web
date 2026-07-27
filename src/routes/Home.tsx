@@ -7,6 +7,7 @@ import { useHomeConfig, rowOn } from '../stores/homeConfig';
 import { visibleRows } from '../lib/heartCatalog';
 import Row from '../components/Row';
 import Hero from '../components/Hero';
+import TvHero from '../components/TvHero';
 import UpcomingMarquee from '../components/UpcomingMarquee';
 import StudioRow from '../components/StudioRow';
 import ContinueRow from '../components/ContinueRow';
@@ -17,6 +18,15 @@ import type { MediaItem } from '../lib/types';
 
 /* Home = the featured hero + the categorised rows (via /api/home): Hero,
  * the Upcoming marquee, Continue Watching, and gated catalog/add-on rows. */
+
+/* TV build swaps the web Hero for the Netflix-style full-width billboard. Compile-time
+ * constant, so the branch (and TvHero) is dropped from the web bundle. The rows below swap
+ * too, but that happens inside Row — see the note there. */
+const IS_TV = import.meta.env.MODE === 'tv';
+
+/* Max poster tiles rendered per home rail — see the slice at the row map. 14 fills a 1080p
+ * viewport (~9 visible) with a comfortable scroll margin; "See all" reaches the rest. */
+const HOME_RAIL_CAP = 14;
 
 export default function Home() {
   const t = useT();
@@ -76,16 +86,54 @@ export default function Home() {
   const upMovies = data?.upcoming?.movie ?? [];
   const upSeries = data?.upcoming?.series ?? [];
 
+  /* UPCOMING ON TV IS AN ORDINARY RAIL, not the marquee.
+   *
+   * The web build renders this add-on as two strips of landscape cards that scroll themselves
+   * on a WAAPI loop. That is a website flourish and it is wrong on a TV twice over: nothing on
+   * a 10-foot UI should drift while the remote is trying to land on it, and an infinite
+   * animation is a compositor loop that never idles — the one cost a TV GPU pays for the whole
+   * time the home screen is open. So the TV build shows the same titles through the same <Row>
+   * every other rail uses, which also makes it a normal D-pad stop.
+   *
+   * Movies and series are INTERLEAVED rather than concatenated: the API returns ~10 of each and
+   * HOME_RAIL_CAP is 14, so appending would cap away almost every series and quietly turn a row
+   * labelled "Movies & Series" into a movies row. */
+  const upcomingTvRail = IS_TV
+    ? Array.from({ length: Math.max(upMovies.length, upSeries.length) }, (_, i) => [upMovies[i], upSeries[i]])
+      .flat()
+      .filter((m): m is MediaItem => !!m && !!m.poster)
+      .slice(0, HOME_RAIL_CAP)
+    : [];
+
   return (
     <section className="page active" id="browse" aria-label="Browse catalog">
       <div id="home">
-        {heroItems.length > 0 && <Hero items={heroItems} onPlay={onSelect} onAdd={onAdd} />}
-        {config.upcoming && <UpcomingMarquee movies={upMovies} series={upSeries} onSelect={onSelect} onSeeAll={onSeeAll} />}
+        {heroItems.length > 0 && (IS_TV
+          ? <TvHero items={heroItems} onPlay={onSelect} onAdd={onAdd} />
+          : <Hero items={heroItems} onPlay={onSelect} onAdd={onAdd} />)}
+        {config.upcoming && (IS_TV
+          ? (upcomingTvRail.length > 0 && (
+            <Row
+              cat="upcoming_movie"
+              title={t('sec.upcoming_movies')}
+              items={upcomingTvRail}
+              onSelect={onSelect}
+              onSeeAll={onSeeAll}
+            />
+          ))
+          : <UpcomingMarquee movies={upMovies} series={upSeries} onSelect={onSelect} onSeeAll={onSeeAll} />)}
         <ContinueRow onSelect={onSelect} />
         <div id="strips">
           {HOME_ROWS.map((row) => {
             if (!rowVisible(row.cat)) return null; // add-on gating (Heart core / JS fallback)
-            const list = (rows[row.cat]?.results ?? []).filter((m) => m.poster);
+            // Cap each home rail. The API returns ~20 per row and Row renders every one as a
+            // live poster tile, so ~13 rows put ~260 decoded bitmaps on the home screen —
+            // the largest passive memory load in the app and a real out-of-memory risk on a
+            // webOS TV. HOME_RAIL_CAP fills the viewport (~9 cards at 1080p) with comfortable
+            // scroll beyond it, and nothing is lost: every rail's "See all" opens the full
+            // browse grid. Invisible on screen — the first ~9 cards are unchanged, which is
+            // all a rest-state view or a screenshot ever shows.
+            const list = (rows[row.cat]?.results ?? []).filter((m) => m.poster).slice(0, HOME_RAIL_CAP);
             if (!list.length) return null;
             return (
               <Row

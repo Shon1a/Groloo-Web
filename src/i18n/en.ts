@@ -12,6 +12,11 @@ const SEED: Record<string, string> = {
   // primary nav (top strip + rail + drawer)
   'nav.home': 'Home',
   'nav.tv': 'TV',
+  // The TV build's top menu bar labels the /tv page "Series" (its own key so the desktop
+  // rail can keep saying "TV" untouched).
+  'nav.series': 'Series',
+  // TV home spotlight row heading.
+  'tv.featured': 'Featured',
   'nav.tv_shows': 'TV Shows',
   'nav.movies': 'Movies',
   'nav.new_popular': 'New & Popular',
