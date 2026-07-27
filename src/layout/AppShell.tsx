@@ -1,6 +1,5 @@
-import { motion, useReducedMotion } from 'motion/react';
 import type { ReactNode, RefObject } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ClapIcon, type ClapIconHandle } from '../components/ClapIcon';
 import { FanIcon, type FanIconHandle } from '../components/FanIcon';
@@ -11,8 +10,15 @@ import { SearchIcon, type SearchIconHandle } from '../components/SearchIcon';
 import { UserRoundIcon, type UserRoundIconHandle } from '../components/UserRoundIcon';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
+import TvTopNav from '../components/TvTopNav';
+import TvSpatialNav from '../components/TvSpatialNav';
 
 const GATED = ['/addons', '/settings', '/library'];
+
+/* TV build swaps the left icon rail for a top menu bar. `import.meta.env.MODE` is a Vite
+ * compile-time constant, so on the default web build this is statically false and the whole
+ * TvTopNav branch (and its import) is dead-code-eliminated — the top bar never ships to web. */
+const IS_TV = import.meta.env.MODE === 'tv';
 
 /* App shell: .shell > [ railbar · main > (<Outlet/> · footer) ]
  * The left icon rail is the primary nav on desktop (expands on hover); on phones it
@@ -37,13 +43,19 @@ type RailName = (typeof RAIL)[number]['rail'];
  * shape, so the rail drives them all the same way. */
 type RailIconHandle = { startAnimation: () => void; stopAnimation: () => void };
 
-/* The active-item highlight is ONE element (layoutId 'railPill') that lives inside whichever
- * rail item is active. When the route changes it unmounts from the old item and mounts in the
- * new one, so motion springs the same box across the gap — Instagram's sliding-dock feel. The
- * source and target boxes are the same size, so it's pure translation (no scale = crisp radius,
- * no border distortion mid-travel). A snappy spring with a hair of overshoot reads as premium
- * without feeling loose. Reduced-motion collapses it to an instant cut (see the guard below). */
-const PILL_SPRING = { type: 'spring', stiffness: 460, damping: 34, mass: 0.9 } as const;
+/* The active-item highlight is one plain element (`.rail-pill`) rendered inside whichever
+ * rail item is active. It USED to be a `motion` shared-layout element (layoutId 'railPill')
+ * that physically sprang from the old item to the new one on every route change — the
+ * Instagram sliding-dock feel. That spring was the last thing holding the `motion`
+ * dependency in the app, and `motion` was the bundle's single largest weight, so it went
+ * with the icon animations in Phase 2.
+ *
+ * WHAT CHANGED AND WHAT DID NOT: the pill's RESTING position is identical — it still sits in
+ * the active item, same size, same 999px radius — so nothing a screenshot captures moved.
+ * What is gone is the animated SLIDE between items; the highlight now cuts to the new item.
+ * On a D-pad that is arguably better (no lag chasing focus), and on the web it is a small
+ * polish loss traded for ~121 kB and the Chromium-87 floor. A pure-CSS slide could be added
+ * back later without a library, but it is deliberately not smuggled in here. */
 
 export default function AppShell() {
   const t = useT();
@@ -51,23 +63,6 @@ export default function AppShell() {
   const { pathname, search } = useLocation();
   const user = useAuth((s) => s.user);
   const openAuth = useAuth((s) => s.openAuth);
-  const reduceMotion = useReducedMotion();
-  // The active-item highlight is a shared-layout element (layoutId 'railPill'). On a hard reload
-  // Motion takes its FIRST layout snapshot before app.css has positioned the pill — and, under
-  // StrictMode, across a mount→unmount→remount churn — so that first "previous" box lands at a
-  // bogus spot: full-bleed and low on the page. The next frame then springs that phantom box up
-  // into the 40px rail slot, which reads as a big translucent-white pill sweeping in from the very
-  // bottom. Withholding the pill until one frame AFTER first paint kills it: by then layout has
-  // settled and there's no stale predecessor, so `initial={false}` lets it simply appear in place.
-  // The flag stays true for the rest of the session, so genuine route-change slides still spring.
-  const [pillReady, setPillReady] = useState(false);
-  useEffect(() => {
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setPillReady(true));
-    });
-    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
-  }, []);
   // These rail glyphs are live components rather than PNGs. Each is rendered once here, not
   // per-row, so the ref and the element it belongs to stay together. The rail row owns the
   // hover, so the animation fires anywhere on the 48px item — including the label the rail
@@ -106,6 +101,10 @@ export default function AppShell() {
   // scopes the effect to the ≤900px dock, so on the desktop rail the attribute is inert.
   useEffect(() => {
     const el = railbarRef.current;
+    // Was motion's useReducedMotion; with the library gone, read the same media query
+    // directly. Evaluated once on mount, which is exactly when the old hook's value was
+    // read too — a mid-session change of the OS setting is not worth a listener here.
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     if (!el || reduceMotion) return;
     let lastY = window.scrollY;
     let compact = false;
@@ -122,7 +121,8 @@ export default function AppShell() {
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
-  }, [reduceMotion]);
+    // Mount-only now — reduceMotion is read inside the effect rather than being a prop of it.
+  }, []);
 
   // reflect auth state on <body> so app.css shows/hides the sign-in icon + admin links
   useEffect(() => {
@@ -138,8 +138,12 @@ export default function AppShell() {
   const isActive = (to: string) => (to === '/' ? pathname === '/' : pathname.startsWith(to));
 
   return (
-    <div className="shell">
+    <div className={`shell${IS_TV ? ' tv-shell' : ''}`}>
+      {/* TV build: top menu bar + remote/D-pad navigation. Web build: the left icon rail below. */}
+      {IS_TV && <TvTopNav />}
+      {IS_TV && <TvSpatialNav />}
       {/* LEFT ICON RAIL — desktop primary nav */}
+      {!IS_TV && (
       <nav className="railbar" id="railbar" aria-label="Primary navigation" ref={railbarRef}>
         <div className="rail-nav">
           {RAIL.map((r) => {
@@ -161,18 +165,13 @@ export default function AppShell() {
                 onBlur={() => anim.ref.current?.stopAnimation()}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(r.to); } }}
               >
-                {isActive(r.to) && pillReady && (
-                  <motion.span
-                    className="rail-pill" aria-hidden="true"
-                    layoutId="railPill" initial={false}
-                    // The circle's radius lives here, not in app.css: motion projection-corrects an
-                    // inline px border-radius across the layout slide, but a radius set on the CSS
-                    // class isn't corrected — mid-flight the pill distorts to a squircle and only
-                    // snaps back to a circle once the spring settles. 999px reads as a full circle
-                    // on both the 40px desktop pill and the 44px dock pill (both square boxes).
-                    style={{ borderRadius: 999 }}
-                    transition={reduceMotion ? { duration: 0 } : PILL_SPRING}
-                  />
+                {isActive(r.to) && (
+                  // Plain span now (was motion.span). The 999px radius stays inline for the
+                  // same reason it always read as a full circle on both the 40px desktop pill
+                  // and the 44px dock pill — both square boxes — and there is no longer a
+                  // slide during which a CSS-class radius could distort, so this is purely the
+                  // resting style.
+                  <span className="rail-pill" aria-hidden="true" style={{ borderRadius: 999 }} />
                 )}
                 <span className="rail-ic">{anim.el}</span>
                 <span className="rail-lbl">{t(r.key)}</span>
@@ -181,6 +180,7 @@ export default function AppShell() {
           })}
         </div>
       </nav>
+      )}
 
       <main>
         <Outlet />

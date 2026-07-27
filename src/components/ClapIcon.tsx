@@ -1,26 +1,10 @@
-import type { Variants } from 'motion/react';
-import { motion, useAnimation } from 'motion/react';
 import type { HTMLAttributes } from 'react';
-import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useImperativeHandle } from 'react';
 
 import { cn } from '@/lib/utils';
 
-/* lucide-animated's "clap" icon (https://lucide-animated.com/r/clap.json), ported by hand
- * for the same reason as FanIcon — see that file for the why.
- *
- * Two nested groups: the outer one tips the whole board (holds at -10deg, then rights
- * itself), the inner one is the hinged arm that claps. The arm inherits the board's tilt.
- *
- * One deliberate departure from the upstream snippet, a bug in it: neither group had
- * initial="normal". The pivots (originX/originY) are declared only in the "normal" variant,
- * and nothing runs that variant until the first mouse-LEAVE — so the first clap after page
- * load fell back to motion's default 50% origin and pivoted about each group's own centre
- * instead of the board's bottom-left corner and the arm's hinge. Measured: 9.72px 10.00px
- * (outer) and 9.09px 4.49px (inner) on hover #1, versus the authored 4px 20px / 3px 11px on
- * hover #2 onward. initial="normal" applies the pivots at mount, so clap #1 matches the rest.
- *
- * Controlled the same way as its siblings: pass a ref and drive it with startAnimation/
- * stopAnimation, which lets the whole rail row own the hover instead of the 22px glyph. */
+/* Static SVG — resting frame of the former animated clapperboard. See HomeIcon for why the
+ * `motion` hover animation was removed in Phase 2. */
 
 export interface ClapIconHandle {
   startAnimation: () => void;
@@ -31,81 +15,13 @@ interface ClapIconProps extends HTMLAttributes<HTMLDivElement> {
   size?: number;
 }
 
-const VARIANTS: Variants = {
-  normal: {
-    rotate: 0,
-    originX: '4px',
-    originY: '20px',
-  },
-  animate: {
-    rotate: [-10, -10, 0],
-    transition: {
-      duration: 0.8,
-      times: [0, 0.5, 1],
-      ease: 'easeInOut',
-    },
-  },
-};
-
-const CLAP_VARIANTS: Variants = {
-  normal: {
-    rotate: 0,
-    originX: '3px',
-    originY: '11px',
-  },
-  animate: {
-    rotate: [0, -10, 16, 0],
-    transition: {
-      duration: 0.4,
-      times: [0, 0.3, 0.6, 1],
-      ease: 'easeInOut',
-    },
-  },
-};
+const NOOP: ClapIconHandle = { startAnimation: () => {}, stopAnimation: () => {} };
 
 const ClapIcon = forwardRef<ClapIconHandle, ClapIconProps>(
-  ({ onMouseEnter, onMouseLeave, className, size = 28, ...props }, ref) => {
-    const controls = useAnimation();
-    const isControlledRef = useRef(false);
-
-    useImperativeHandle(ref, () => {
-      isControlledRef.current = true;
-
-      return {
-        startAnimation: () => controls.start('animate'),
-        stopAnimation: () => controls.start('normal'),
-      };
-    });
-
-    const handleMouseEnter = useCallback(
-      (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isControlledRef.current) {
-          onMouseEnter?.(e);
-        } else {
-          controls.start('animate');
-        }
-      },
-      [controls, onMouseEnter]
-    );
-
-    const handleMouseLeave = useCallback(
-      (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isControlledRef.current) {
-          onMouseLeave?.(e);
-        } else {
-          controls.start('normal');
-        }
-      },
-      [controls, onMouseLeave]
-    );
-
+  ({ className, size = 28, ...props }, ref) => {
+    useImperativeHandle(ref, () => NOOP);
     return (
-      <div
-        className={cn(className)}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        {...props}
-      >
+      <div className={cn(className)} {...props}>
         <svg
           fill="none"
           height={size}
@@ -118,14 +34,10 @@ const ClapIcon = forwardRef<ClapIconHandle, ClapIconProps>(
           width={size}
           xmlns="http://www.w3.org/2000/svg"
         >
-          <motion.g animate={controls} initial="normal" variants={VARIANTS}>
-            <motion.g animate={controls} initial="normal" variants={CLAP_VARIANTS}>
-              <path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z" />
-              <path d="m6.2 5.3 3.1 3.9" />
-              <path d="m12.4 3.4 3.1 4" />
-            </motion.g>
-            <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-          </motion.g>
+          <path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z" />
+          <path d="m6.2 5.3 3.1 3.9" />
+          <path d="m12.4 3.4 3.1 4" />
+          <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
         </svg>
       </div>
     );

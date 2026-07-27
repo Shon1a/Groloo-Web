@@ -10,6 +10,15 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-tv
+
+# Visual regression (scripts/tv-shots.mjs). The BASELINE and the recorded fixtures are the
+# reference and are committed deliberately — a baseline that lives only on one machine
+# cannot fail anyone else's build, which is the entire point of having one. Per-run output
+# is not: `current/` is regenerated every check and `diff/` is a debugging artefact.
+screenshots/current/
+screenshots/diff/
+screenshots/record/
 *.local
 
 # vite-plugin-pwa emits this the moment devOptions.enabled is turned on

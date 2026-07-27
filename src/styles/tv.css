@@ -1,0 +1,676 @@
+/* ============================================================================
+   TV EFFECT BUDGET — a strictly SUBTRACTIVE layer over app.css, loaded ONLY in the
+   `--mode tv` build (see main.tsx). It never ships to the web bundle.
+
+   WHY SUBTRACTIVE, AND WHY A SEPARATE FILE. The plan's rule is that the TV build must be a
+   provable SUBSET of the desktop design, not a third look — so this file only ever REMOVES
+   or CAPS cost, never restyles. That is what lets "the two TVs look the same as the web,
+   minus the effects a TV GPU cannot afford" stay true by construction. If a rule here ever
+   changes a colour, a size or a position rather than removing an effect, it is a bug.
+
+   WHAT A TV GPU ACTUALLY CANNOT AFFORD. Only `transform` and `opacity` composite for free.
+   `backdrop-filter` is the worst offender by a wide margin: it re-samples everything painted
+   behind the element every frame, and a Mali-G31-class TV GPU stalls on it. `filter: blur()`
+   is next. Large multi-layer `box-shadow` repaints on scroll. Node COUNT is not the fill-rate
+   risk — these effects are — which is why job 6 (windowing) and job 7 (this file) are separate.
+
+   WHAT IS DELIBERATELY NOT DONE HERE YET. The plan's acceptance test for the full budget is
+   INP / keypress-to-paint measured on a real webOS 22 set, and the heaviest remaining item —
+   baking layered box-shadows down to pre-rendered gradients — is a per-rule judgement that
+   needs that hardware to tune without over-flattening the design. The clear, safe, universal
+   wins are taken here now; the shadow bake is left for the Phase 4 on-device pass, flagged
+   rather than guessed. See the box-shadow section at the foot.
+   ============================================================================ */
+
+/* 1. BACKDROP-FILTER — removed everywhere. The single biggest TV GPU win.
+   Every element that used it also carries a semi-opaque background colour (the badges, the
+   modal chrome, the rail wash, the panels), so removing the blur leaves a translucent-but-
+   solid surface that is still legible — it just no longer frosts the content behind it.
+   Blanket + !important because there are 29 sites and missing one leaves a lone frosted
+   panel stalling the compositor; this is exactly the case a broad rule is for. */
+*,
+*::before,
+*::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* 2. DECORATIVE filter: blur() — removed where it is pure ambience, kept where it is a
+   feature. The hero ambient glow (a 12px-blurred, dimmed copy of the backdrop behind the
+   real one) is the most expensive decorative blur in the app and buys a soft edge nobody
+   on a sofa will miss. The gooey catalog loader keeps its blur — it is tiny and its whole
+   identity is the metaball. `.blur-unwatched` (spoiler-blurring episode stills) is a user
+   setting and functional, so it is NOT touched here. */
+.m-hero-bg .art img.m-ambient {
+  filter: none !important;
+  /* the ambient layer exists only for its blur; with the blur gone, hide it rather than
+     stack a second sharp, dimmed copy of the backdrop under the real one */
+  display: none !important;
+}
+
+/* 3. BOX-SHADOW — the largest, most-layered decorative shadows only. These are the ones that
+   repaint a wide soft region on every scroll frame; the small 1px inset/hairline shadows are
+   cheap and stay. Not a blanket removal: shadows carry a lot of the design's depth, and
+   flattening all 80 would cross from "subset" into "third look". This trims the few that
+   dominate the fill cost — the poster hover-lift shadow and the card drop shadows — down to
+   a single tighter layer.
+
+   NOTE: the full bake of layered shadows into pre-rendered gradients is the on-device Phase 4
+   pass (see header). What is here is the safe, universal subset. */
+.pcard .poster:hover,
+.pcard .poster:focus-within,
+.gcard .poster:hover,
+.gcard .poster:focus-within {
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.6) !important;
+}
+.catcard,
+.catcard:hover {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* ============================================================================
+   TV UI — the modern 10-foot home. ADDITIVE layer (this section, unlike the budget
+   above, deliberately RESTYLES for the TV: the TV build is its own interface, not a
+   subset of the web look). Stage 1: the top menu bar that replaces the left rail.
+   ============================================================================ */
+
+.tv-shell {
+  --tv-topnav-h: 76px;
+  /* the desktop hero pulls itself up by --topbar-h to bleed under a top bar; point that at
+     our bar height so the same math tucks content under the new nav instead of the old one */
+  --topbar-h: var(--tv-topnav-h);
+
+  /* ONE CARD GEOMETRY FOR THE WHOLE TV HOME. These started life inside .tv-spot, scoped to the
+     spotlight. They live here now because the ordinary rails below are sized off the SAME
+     numbers — the spotlight's poster strip and every rail card are meant to be visibly the same
+     tile, and two independent sets of numbers is how that quietly stops being true. Change the
+     card size in one place and the whole screen follows. */
+  --spot-h: clamp(240px, 38vh, 380px);        /* card height = billboard height */
+  --sp-wl: calc(var(--spot-h) * 16 / 9);      /* billboard (landscape) width */
+  --sp-wp: calc(var(--spot-h) * 0.6);         /* poster (portrait) width */
+  --sp-gap: 14px;
+}
+
+/* The rail is not rendered in the TV build, so drop the left gutter it reserved and let the
+   hero run edge-to-edge. */
+.tv-shell main { margin-left: 0 !important; padding-top: var(--tv-topnav-h); }
+.tv-shell .hero { --hero-rail-pull: 0px; margin-top: calc(var(--tv-topnav-h) * -1) !important; }
+
+/* The bar itself — fixed, full width, floating over the content on a top-down black wash so
+   the page reads through beneath it (Netflix-style). Laid out as three columns so the centre
+   group stays dead-centre regardless of how wide the sides are. */
+.tv-shell .tv-topnav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--tv-topnav-h);
+  z-index: 60;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 48px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.55) 55%, rgba(0,0,0,0) 100%);
+}
+
+.tv-nav-left  { justify-self: start; }
+.tv-nav-right { justify-self: end; width: 44px; }
+
+/* THE MENU SWELLS WHEN THE REMOTE IS IN IT. A transform, not a font-size change: scale composites
+   for free and, crucially, moves nothing else on the page — a real size change here would push
+   the billboard down and back up every time focus crossed the bar. Origin is the centre so the
+   group grows evenly about the middle of the screen rather than drifting sideways. */
+/* THE NUDGE AT THE END OF THE SHRINK IS A REPAINT, NOT A MOVE.
+   While a transform is animating the group lives on its own compositor layer, and its text is
+   rasterised there. The instant the transition finishes, `transform: none` lets the browser throw
+   that layer away and repaint the text the ordinary way — and the two do not land on the same
+   subpixels. The group sits at x=141.375, so neither rendering is on a whole pixel and the
+   handover shows: measured between the last animated frame and the settled one, 2620 pixels of
+   the bar changed and the text's centre of mass moved 0.37px. Layout is byte-identical either
+   side of it (141.375 / 646.250 both times) — nothing actually moves, it is re-drawn slightly
+   differently, which the eye reads as a small jump.
+
+   So the layer is never given up: `scale(1)` keeps a transform on the element in its resting
+   state, and will-change keeps it composited throughout. One rasterisation, start to finish, so
+   there is no handover to see. */
+.tv-nav-items {
+  justify-self: center;
+  display: flex; align-items: center; gap: 8px;
+  transform-origin: 50% 50%;
+  transform: scale(1);
+  will-change: transform;
+  transition: transform .34s cubic-bezier(.2, .7, .2, 1);
+}
+.tv-nav-items.is-focused { transform: scale(1.08); }
+
+/* Profile avatar (opens My space). Focus is shown the same way the nav items show it — the pill
+   fills in — rather than with a ring around a circle. */
+.tv-nav-profile {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 999px;
+  background: rgba(255,255,255,0.12);
+  color: #fff; border: 0; cursor: pointer;
+  transition: background-color .22s ease, color .22s ease;
+}
+.tv-nav-profile:hover { background: rgba(255,255,255,0.24); }
+.tv-shell .tv-nav-profile:focus-visible {
+  outline: none;
+  background: #fff;
+  color: #0b0b0b;
+}
+
+/* Nav items — text pills; the active page gets a filled pill, the rest are dimmed until
+   hovered/focused. Sized for across-the-room reading. */
+.tv-nav-item {
+  font: inherit;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1;
+  color: rgba(255,255,255,0.62);
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 18px;
+  cursor: pointer;
+  display: inline-flex; align-items: center;
+  transition: color .22s ease, background-color .22s ease;
+}
+.tv-nav-item:hover { color: #fff; }
+
+/* THE PILL IS THE FOCUS INDICATOR — there is no outline on these at all.
+   A ring around a pill draws a second shape around the first, and the item already has a better
+   way of saying "you are here": it fills in. Three levels of white, which is the whole language
+   of this bar:
+     · the item the remote is on   → solid white, dark text. The brightest thing in the bar.
+     · the page you are currently on → a faint white wash, white text.
+     · everything else              → no fill, dimmed text.
+   Nothing changes shape between them: same pill, same radius, only the fill and the ink. */
+.tv-nav-item.active {
+  color: #fff;
+  background: rgba(255,255,255,0.14);
+}
+.tv-shell .tv-nav-item:focus-visible {
+  outline: none;
+  color: #0b0b0b;
+  background: #fff;
+}
+
+.tv-nav-search { padding: 9px 12px; color: rgba(255,255,255,0.72); }
+.tv-nav-search:hover { color: #fff; }
+
+/* ---- THE FEATURED BILLBOARD (TvHero) — the top of the home screen, and nothing else -------
+   A rounded, full-width card under the nav holding one title: art behind, a left-to-right scrim
+   over it, and the copy pinned bottom-left. Sized so the first row below it PEEKS: 62vh leaves
+   about a third of a 1080p panel for the row underneath, which is what tells a viewer the page
+   scrolls. The min/max keep it sane on a 720p webOS package and on anything unusually tall. */
+/* The billboard parks like a row does, except the whole SECTION is the target rather than the
+   focused button: arriving from below on a 54px action button and merely nudging it into view
+   left the billboard itself three-quarters off the top of the screen. The margin is the bar plus
+   the page's own top padding, which is exactly where the hero sits when the page is at rest — so
+   coming back up to it restores the screen you started on. */
+.tv-hero {
+  padding-top: 6px;
+  scroll-margin-top: calc(var(--tv-topnav-h) + 24px);
+}
+.tv-hero-stage {
+  position: relative;
+  height: clamp(340px, 62vh, 720px);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+
+/* two cross-dissolving art layers */
+.tv-hero-layer {
+  position: absolute; inset: 0;
+  opacity: 0;
+  transition: opacity .6s ease;
+}
+.tv-hero-layer.on { opacity: 1; }
+.tv-hero-art {
+  position: absolute; inset: 0;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+/* One scrim over BOTH layers, and the card's FOCUS TARGET (see TvHero). Horizontal so the copy
+   sits on darkness while the right-hand two-fifths of the picture stays clean, plus a short
+   bottom fade so the buttons never land on a bright patch. It deepens a little while focused,
+   which lifts the unfolding synopsis off the artwork without a separate panel behind it.
+   No blur anywhere — see the effect budget at the top of this file. */
+.tv-hero-scrim {
+  position: absolute; inset: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  background:
+    linear-gradient(90deg, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.72) 28%, rgba(0,0,0,0.28) 55%, rgba(0,0,0,0) 78%),
+    linear-gradient(0deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 42%);
+  transition: opacity .38s ease;
+}
+.tv-hero.is-focused .tv-hero-scrim { opacity: 1; }
+
+/* Ring drawn as an overlay, not an outline: .tv-hero-stage clips (overflow: hidden), so an
+   outset ring on a child that fills it is shaved off on all four sides. */
+.tv-shell .tv-hero-scrim:focus-visible { outline: none; }
+.tv-shell .tv-hero-scrim:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--tv-ring);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.tv-hero-copy {
+  position: absolute;
+  left: 56px; bottom: 52px;
+  max-width: 46%;
+  animation: tvHeroRise .5s cubic-bezier(.2, .7, .2, 1) both;
+}
+.tv-hero-tag {
+  display: block;
+  font-size: 13px; font-weight: 800; letter-spacing: 0.26em;
+  text-transform: uppercase; color: rgba(255,255,255,0.88);
+  margin-bottom: 12px;
+}
+.tv-hero-logo {
+  display: block;
+  max-width: 100%; max-height: 132px;
+  object-fit: contain;
+  margin-bottom: 18px;
+}
+.tv-hero-title {
+  margin: 0 0 18px;
+  font-size: clamp(34px, 3.4vw, 58px); font-weight: 800; line-height: 1.05; color: #fff;
+}
+.tv-hero-meta {
+  display: flex; align-items: center; flex-wrap: wrap;
+  font-size: 17px; font-weight: 700; color: #fff;
+}
+.tv-hero-meta span + span::before { content: "•"; margin: 0 10px; opacity: 0.55; font-weight: 400; }
+/* THE UNFOLD. The synopsis and the buttons live together in this block, which has no height at
+   rest and grows to fit when the card takes focus. Because .tv-hero-copy is anchored to the
+   BOTTOM of the card, growing it is what lifts the tag, logo and meta line — one movement that
+   carries the whole block, rather than four things animating independently.
+
+   max-height rather than height: the synopsis clamps to three lines but may be one or two, so
+   there is no single correct height to animate to. The cap is set just above the tallest real
+   case so the easing still reads as the content settling, not as a value racing past the end.
+
+   The opacity lags the growth slightly and the buttons lag the text again — a short stagger is
+   most of the difference between "a panel appeared" and "this was assembled for you". */
+.tv-hero-reveal {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    max-height .44s cubic-bezier(.2, .7, .2, 1),
+    opacity .3s ease;
+}
+.tv-hero.is-focused .tv-hero-reveal {
+  max-height: 220px;
+  opacity: 1;
+  transition:
+    max-height .44s cubic-bezier(.2, .7, .2, 1),
+    opacity .34s ease .06s;
+}
+
+.tv-hero-plot {
+  margin: 14px 0 0;
+  max-width: 620px;
+  font-size: 19px; line-height: 1.45; color: rgba(255,255,255,0.92);
+  display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.tv-hero-actions {
+  display: flex; gap: 14px; margin-top: 26px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity .26s ease, transform .3s cubic-bezier(.2, .7, .2, 1);
+}
+.tv-hero.is-focused .tv-hero-actions {
+  opacity: 1;
+  transform: none;
+  transition: opacity .3s ease .16s, transform .38s cubic-bezier(.2, .7, .2, 1) .16s;
+}
+.tv-hero-btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  height: 54px; padding: 0 30px;
+  border: 0; border-radius: 999px;
+  font: inherit; font-size: 18px; font-weight: 700; line-height: 1;
+  cursor: pointer;
+  transition: background-color .15s ease, color .15s ease;
+}
+.tv-hero-btn .ic { font-size: 15px; }
+.tv-hero-btn.primary { background: #fff; color: #000; }
+.tv-hero-btn.primary:hover { background: rgba(255,255,255,0.82); }
+.tv-hero-btn.ghost { background: rgba(255,255,255,0.26); color: #fff; }
+.tv-hero-btn.ghost:hover { background: rgba(255,255,255,0.38); }
+/* The global stage-5 ring is a white outline, which vanishes on the white primary pill unless
+   it is held off the button — the offset puts it on the artwork behind, where it reads. */
+.tv-shell .tv-hero-btn:focus-visible { outline: 3px solid var(--tv-ring); outline-offset: 5px; }
+
+@keyframes tvHeroRise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---- THE HOME ROW ------------------------------------------------------------------------
+   Every row rests as a 16:9 billboard on the left — backdrop, tag, title plate — followed by a
+   strip of portrait posters. The billboard is NOT something the row grows when the remote
+   arrives; a row you have not reached looks the same as the one you are on apart from two
+   things, both of which say "this is where you are": the heading is dimmed, and the
+   genre · year · ★rating line and synopsis beneath it are hidden.
+
+   Geometry as CSS vars: --sp-wl is the billboard width (16:9 of the row height), --sp-wp the
+   poster width, and --active (an integer set inline) slides the track so poster (active+1)
+   lands just past the billboard's right edge.
+
+   WHAT ANIMATES, AND WHAT MUST NOT. Opacity on the heading colour and the info panel, transform
+   on the strip. Nothing REFLOWS: the info panel keeps its height in both states (--sp-info-h),
+   so a row gaining focus cannot move the rows under it — on a page this long that would be a
+   whole-document layout pass on every keypress, which is the one cost a TV cannot pay. */
+.tv-spot {
+  --sp-info-h: 84px;             /* reserved in both states; see above */
+  padding-top: 6px;
+  margin-top: 24px;
+}
+
+/* The dimmed/bright title is how a viewer finds the row they are on before they read anything
+   else on it — the same job the focus ring does for a tile. */
+.tv-spot-rowtitle {
+  margin: 0 0 14px;
+  font-size: 20px; font-weight: 700;
+  color: rgba(255,255,255,0.55);
+  transition: color .22s ease;
+}
+.tv-spot.is-open .tv-spot-rowtitle { color: #fff; }
+
+/* THE STAGE NO LONGER CLIPS, and that is deliberate: the billboard GROWS when the remote lands on
+   it, and a box that clips its own children cannot let one of them get bigger than itself.
+
+   The clip has moved down to .tv-spot-rail, which wraps the strip — the only thing that ever
+   needed clipping. The billboard is free to spill a few pixels past the row.
+
+   `contain` drops from `layout paint` to `layout` for the same reason: paint containment IS a
+   clip. The layout half is the half that matters here — the row's height is fixed, so nothing
+   inside it can ever reflow the page — and the strip's own clip below still stops the twelve
+   posters from painting across the screen. */
+.tv-spot-stage {
+  position: relative;
+  height: var(--spot-h);
+  border-radius: 12px;
+  contain: layout;
+}
+
+/* The strip's window. Inherits the row's rounded corners and does the clipping the stage used to
+   do, so the posters are bounded exactly as before while the billboard on top is not. */
+.tv-spot-rail {
+  position: absolute; inset: 0;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+/* strip track — translated so [0..active] hide left/behind the billboard, [active+1..] peek */
+.tv-spot-strip {
+  position: absolute; left: 0; top: 0; height: 100%;
+  display: flex; gap: var(--sp-gap);
+  transform: translateX(calc(var(--sp-wl) + var(--sp-gap) - (var(--active) + 1) * (var(--sp-wp) + var(--sp-gap))));
+  transition: transform .34s cubic-bezier(.2, .7, .2, 1);
+}
+/* will-change ONLY on the row the remote is on. It promotes the strip to its own compositor
+   layer, which is right for the row that is about to slide — and wrong for the other twelve,
+   which would each hold a permanent layer the size of the screen. That is GPU memory a TV does
+   not have, and paying it on every row made the page scroll worse, not better: the fix for a
+   janky scroll here was to promote LESS, not more. */
+.tv-spot.is-open .tv-spot-strip { will-change: transform; }
+.tv-spot-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  height: 100%;
+  width: var(--sp-wp);
+  padding: 0; border: 0; margin: 0;
+  cursor: pointer;
+  border-radius: 10px; overflow: hidden;
+  outline: none;
+  /* the fallback gradient is set inline per title; the <img> covers it once decoded */
+}
+.tv-spot-thumbimg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* billboard — pinned left, over the strip, two cross-dissolving layers.
+ *
+ * IT GROWS WHEN THE REMOTE IS ON IT. 3% — enough to read as "this one", small enough that the row
+ * still looks like a row. A transform, not a width/height change: those would reflow the row on
+ * every arrow press, and this element sits above twelve more of them.
+ *
+ * It grows about its own centre, so the picture stays where the eye left it and creeps a few
+ * pixels into the margin on every side rather than lunging off in one direction. Only ~5px each
+ * way on a 345px card — the row has that much air around it (24px above, the reserved info panel
+ * below), which is why the stage above it could give up its clip without anything colliding.
+ *
+ * It rests at scale(1) rather than at no transform, and takes a layer only while its row is open:
+ * both for the reasons written against the strip and the nav — a transform that ENDS hands the
+ * layer back and repaints on different subpixels (a small jump), and a permanent layer per row is
+ * GPU memory a TV does not have. */
+.tv-spot-hero {
+  position: absolute; left: 0; top: 0;
+  width: var(--sp-wl); height: 100%;
+  padding: 0; border: 0; margin: 0;
+  background: #000; cursor: pointer;
+  border-radius: 12px; overflow: hidden;
+  outline: none; z-index: 2;
+  transform: scale(1);
+  transform-origin: 50% 50%;
+  transition: transform .34s cubic-bezier(.2, .7, .2, 1);
+}
+.tv-spot.is-open .tv-spot-hero { will-change: transform; }
+.tv-shell .tv-spot-hero:focus-visible { transform: scale(1.03); }
+/* focus ring lives in the stage-5 section at the foot of this file — it has to be INSET here,
+   see the note there */
+.tv-spot-layer {
+  position: absolute; inset: 0;
+  opacity: 0;
+  transition: opacity .5s ease;
+}
+.tv-spot-layer.on { opacity: 1; }
+
+.tv-spot-art {
+  position: absolute; inset: 0;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.tv-spot-card-in {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 22px 24px;
+  background: linear-gradient(0deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 60%, transparent 100%);
+}
+.tv-spot-tag {
+  display: block;
+  font-size: 12px; font-weight: 800; letter-spacing: 0.2em;
+  text-transform: uppercase; color: rgba(255,255,255,0.82);
+  margin-bottom: 8px;
+}
+.tv-spot-logo { display: block; max-width: 62%; max-height: 84px; object-fit: contain; }
+.tv-spot-cardtitle { display: block; font-size: 34px; font-weight: 800; color: #fff; }
+
+/* Reserved in BOTH states (see the note at the top of this section): the height is fixed and
+   the panel is merely invisible while the row is closed, so opening one never reflows the page.
+   The animation is scoped to .is-open — on a closed row it would fight the opacity below and,
+   with `both`, pin the panel visible. */
+.tv-spot-info {
+  max-width: 720px; margin-top: 18px;
+  height: var(--sp-info-h);
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity .25s ease;
+}
+.tv-spot.is-open .tv-spot-info {
+  opacity: 1;
+  animation: tvSpotFade .42s cubic-bezier(.2, .7, .2, 1) both;   /* fades with the billboard */
+}
+.tv-spot-meta {
+  display: flex; align-items: center; flex-wrap: wrap;
+  font-size: 16px; font-weight: 600; color: #d6d6d6;
+}
+.tv-spot-meta span + span::before { content: "•"; margin: 0 10px; opacity: 0.5; }
+.tv-spot-plot {
+  margin: 10px 0 0;
+  max-width: 640px;
+  font-size: 16px; line-height: 1.5; color: rgba(255,255,255,0.82);
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
+
+@keyframes tvSpotFade {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---- The rails that are STILL rails, matched to the spotlight -----------------------------
+   Row now renders a spotlight on TV, so the catalog / upcoming / add-on rows never reach this
+   block. What does: Continue Watching, which cannot become a spotlight — its cards carry a
+   resume progress bar and a remove button that the billboard layout has nowhere to put — and
+   the add-on row skeletons, which mimic .pcard while loading. Both must still match the tile
+   size everything else uses, or the one remaining rail is visibly the odd one out.
+
+   The web card is 200x300 with a 15px caption — sized for a monitor at arm's length, and next
+   to the spotlight's 228x380 strip poster it reads as a different, smaller component. Every
+   rail card is re-sized off the SAME --spot-h / --sp-wp the spotlight uses, so the Featured
+   strip and the rails below are one tile at one size.
+
+   The CAPTION IS DROPPED with it. The web rail card carries a title + "★rating · year · type"
+   line under the cover; the spotlight strip carries nothing, and that caption was the last
+   thing making the two read as different components. Nothing is lost that the TV does not
+   already say better: the focused title's name, genre, year and rating are all spelled out in
+   the spotlight's info panel, and every card still announces its own title to a screen reader
+   through the tile's aria-label. Hiding .cap (rather than not rendering it) keeps the change
+   to this file — Poster/PosterCard stay shared with the web build. */
+.tv-shell .strip-row { gap: var(--sp-gap); }
+.tv-shell .pcard { width: var(--sp-wp); }
+.tv-shell .pcard .poster { height: var(--spot-h); border-radius: 10px; }
+.tv-shell .pcard .cap { display: none; }
+
+/* NO MOUSE CHROME ON THE RAILS — this is what actually stops a rail reading as a different
+   component from Featured. The card box already matches it exactly (228x380, 10px radius,
+   14px gap, same left edge); the mismatch is three affordances the web rail grows the instant
+   a pointer crosses it and the spotlight strip never has at all:
+     - the left/right chevrons, each sitting on a 129px-wide dark edge gradient that dims the
+       first and last card in the row
+     - the thin scroll line under the row
+     - a hover lift (translateY(-8px)) plus a large drop shadow on the card itself
+   All three are pointer feedback, and the TV has no pointer. The D-pad focus ring from stage 5
+   is the only feedback a remote needs, and it is the same feedback the spotlight gives. */
+.tv-shell .strip-arrow,
+.tv-shell .strip-scroll { display: none !important; }
+/* !important on the shadow only because the TV effect budget at the top of this file already
+   claims that exact selector with one — this is the same property being turned off further. */
+.tv-shell .pcard .poster:hover,
+.tv-shell .pcard .poster:focus-within {
+  transform: none;
+  box-shadow: none !important;
+}
+
+/* Match the spotlight's title→cards gap (14px). The rail's is 16px, made of a 16px heading
+   margin, a -14px rail pull and 14px of row padding — so it is corrected on the heading. */
+.tv-shell .strip-head { margin-bottom: 14px; }
+
+/* Row headings match the spotlight's "Featured" — same size and weight, and NOT upper-cased.
+   The web rails shout in caps; beside a mixed-case "Featured" that reads as two designs. */
+.tv-shell .strip-head .mono {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #fff;
+}
+
+/* ---- Stage 5: remote / D-pad focus ------------------------------------------------------
+   A clear focus ring for the element the remote is on (keyboard focus only, so a mouse user
+   never sees it), and scroll-margin so moving focus never tucks a tile under the fixed top bar.
+   Softened off pure white: at this thickness a solid #fff ring on black is the brightest thing
+   on the screen and pulls the eye off the artwork it is meant to be pointing at. */
+.tv-shell {
+  --tv-ring: rgba(255, 255, 255, 0.72);
+}
+/* NO border-radius here, deliberately. It used to force 8px so the ring looked rounded on square
+   elements — but it outranks each element's own radius, so every pill in the TV build (the nav
+   items, the profile circle, the hero's action buttons) SQUARED OFF the moment it took focus,
+   and the ring traced a rectangle around a rounded shape. Elements keep their own corners; the
+   outline follows them. */
+.tv-shell a:focus-visible,
+.tv-shell button:focus-visible,
+.tv-shell .poster:focus-visible,
+.tv-shell [tabindex]:focus-visible {
+  outline: 3px solid var(--tv-ring);
+  outline-offset: 3px;
+}
+/* The strip tile already carries a ring via .active; drop the doubled outline there. */
+.tv-shell .tv-spot-thumb:focus-visible { outline: none; }
+
+/* SHAPES MUST NOT CHANGE WHEN SOMETHING TAKES FOCUS, and one line in app.css was making them:
+ *
+ *   a:focus-visible, button:focus-visible, … { border-radius: 4px }
+ *
+ * It exists to round the desktop focus ring on square elements, and it outranks each element's
+ * own radius (0-1-1 against a plain class's 0-1-0). On this build that meant every pill in the
+ * top bar and both billboards SQUARED OFF the moment the remote landed on them — a shape change
+ * where none was intended, which reads as a glitch rather than as feedback.
+ *
+ * Restated per shape below. There is no CSS keyword for "keep whatever this element already
+ * had" — `revert` rolls back to the browser's own stylesheet, not to another author rule — so
+ * the list has to be explicit. Anything given a radius AND made focusable belongs here. */
+.tv-shell .tv-nav-item:focus-visible,
+.tv-shell .tv-nav-profile:focus-visible,
+.tv-shell .tv-hero-btn:focus-visible { border-radius: 999px; }
+.tv-shell .tv-hero-scrim:focus-visible,
+.tv-shell .tv-spot-hero:focus-visible { border-radius: 12px; }
+.tv-shell .pcard .poster:focus-visible { border-radius: 10px; }
+
+/* THE ROW BILLBOARD RINGS ITSELF ON THE INSIDE, and it has to.
+   It is pinned to left:0/top:0 at the full height of .tv-spot-stage, and the stage both clips
+   (overflow: hidden) and contains paint — so an OUTSET ring is cut off on three of its four
+   sides. That is the broken-looking outline: a clean line down the right edge and shaved stubs
+   everywhere else.
+
+   Drawn as a ::after overlay rather than `box-shadow: inset`, which was tried and is invisible
+   here: an inset shadow paints on the element's own background, UNDERNEATH its children, and
+   this element's children are two artwork layers at inset:0 that cover it completely. The
+   pseudo-element is a child, painted last, so it lands on top of the picture where it belongs. */
+.tv-shell .tv-spot-hero:focus-visible { outline: none; }
+.tv-shell .tv-spot-hero:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: 3px solid var(--tv-ring);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.tv-shell :is(.tv-nav-item, .tv-nav-profile, .tv-spot-hero, .tv-spot-thumb, .poster, a, button) {
+  scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px;
+}
+/* The row billboard needs MORE than the bar's height: TvSpatialNav parks a row with `start`, and
+   the row's TITLE sits above this element, so clearing only the bar would tuck the title under
+   it. 58px is the title line plus its margin, and it must come after the shorthand above —
+   `scroll-margin` resets all four sides, so an earlier scroll-margin-top would be wiped. */
+.tv-shell .tv-spot-hero { scroll-margin-top: calc(var(--tv-topnav-h) + 58px); }
+/* Reduced motion: no dissolves / scroll animation (swap is instant); auto-advance is already
+   off in the component under the same query. */
+@media (prefers-reduced-motion: reduce) {
+  .tv-spot-strip { transition: none; }
+  .tv-spot-layer { transition: none; }
+  .tv-spot-rowtitle, .tv-spot-info { transition: none; }
+  .tv-spot.is-open .tv-spot-info { animation: none; }
+  .tv-spot-hero { transition: none; }
+  .tv-shell .tv-spot-hero:focus-visible { transform: scale(1); }
+  .tv-hero-layer { transition: none; }
+  .tv-hero-copy { animation: none; }
+  .tv-hero-reveal, .tv-hero-actions, .tv-nav-items, .tv-nav-item.active { transition: none; }
+  .tv-nav-items.is-focused { transform: none; }
+}

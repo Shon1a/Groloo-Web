@@ -17,8 +17,42 @@ import { VitePWA } from 'vite-plugin-pwa'
  * one person's session to the next user of a shared device. It is an allowlist, so a route
  * added to the API later stays uncached until it is listed here. */
 
+/* THE TV BUILD — `vite build --mode tv`.
+ *
+ * webOS runs a web engine and nothing else, so the LG app is this same React tree loaded
+ * from a URL rather than a separate program. The only thing that makes it a *TV* build is
+ * the browser floor it is compiled down to, and today's default is the reason the app does
+ * not start on most LG sets at all.
+ *
+ * THE FLOOR IS webOS 22 = CHROMIUM 87, and it is a decision rather than a guess:
+ *   webOS 22 → Chromium 87      ← the floor
+ *   webOS 23 → 94, 24 → 108, 25 → 120, 26 → 132
+ *   webOS 6.x → 79, and 4.x → 53, which predates WebAssembly entirely
+ * 6.x and below are out of scope: they buy negligible installed base and cost
+ * @vitejs/plugin-legacy plus core-js, and 4.x cannot run the core under any configuration.
+ *
+ * Vite 8 defaults `build.target` to `baseline-widely-available`, which is chrome111. That
+ * is not a performance nicety — it is a hard SyntaxError before a single line executes on
+ * webOS 22, 23 AND 24, because the parser meets syntax it does not know. Black screen, no
+ * error surface, nothing in a log the user can reach. `Object.hasOwn` is Chromium 93 and
+ * `toSorted` is 110, both of which the default happily emits.
+ *
+ * THE SAME FLOOR BINDS ANDROID TV, and that is deliberate. The Android app is a WebView
+ * shell around this identical bundle, and Play-certified devices run a current Android
+ * System WebView — roughly 60+ milestones ahead of Chromium 87. So the harder platform
+ * solves the easier one for free: a bundle that satisfies webOS satisfies every Android TV
+ * WebView by construction, and the reverse is not true. The cost is that the newer
+ * WebView's capability goes deliberately unused on both. That is what "the two TV apps look
+ * the same" actually costs, and it is the same fact as the guarantee.
+ *
+ * DESKTOP IS UNTOUCHED. The default build keeps Vite's modern target — there is no reason
+ * to serve a browser from 2020 to a browser from this year, and lowering the web build
+ * would pay the TV's cost on every visitor. Two modes, one source tree.
+ */
+const TV_TARGET = ['chrome87'];
+
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     VitePWA({
@@ -136,6 +170,28 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  /* LIGHTNING CSS, TV MODE ONLY — because `build.cssTarget` alone does nothing here.
+   *
+   * Measured, not assumed: with `cssTarget: ['chrome87']` and esbuild's default CSS
+   * pipeline, the TV stylesheet came out byte-identical to the web one. esbuild's CSS
+   * downlevelling covers syntax like nesting; it does not rewrite `color-mix()`. Lightning
+   * CSS does, against a real browser-support database.
+   *
+   * This closes the mechanical half of the gap. It cannot close the other half: `:has()`,
+   * `@container` and `dvh` have no downlevelled equivalent in any tool, because there is
+   * nothing to compile them TO — they are capabilities, not syntax. Those need hand edits
+   * with fallbacks, tracked as their own task.
+   *
+   * Web mode is left on the default pipeline deliberately. Turning Lightning CSS on for
+   * both would change the bytes served to every website visitor for the benefit of a
+   * platform none of them are using, and this project has no visual regression suite yet
+   * to prove that change was invisible. */
+  ...(mode === 'tv' ? {
+    css: {
+      transformer: 'lightningcss' as const,
+      lightningcss: { targets: { chrome: 87 << 16 } },
+    },
+  } : {}),
   build: {
     // Hashed build output lands in /build/*; public/ is copied verbatim to /assets/*.
     // They must stay in separate folders: /build/* filenames carry a content hash and
@@ -143,6 +199,14 @@ export default defineConfig({
     // sets one rule per folder — merging them back into /assets would freeze the rail
     // icons at whatever version shipped first.
     assetsDir: 'build',
+    // See the TV BUILD note at the top of this file. Both halves are required and they
+    // fail differently: `target` misses are a SyntaxError at parse (nothing runs at all),
+    // `cssTarget` misses are silent — the rule is simply dropped and the layout quietly
+    // renders wrong, which is the harder of the two to notice on a TV nobody is holding.
+    ...(mode === 'tv' ? { target: TV_TARGET, cssTarget: TV_TARGET } : {}),
+    // A separate folder so a TV build can never overwrite the web build that is about to
+    // be deployed to Vercel, and so both can exist at once during a comparison.
+    ...(mode === 'tv' ? { outDir: 'dist-tv' } : {}),
   },
   server: {
     // Dev proxy: /api/* → the live backend, server-side, so the browser makes a
@@ -157,4 +221,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

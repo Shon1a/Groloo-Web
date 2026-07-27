@@ -16,6 +16,16 @@ import ErrorBoundary from './components/ErrorBoundary';
 // screens look identical. Migrates to per-component CSS Modules over later phases.
 import './styles/app.css';
 
+/* TV EFFECT BUDGET, `--mode tv` only. `import.meta.env.MODE` is the Vite build mode, and it
+ * is a compile-time constant: in the web build it is the string "production", so this branch
+ * is statically false and Vite dead-code-eliminates it — styles/tv.css is never bundled or
+ * shipped to the website. In the TV build MODE is "tv", the branch is live, and the
+ * subtractive overrides load. A dynamic import (not a top-level one) is what lets that
+ * elimination happen; on a packaged TV app the file is local, so the load is immediate. */
+if (import.meta.env.MODE === 'tv') {
+  import('./styles/tv.css');
+}
+
 /* Last-resort logging for the two failure classes a React boundary cannot see: throws
  * from outside the render cycle (event handlers, timers, media callbacks) and promise
  * rejections nobody awaited. Deliberately console-only — no telemetry dependency and no
