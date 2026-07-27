@@ -5,6 +5,7 @@ import { usePlayer } from '../../stores/player';
 import { useLibrary } from '../../stores/library';
 import { useAuth } from '../../stores/auth';
 import { useHistory } from '../../stores/history';
+import { useReport } from '../../stores/report';
 import { useMeta } from '../../lib/queries';
 import { useT, useGenre } from '../../i18n/i18n';
 import { hueBg } from '../../lib/img';
@@ -123,6 +124,7 @@ export default function DetailModal() {
   const toggleList = useLibrary((s) => s.toggle);
   const user = useAuth((s) => s.user);
   const openAuth = useAuth((s) => s.openAuth);
+  const openReport = useReport((s) => s.open);
   // Subscribe to the progress map so the hero button's resume bar re-renders the
   // moment a watch position is saved; getResume applies the <1% / >94% filter.
   useHistory((s) => s.progress);
@@ -198,9 +200,23 @@ export default function DetailModal() {
   // picking an episode brings its freshly-loaded sources into view (matches vanilla)
   useEffect(() => { if (pickedEp) streamsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [pickedEp]);
 
-  // close the modal when the route changes (navigating away dismisses it)
+  /* Close the modal when the route changes (navigating away dismisses it).
+   *
+   * SKIP THE FIRST RUN — this is load-bearing now that the modal is lazy-mounted. React
+   * runs an effect once on mount, and this component now mounts AFTER the click that opened
+   * it (DetailModalGate defers the chunk until first open), so a bare `close()` here fires
+   * on mount and slams shut the modal that was just opened. The symptom is nasty and
+   * intermittent: the FIRST title opened in a session flashes and closes, every one after
+   * works, because the second time the component is already mounted and only a real
+   * pathname change re-runs it. When the modal was always-mounted this effect ran once at
+   * app start against an empty modal and the bug was invisible. The ref makes "mount" and
+   * "the route actually changed" distinguishable, which is the real intent. */
   const { pathname } = useLocation();
-  useEffect(() => { close(); }, [pathname, close]);
+  const mountedPath = useRef(true);
+  useEffect(() => {
+    if (mountedPath.current) { mountedPath.current = false; return; }
+    close();
+  }, [pathname, close]);
 
   // Escape to close + focus the close button on open
   useEffect(() => {
@@ -372,6 +388,12 @@ export default function DetailModal() {
                   {resume ? <span className="hero-progress" aria-hidden="true"><span className="hero-progress-fill" style={{ width: `${resumePct}%` }} /></span> : null}
                 </button>
                 <button className={`hero-add m-disc${added ? ' on' : ''}`} id="mAdd" type="button" aria-pressed={added} aria-label={t(added ? 'mylist.remove' : 'mylist.add')} onClick={onAdd}>{added ? '✓' : '+'}</button>
+                {/* Reporting a title lives here, beside Add — always visible rather than
+                  * behind a menu, because Play's UGC policy asks for reporting to be
+                  * in-app and findable, and a reviewer with a D-pad has to reach it. It is
+                  * a round m-disc to match the chrome and to stay out of Play's way. */}
+                <button className="hero-add m-disc" id="mReport" type="button" aria-label={t('report.cta')} title={t('report.cta')}
+                        onClick={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}>⚑</button>
               </div>
             </div>
             )}

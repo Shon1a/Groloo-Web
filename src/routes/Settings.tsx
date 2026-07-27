@@ -4,6 +4,7 @@ import { useT, useLang } from '../i18n/i18n';
 import { useSettings, type Settings as S } from '../stores/settings';
 import { useAuth } from '../stores/auth';
 import { useAddons } from '../stores/addons';
+import { useBlocks } from '../stores/blocks';
 import { api, errorMessage } from '../lib/api';
 import { coreStatus, coreSummary, coreStatusRevision, subscribeCoreStatus, type CoreSummary } from '../lib/heart';
 import ColorPicker from '../components/ColorPicker';
@@ -137,6 +138,7 @@ export default function Settings() {
   const user = useAuth((s) => s.user);
   const logout = useAuth((s) => s.logout);
   const clearAddons = useAddons((s) => s.clear);
+  const clearBlocks = useBlocks((s) => s.clear);
   // Deletion is irreversible and there is no undo on the server, so the destructive
   // button never fires on first press: it swaps itself for an explicit confirm/cancel
   // pair. A typed confirmation would be the stronger gate on desktop, but this screen
@@ -158,6 +160,9 @@ export default function Settings() {
        * the name of an account the server no longer knows. The server-side purge cannot
        * reach them; this is the only thing that can. */
       clearAddons();
+      // Same rule, same reason — see the block store's clear(): what a person chose to
+      // hide is their own record and must not survive the account on a shared device.
+      clearBlocks();
       // The server has already destroyed every session for this user, so the logout
       // POST will 401 — it is called anyway because it is the one place that clears the
       // mirrored localStorage token and the in-memory user, and it swallows its own

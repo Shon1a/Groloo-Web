@@ -1,6 +1,8 @@
 import { useId, useRef, useState } from 'react';
 import { useT } from '../i18n/i18n';
-import { useAddons } from '../stores/addons';
+import { useAddons, type AddonRecord } from '../stores/addons';
+import { useBlocks, addonKey } from '../stores/blocks';
+import { useReport } from '../stores/report';
 import { useHomeConfig } from '../stores/homeConfig';
 import { useOfficial, type OfficialAddon } from '../stores/official';
 import { CATALOG_CATS, PROVIDER_CATS } from '../lib/home';
@@ -55,6 +57,14 @@ export default function Addons() {
   const config = useHomeConfig((s) => s.config);
   const setOfficial = useHomeConfig((s) => s.setOfficial);
   const official = useOfficial((s) => s.list);
+  /* Subscribed to the map, not to isBlocked: the selector has to return a value that
+   * CHANGES when a block lands, and `s.isBlocked` is a stable function reference that
+   * never does — the buttons' labels would go stale until some other state moved them. */
+  const blockedMap = useBlocks((s) => s.blocked);
+  const block = useBlocks((s) => s.block);
+  const unblock = useBlocks((s) => s.unblock);
+  const isBlocked = (k: string) => !!k && blockedMap[k] !== undefined;
+  const openReport = useReport((s) => s.open);
 
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
@@ -90,6 +100,27 @@ export default function Addons() {
     // would otherwise fight the smooth scroll, landing the caption off-screen above it.
     urlRef.current?.focus({ preventScroll: true });
     urlRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
+
+  /* THE ORIGIN, NEVER THE URL. An installed record's `url` is the full manifest URL, and
+   * by the Stremio convention this file already documents twice, its PATH is where the
+   * user's provider API key lives. Blocking and reporting both key on the publishing host
+   * alone, so both go through here — a report carrying the raw URL would put a debrid key
+   * into a document an admin reads and a backup that leaves the box.
+   *
+   * `origin` is present on unlinked rows and absent on installed ones (which carry the URL
+   * instead), so this reads whichever exists. A malformed URL yields '' rather than
+   * throwing: the buttons above disappear for that row, which is the correct outcome for a
+   * record nothing can name a host for. */
+  const originOf = (a: AddonRecord) => {
+    if (a.origin) return a.origin;
+    try { return new URL(a.url).origin; } catch { return ''; }
+  };
+  const originKeyFor = (a: AddonRecord) => { const o = originOf(a); return o ? addonKey(o) : ''; };
+  const toggleBlockAddon = (a: AddonRecord) => {
+    const k = originKeyFor(a);
+    if (!k) return;
+    if (isBlocked(k)) unblock(k); else block(k);
   };
 
   // t with fallback (missing key → the supplied default rather than the raw key)
@@ -181,6 +212,17 @@ export default function Addons() {
                 <div className="tags">{(a.manifest.types || []).map((tp) => <span className="tag" key={String(tp)}>{String(tp)}</span>)}</div>
               </div>
               <div className="acts">
+                {/* Hide, then Report, then Remove — cheapest and most reversible first.
+                  * Hiding is the one a user reaching for "make this stop" usually wants:
+                  * it is instant, undoable, and does not cost them the credentialed URL
+                  * that Remove destroys and that this device may hold the only copy of. */}
+                <button className="minibtn" type="button" onClick={() => toggleBlockAddon(a)}>
+                  {isBlocked(originKeyFor(a)) ? t('addons.unhide') : t('addons.hide')}
+                </button>
+                <button className="minibtn" type="button"
+                        onClick={() => openReport({ kind: 'addon', targetKey: originOf(a), targetName: a.manifest.name, origin: originOf(a) })}>
+                  {t('report.cta')}
+                </button>
                 <button className="minibtn danger" type="button" onClick={() => removeAddon(a.id)}>{t('addons.remove')}</button>
               </div>
             </div>

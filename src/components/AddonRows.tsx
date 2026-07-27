@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { listAddonCatalogs, fetchAddonCatalog, type AddonCatalog } from '../lib/addonClient';
 import { useT } from '../i18n/i18n';
 import { useAddons } from '../stores/addons';
+import { useBlocks } from '../stores/blocks';
 import Row from './Row';
 import Rail from './Rail';
 import ErrorBoundary from './ErrorBoundary';
@@ -99,7 +100,12 @@ function DeadRow({ cat, message }: { cat: AddonCatalog; message: string }) {
 export default function AddonRows({ onSelect }: { onSelect?: (m: MediaItem) => void }) {
   const t = useT();
   const inst = useAddons((s) => s.installed); // recompute when the collection changes
-  const cats = useMemo(() => listAddonCatalogs(), [inst]);
+  /* …and when the HIDDEN set changes. listAddonCatalogs filters blocked publishers inside
+   * addonClient's installed(), which this memo cannot see: `inst` is unchanged by a block
+   * (the add-on is still installed, just hidden), so without this dependency the rows of
+   * an add-on the user just hid would stay on screen until something else moved. */
+  const blocked = useBlocks((s) => s.blocked);
+  const cats = useMemo(() => listAddonCatalogs(), [inst, blocked]);
   if (!cats.length) return null;
   // One boundary PER row, not one around the map: a shared boundary would blank every
   // add-on row the moment any single one threw, which is the failure this exists to avoid.
