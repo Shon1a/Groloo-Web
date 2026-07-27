@@ -17,24 +17,37 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # READ FROM .nvmrc, NOT PINNED HERE — and the version itself is load-bearing.
+          # Read from .nvmrc so the CI runtime and a developer's runtime cannot drift apart
+          # without someone editing one visible file. This job was pinned to node 20 and is
+          # now on 24; that alignment is worth having on its own, but be clear that it did
+          # NOT fix the failure below — node 24 reproduced it exactly.
+          #
+          # ---------------------------------------------------------------------------
+          # THE LOCKFILE MUST BE GENERATED ON LINUX. Read this before running `npm install`.
           #
           # This job's first ever run failed at `npm ci` with "package.json and
-          # package-lock.json are not in sync — Missing: @emnapi/core, @emnapi/runtime,
-          # @emnapi/wasi-threads". Nothing was wrong with the lockfile. It was pinned to
-          # node 20, which ships npm 10, while the lockfile is written by npm 11. The two
-          # disagree about optional platform-specific dependencies — the @emnapi/* packages
-          # are optional deps of a wasm fallback binding — so npm 10 reads an npm 11
-          # lockfile as incomplete and refuses.
+          # package-lock.json are not in sync — Missing: @emnapi/core@1.11.3,
+          # @emnapi/runtime@1.11.3, @emnapi/wasi-threads@1.2.3".
           #
-          # That failure mode is worth recognising because it lies: it names packages and
-          # implicates the lockfile, and every instinct is to regenerate the lockfile. Doing
-          # so on a Windows dev machine makes it strictly worse — a from-scratch regen drops
-          # the Linux-only optional deps CI needs, and `--os=linux --cpu=x64` drops the
-          # Windows ones. The lockfile was never the problem.
+          # npm records an optional dependency only for platforms it actually resolved on.
+          # The @emnapi/* packages are optional deps of a wasm fallback binding that Linux
+          # resolves and Windows does not, so a lockfile authored on the Windows dev machine
+          # genuinely lacks them and `npm ci` on ubuntu is right to refuse.
           #
-          # .nvmrc is now the single source of truth, so the CI runtime and the developer's
-          # runtime cannot drift apart again without someone editing one visible file.
+          # This cannot be repaired from Windows, and the attempts actively mislead:
+          #   npm install --package-lock-only          adds core + wasi-threads, never
+          #                                            runtime — nothing on Windows asks
+          #   rm package-lock.json && npm install …    DROPS 23 lines, strictly worse
+          #   … --os=linux --cpu=x64                   DROPS 753 lines, every Windows variant
+          #
+          # The committed lockfile was generated on ubuntu-latest by a throwaway workflow
+          # (see the commit that added and removed .github/workflows/lockfile-linux.yml) and
+          # differs from a Windows-authored one only by those three packages plus some
+          # "peer" flags — no dependency versions change.
+          #
+          # SO: after any `npm install` on Windows, check `git diff package-lock.json`. If
+          # the @emnapi/* entries disappeared, do not commit that — regenerate on Linux.
+          # ---------------------------------------------------------------------------
           node-version-file: '.nvmrc'
           # Restores ~/.npm between runs; without it `npm ci` re-downloads the
           # whole tree every push and this job stops being cheap enough to keep.
