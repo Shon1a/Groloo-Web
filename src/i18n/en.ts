@@ -90,6 +90,21 @@ const SEED: Record<string, string> = {
   // legal page — the attributions pointer and the "where do I delete my account"
   // answer that legal.privacy_body has always implied without ever naming a route
   'legal.privacy_delete': 'To delete your account, open Settings → Account & legal and choose “Delete account”. Deletion is immediate and permanent: it removes your profile, your saved list, your watch history and positions, and your installed add-on collection from our servers.',
+  /* Overrides EN_BASE only in its last clause: the privacy notice used to send people
+   * exercising a data-protection right to takedown@ — the COPYRIGHT address. That is the
+   * defect this whole pass exists to close, and it was the worst instance of it, because
+   * it is the sentence a regulator reads. Everything before "You can delete your account"
+   * is verbatim from EN_BASE; keep it that way, and re-copy it if EN_BASE ever changes. */
+  'legal.privacy_body': 'GROLOO does not log your IP address or keep server-side request logs. The only data stored against your account is what the service needs to run and sync across your devices — your email, an encrypted password (or your Google sign-in identifier), your watchlist, continue-watching positions, and add-on preferences. We show no ads and run no third-party trackers, and we never sell or share your personal data. A single first-party cookie keeps you signed in. To display catalog metadata we send the title or search term you request to our metadata provider (TMDB) — never your identity. Your installed add-ons are contacted directly by your browser, not by our servers, so we never see what you stream. You can delete your account at any time to remove your data, or contact privacy@groloo.com to exercise any privacy right.',
+
+  /* Overrides EN_BASE's "Send takedown notices and legal enquiries to:", which was one
+   * line above one address and quietly made the copyright inbox the privacy inbox too.
+   * Naming the two separately is the whole point — the deadlines differ by weeks. The
+   * addresses themselves live in Legal.tsx rather than here: they must match what is
+   * registered with the Copyright Office, and a translator editing a language file must
+   * not be able to change where a legal notice is delivered. */
+  'legal.contact_body': 'For copyright and DMCA takedown notices, write to our designated agent:',
+  'legal.contact_privacy': 'For privacy and data-protection requests — including access, correction and deletion — write to:',
   'legal.attrib_head': 'Attributions & licences',
   'legal.attrib_body': 'Catalog metadata, artwork, and streaming-availability data are supplied by third parties whose terms require us to credit them, and part of the app is open-source software carried under its own licence.',
   'legal.attrib_link': 'Attributions & licences',
