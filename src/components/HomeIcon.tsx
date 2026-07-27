@@ -1,17 +1,19 @@
-import type { Transition, Variants } from 'motion/react';
-import { motion, useAnimation } from 'motion/react';
 import type { HTMLAttributes } from 'react';
-import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useImperativeHandle } from 'react';
 
 import { cn } from '@/lib/utils';
 
-/* lucide-animated's "home" icon (https://lucide-animated.com/r/home.json), ported by hand
- * for the same reason as FanIcon — see that file for the why. Only the door animates: it
- * re-draws itself (pathLength 0→1) while the roof and walls hold still. At rest the door is
- * already drawn, so the icon is complete whether or not it has ever been hovered.
+/* Static SVG — the resting frame of the former lucide-animated "home" glyph.
  *
- * Controlled the same way as the other two: pass a ref and drive it with startAnimation/
- * stopAnimation, which lets the whole rail row own the hover instead of the 22px glyph. */
+ * The `motion`-driven hover redraw was removed with the whole `motion` dependency in Phase 2.
+ * It animated only on hover, which an Android TV D-pad never emits and an LG Magic Remote
+ * only sometimes does, and `motion` was the single largest weight in the bundle (~121 kB
+ * raw). At rest every one of these glyphs was already fully drawn, so dropping the animation
+ * changes nothing a screenshot can see — the resting SVG below IS what shipped.
+ *
+ * The start/stopAnimation handle is kept as a shared no-op so the rail in AppShell still
+ * drives all seven glyphs through one interface, and re-adding an animation later (as pure
+ * CSS, no library) touches only these files, not the rail. */
 
 export interface HomeIconHandle {
   startAnimation: () => void;
@@ -22,65 +24,13 @@ interface HomeIconProps extends HTMLAttributes<HTMLDivElement> {
   size?: number;
 }
 
-const DEFAULT_TRANSITION: Transition = {
-  duration: 0.6,
-  opacity: { duration: 0.2 },
-};
-
-const PATH_VARIANTS: Variants = {
-  normal: {
-    pathLength: 1,
-    opacity: 1,
-  },
-  animate: {
-    opacity: [0, 1],
-    pathLength: [0, 1],
-  },
-};
+const NOOP: HomeIconHandle = { startAnimation: () => {}, stopAnimation: () => {} };
 
 const HomeIcon = forwardRef<HomeIconHandle, HomeIconProps>(
-  ({ onMouseEnter, onMouseLeave, className, size = 28, ...props }, ref) => {
-    const controls = useAnimation();
-    const isControlledRef = useRef(false);
-
-    useImperativeHandle(ref, () => {
-      isControlledRef.current = true;
-
-      return {
-        startAnimation: () => controls.start('animate'),
-        stopAnimation: () => controls.start('normal'),
-      };
-    });
-
-    const handleMouseEnter = useCallback(
-      (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isControlledRef.current) {
-          onMouseEnter?.(e);
-        } else {
-          controls.start('animate');
-        }
-      },
-      [controls, onMouseEnter]
-    );
-
-    const handleMouseLeave = useCallback(
-      (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isControlledRef.current) {
-          onMouseLeave?.(e);
-        } else {
-          controls.start('normal');
-        }
-      },
-      [controls, onMouseLeave]
-    );
-
+  ({ className, size = 28, ...props }, ref) => {
+    useImperativeHandle(ref, () => NOOP);
     return (
-      <div
-        className={cn(className)}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        {...props}
-      >
+      <div className={cn(className)} {...props}>
         <svg
           fill="none"
           height={size}
@@ -93,12 +43,7 @@ const HomeIcon = forwardRef<HomeIconHandle, HomeIconProps>(
           xmlns="http://www.w3.org/2000/svg"
         >
           <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-          <motion.path
-            animate={controls}
-            d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"
-            transition={DEFAULT_TRANSITION}
-            variants={PATH_VARIANTS}
-          />
+          <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
         </svg>
       </div>
     );

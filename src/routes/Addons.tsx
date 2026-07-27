@@ -1,6 +1,8 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useT } from '../i18n/i18n';
-import { useAddons } from '../stores/addons';
+import { useAddons, type AddonRecord } from '../stores/addons';
+import { useBlocks, addonKey } from '../stores/blocks';
+import { useReport } from '../stores/report';
 import { useHomeConfig } from '../stores/homeConfig';
 import { useOfficial, type OfficialAddon } from '../stores/official';
 import { CATALOG_CATS, PROVIDER_CATS } from '../lib/home';
@@ -8,7 +10,7 @@ import ConfigModal, { type ConfigTarget } from '../components/ConfigModal';
 import PreviewModal from '../components/PreviewModal';
 
 /* Add-on Catalog — faithful port of the vanilla #addons. The OFFICIAL list is now
- * sourced from the Shon1a/Stredio-official-addons repo via the Stredio-Heart WASM
+ * sourced from the Shon1a/Groloo-official-addons repo via the Groloo-Heart WASM
  * merge (useOfficial store) instead of being hardcoded, so it's the repo's source of
  * truth (and future official add-ons appear automatically). The four protected
  * home-feature ids gate the home blocks (home-config store); any appended official
@@ -22,7 +24,7 @@ const CONFIG_MAP: Record<string, { block: 'catalogRows' | 'providerRows'; cats: 
 };
 type OfficialKey = 'catalog' | 'providers' | 'studios' | 'upcoming';
 
-/* The Stredio puzzle-piece icon — the vanilla mask-based pzPieceIc (a rounded square
+/* The Groloo puzzle-piece icon — the vanilla mask-based pzPieceIc (a rounded square
  * with two additive + two subtractive circle bumps → a single jigsaw piece). Filled
  * via app.css `.addon .ic.puzzle .pzPieceIc rect[data-fill]`. Unique mask id per card. */
 function PuzzleIcon() {
@@ -49,24 +51,76 @@ function PuzzleIcon() {
 export default function Addons() {
   const t = useT();
   const installed = useAddons((s) => s.installed);
+  const unlinked = useAddons((s) => s.unlinked);
   const install = useAddons((s) => s.install);
   const removeAddon = useAddons((s) => s.remove);
   const config = useHomeConfig((s) => s.config);
   const setOfficial = useHomeConfig((s) => s.setOfficial);
   const official = useOfficial((s) => s.list);
+  /* Subscribed to the map, not to isBlocked: the selector has to return a value that
+   * CHANGES when a block lands, and `s.isBlocked` is a stable function reference that
+   * never does — the buttons' labels would go stale until some other state moved them. */
+  const blockedMap = useBlocks((s) => s.blocked);
+  const block = useBlocks((s) => s.block);
+  const unblock = useBlocks((s) => s.unblock);
+  const isBlocked = (k: string) => !!k && blockedMap[k] !== undefined;
+  const openReport = useReport((s) => s.open);
 
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [cfg, setCfg] = useState<ConfigTarget | null>(null);
   const [preview, setPreview] = useState<{ id: string; name: string } | null>(null);
+  /* Which unlinked add-on the install box is currently being used to repair — the NAME
+   * only, because that is all the prompt says and nothing about the flow needs the id:
+   * install() matches the pasted manifest's own id against the unlinked list itself, so
+   * the app never has to trust this label to route the repair. It is a caption, and a
+   * wrong one costs a confusing sentence rather than a mis-installed add-on. */
+  const [relink, setRelink] = useState<string | null>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
 
   const onInstall = async () => {
     if (!url.trim()) return;
     setBusy(true); setErr('');
-    try { await install(url); setUrl(''); }
+    try { await install(url); setUrl(''); setRelink(null); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
+  };
+
+  /* The repair affordance. It deliberately does NOT prefill the field with the origin:
+   * by the same convention that puts the provider key in the path, the bare origin serves
+   * a manifest with the SAME id as the user's configured add-on, so a prefilled URL one
+   * button-press from INSTALL is a trap that would "succeed" and leave them with an
+   * add-on returning no streams. It also does not hand the row its own input — the one
+   * install box below stays the single place a URL is entered, so this just arms the
+   * caption and sends focus (which on a remote is also the scroll) there. */
+  const startRelink = (name: string) => {
+    setRelink(name); setErr(''); setUrl('');
+    // preventScroll first, then scroll: focus() jumps the field into view instantly and
+    // would otherwise fight the smooth scroll, landing the caption off-screen above it.
+    urlRef.current?.focus({ preventScroll: true });
+    urlRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
+
+  /* THE ORIGIN, NEVER THE URL. An installed record's `url` is the full manifest URL, and
+   * by the Stremio convention this file already documents twice, its PATH is where the
+   * user's provider API key lives. Blocking and reporting both key on the publishing host
+   * alone, so both go through here — a report carrying the raw URL would put a debrid key
+   * into a document an admin reads and a backup that leaves the box.
+   *
+   * `origin` is present on unlinked rows and absent on installed ones (which carry the URL
+   * instead), so this reads whichever exists. A malformed URL yields '' rather than
+   * throwing: the buttons above disappear for that row, which is the correct outcome for a
+   * record nothing can name a host for. */
+  const originOf = (a: AddonRecord) => {
+    if (a.origin) return a.origin;
+    try { return new URL(a.url).origin; } catch { return ''; }
+  };
+  const originKeyFor = (a: AddonRecord) => { const o = originOf(a); return o ? addonKey(o) : ''; };
+  const toggleBlockAddon = (a: AddonRecord) => {
+    const k = originKeyFor(a);
+    if (!k) return;
+    if (isBlocked(k)) unblock(k); else block(k);
   };
 
   // t with fallback (missing key → the supplied default rather than the raw key)
@@ -158,6 +212,17 @@ export default function Addons() {
                 <div className="tags">{(a.manifest.types || []).map((tp) => <span className="tag" key={String(tp)}>{String(tp)}</span>)}</div>
               </div>
               <div className="acts">
+                {/* Hide, then Report, then Remove — cheapest and most reversible first.
+                  * Hiding is the one a user reaching for "make this stop" usually wants:
+                  * it is instant, undoable, and does not cost them the credentialed URL
+                  * that Remove destroys and that this device may hold the only copy of. */}
+                <button className="minibtn" type="button" onClick={() => toggleBlockAddon(a)}>
+                  {isBlocked(originKeyFor(a)) ? t('addons.unhide') : t('addons.hide')}
+                </button>
+                <button className="minibtn" type="button"
+                        onClick={() => openReport({ kind: 'addon', targetKey: originOf(a), targetName: a.manifest.name, origin: originOf(a) })}>
+                  {t('report.cta')}
+                </button>
                 <button className="minibtn danger" type="button" onClick={() => removeAddon(a.id)}>{t('addons.remove')}</button>
               </div>
             </div>
@@ -167,9 +232,64 @@ export default function Addons() {
         <div className="mono" style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>{t('addons.sync_note')}</div>
       </div>
 
+      {/* Unlinked — add-ons the account owns that THIS device holds no URL for (see the
+        * header of stores/addons.ts). On a freshly signed-in TV this list is the user's
+        * entire collection and Community above is empty, so it cannot be a footnote to it:
+        * it gets the same divider, head and card vocabulary as a first-class section. It
+        * sits directly above the install box on purpose — the exit from this state is the
+        * paste, and the row's button only has a short distance to send focus. Rendered
+        * only when non-empty; on a device that typed its own URLs there is nothing here to
+        * explain and the section would be a privacy lecture with no subject. */}
+      {unlinked.length > 0 && (
+        <>
+          <div className="addon-divider" aria-hidden="true" />
+          <div className="addon-section">
+            <div className="addon-sec-head">
+              <h3 className="addon-sec-title">{t('addons.unlinked_head')}</h3>
+              <span className="addon-sec-count">{t('addons.unlinked_count', { n: unlinked.length })}</span>
+            </div>
+            <p className="addon-sec-disclaimer">{t('addons.unlinked_why')}</p>
+            <div className="addon-grid" id="unlinkedAddons">
+              {unlinked.map((a) => (
+                /* No `installed` class: that one paints the ✓ shimmer, and these are the
+                 * rows that are not. `origin` is the only locator left on them, so it
+                 * leads the description in mono the way the official cards lead with a
+                 * type — "torrentio.strem.fun" is what tells the user which of their
+                 * links to go and find, where the manifest name alone does not. */
+                <div className="addon" data-addon={a.id} key={a.id}>
+                  <PuzzleIcon />
+                  <div className="body">
+                    <div className="name">
+                      {a.manifest.name} <span className="ver">{a.manifest.version || ''}</span> <span className="badge muted">{t('addons.unlinked_tag')}</span>
+                    </div>
+                    <div className="desc">
+                      <span className="mono">{a.origin || t('addons.unlinked_origin_unknown')}</span> — {t('addons.unlinked_row_hint')}
+                    </div>
+                  </div>
+                  <div className="acts">
+                    <button className="minibtn install" type="button" onClick={() => startRelink(a.manifest.name)}>{t('addons.unlinked_relink')}</button>
+                    <button className="minibtn danger" type="button" onClick={() => removeAddon(a.id)}>{t('addons.remove')}</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
       <h4 style={{ fontSize: 16, letterSpacing: '.18em', color: 'var(--text-muted)', margin: '38px 0 12px' }}>{t('addons.install_head')}</h4>
+      {/* The armed-repair caption. role=status so a screen reader hears the field it was
+        * just moved to has acquired a subject; the cancel control is a real button so a
+        * remote can back out of the repair without leaving the page. */}
+      {relink && (
+        <div className="addon-sec-disclaimer" role="status" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ flex: 1, minWidth: 220 }}>{t('addons.relink_prompt', { name: relink })}</span>
+          <button className="minibtn" type="button" onClick={() => setRelink(null)}>{t('addons.relink_cancel')}</button>
+        </div>
+      )}
       <div className="install-box">
         <input
+          ref={urlRef}
           placeholder="https://example.com/manifest.json" value={url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') onInstall(); }}

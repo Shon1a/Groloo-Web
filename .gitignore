@@ -10,6 +10,15 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-tv
+
+# Visual regression (scripts/tv-shots.mjs). The BASELINE and the recorded fixtures are the
+# reference and are committed deliberately — a baseline that lives only on one machine
+# cannot fail anyone else's build, which is the entire point of having one. Per-run output
+# is not: `current/` is regenerated every check and `diff/` is a debugging artefact.
+screenshots/current/
+screenshots/diff/
+screenshots/record/
 *.local
 
 # vite-plugin-pwa emits this the moment devOptions.enabled is turned on
@@ -28,3 +37,23 @@ dev-dist
 *.njsproj
 *.sln
 *.sw?
+
+# KEEP LAST. The WASM core is VENDORED, not fetched at runtime: the real build output has
+# to ship inside the commit, because the CDN fallback that used to cover it was deliberately
+# removed (see src/lib/heart.ts). Those bytes look exactly like a build artifact, so they
+# are precisely what a future `*.wasm` / `dist`-style / `public/assets/**` rule would sweep
+# up by accident — and the failure is silent, not loud: the deploy 404s the glue script,
+# loadCore() degrades to the JS fallback, and no user ever sees an error. Git resolves a
+# path by the LAST pattern that matches it, so these negations only protect anything while
+# they stay at the bottom of the file. Add new ignore rules ABOVE this block. (No-ops as
+# written today, by design.)
+#
+# BOTH paths, and the order below is the order of importance. groloo-core/<build>/ is the
+# LIVE core the app imports — it is the one whose loss is an outage-shaped nothing. heart/
+# is the previous core, kept on disk as the rollback: it earns its negation only for as long
+# as rolling back is a thing anyone might need to do, and it should be deleted (folder and
+# line together) once the successor has shipped and settled. Whichever folder is live must
+# be listed here; the guard in .github/workflows/ci.yml derives that name from
+# src/lib/heart.ts, so if this list ever falls behind a rename, CI says so out loud.
+!public/assets/groloo-core/
+!public/assets/heart/

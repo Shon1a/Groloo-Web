@@ -3,10 +3,10 @@ import { create } from 'zustand';
 /* Home-screen add-on configuration — the local toggles that gate which built-in
  * blocks + rows appear on Home. Mirrors the vanilla official add-ons (Catalog Rows,
  * Streaming Services, Studios, Upcoming Radar) and their per-row selection
- * (stredio.catalogRows / stredio.providerRows). Removing an official add-on hides
+ * (groloo.catalogRows / groloo.providerRows). Removing an official add-on hides
  * its whole block; the per-row checkboxes pick which rows within it show. */
 
-const KEY = 'stredio.homeconfig';
+const KEY = 'groloo.homeconfig';
 
 export interface HomeConfig {
   catalog: boolean;    // "Catalog Rows" add-on
