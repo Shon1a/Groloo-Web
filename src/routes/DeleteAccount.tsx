@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import { useAddons } from '../stores/addons';
+import { useBlocks } from '../stores/blocks';
 import { api, errorMessage } from '../lib/api';
 
 /* ------------------------------------------------------------------ *
@@ -57,6 +58,7 @@ export default function DeleteAccount() {
   const openAuth = useAuth((s) => s.openAuth);
   const logout = useAuth((s) => s.logout);
   const clearAddons = useAddons((s) => s.clear);
+  const clearBlocks = useBlocks((s) => s.clear);
 
   const [phase, setPhase] = useState<Phase>('idle');
   const [busy, setBusy] = useState(false);
@@ -73,6 +75,10 @@ export default function DeleteAccount() {
        * whatever debrid keys are baked into them — sitting on this device under the
        * deleted account's name. */
       clearAddons();
+      // Same rule, same reason: the block list is keyed by the signed-in email too, and
+      // what a person chose to hide is their own record — it must not outlive the account
+      // on a device the next user signs into.
+      clearBlocks();
       // Every session for this user is already destroyed server-side, so this POST 401s;
       // it is called for its local half, which drops the mirrored token and the in-memory
       // user, and it swallows its own error.

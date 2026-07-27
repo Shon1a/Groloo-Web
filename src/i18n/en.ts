@@ -387,6 +387,55 @@ const SEED: Record<string, string> = {
   'link.platform_other': 'A device',
 
   'common.loading': 'Loading…',
+
+  /* Reporting and blocking — Google Play's User Generated Content policy requires
+   * in-app reporting, a blocking mechanism, accepted terms and demonstrable action.
+   *
+   * The wording avoids promising an outcome anywhere. "We review every report" is a
+   * commitment to a human process; "Thanks — we'll take a look" is not, and only one of
+   * them is true for a service run by one person. The Terms already carry the
+   * repeat-infringer clause that gives the queue its teeth, so the sheet does not need
+   * to restate it. */
+  'report.cta': 'Report',
+  'report.title': 'Report this',
+  'report.reason_head': 'What is wrong with it?',
+  'report.reason_copyright': 'Copyright infringement',
+  'report.reason_illegal': 'Illegal content',
+  'report.reason_malware': 'Malware or unsafe links',
+  'report.reason_sexual': 'Sexual or explicit content',
+  'report.reason_violence': 'Violence or hate',
+  'report.reason_misleading': 'Misleading or spam',
+  'report.reason_other': 'Something else',
+  // Stated inside the sheet rather than after submission, so someone who came to file a
+  // formal notice can still act on it. The address is the designated agent in the Terms.
+  'report.copyright_note': 'Formal copyright notices go to our designated agent — see the DMCA policy in the Terms. Reporting here flags it for review but is not a takedown notice.',
+  'report.detail_label': 'Anything else? (optional)',
+  'report.detail_ph': 'What did you see?',
+  'report.also_block_addon': 'Also hide this add-on from my apps',
+  'report.also_block_title': 'Also hide this title from my apps',
+  'report.submit': 'Send report',
+  'report.sending': 'Sending…',
+  'report.done': 'Close',
+  'report.sent_title': 'Report sent',
+  'report.sent_body': 'Thanks — this has been added to the review queue.',
+  'report.footer': 'Groloo does not host any media. Add-ons are third-party services you chose to install.',
+  'report.err_rate': "You've sent a lot of reports recently. Try again a little later.",
+  'report.err_signedout': 'Your session ended. Sign in again to send this report.',
+  'report.err_generic': 'Something went wrong. Please try again.',
+
+  // Hiding is per-account and syncs across devices; the labels say "my apps" rather than
+  // "this device" because that is what actually happens.
+  // Sign-up terms acceptance. The sentence names what is being agreed to rather than
+  // saying "the terms", because a checkbox whose label is a pronoun is not informed consent.
+  'auth.terms_accept': "I'm 18 or over and I agree to the",
+  'auth.terms_link': 'Terms',
+  'auth.legal_link': 'DMCA & Takedown Policy',
+  'auth.err_terms': 'Please accept the Terms to create an account.',
+
+  'addons.hide': 'Hide',
+  'addons.unhide': 'Unhide',
+  'addons.hidden_tag': 'Hidden',
+  'blocks.hidden_note': 'Hidden by you. Its catalogs stay out of Home, Search and Browse until you unhide it.',
 };
 
 export const EN: Record<string, string> = { ...EN_BASE, ...SEED };

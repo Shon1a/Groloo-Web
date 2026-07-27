@@ -2127,10 +2127,16 @@
   .auth-or::before,.auth-or::after{content:"";flex:1;height:1px;background:var(--border)}
   .auth-field input[type=date]{font-family:var(--font-mono);color-scheme:dark}
   .auth-field > label{display:block;font-size:13px;letter-spacing:.2em;color:var(--text-muted);margin-bottom:7px}
-  .auth-field input{width:100%;background:var(--bg-3);border:1px solid var(--border);color:var(--text);
+  /* textarea rides the same rule as input — the report sheet's detail box is the only one
+     today, and a field that styles itself differently from every other field in the same
+     card reads as a bug rather than a variation. `resize:vertical` because a horizontal
+     drag breaks the card's layout, and `font:inherit` because a bare textarea otherwise
+     falls back to the UA monospace default at ~13px and ignores the family set here. */
+  .auth-field input,.auth-field textarea{width:100%;background:var(--bg-3);border:1px solid var(--border);color:var(--text);
     padding:12px 13px;border-radius:5px;font-family:var(--font-mono);font-size:17px;outline:none;transition:.2s}
-  .auth-field input::placeholder{color:var(--text-muted)}
-  .auth-field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,255,255,.12)}
+  .auth-field textarea{display:block;resize:vertical;min-height:84px;line-height:1.5}
+  .auth-field input::placeholder,.auth-field textarea::placeholder{color:var(--text-muted)}
+  .auth-field input:focus,.auth-field textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,255,255,.12)}
   .auth-pass-wrap{position:relative;display:flex;align-items:center}
   .auth-pass-wrap input{padding-right:60px}
   .auth-pass-toggle{position:absolute;right:8px;background:none;border:none;color:var(--text-muted);
@@ -2158,6 +2164,13 @@
   .optrow:hover{border-color:rgba(255,255,255,.35)}
   .optrow.on{border-color:var(--accent);background:rgba(255,255,255,.08)}
   .optrow input{accent-color:var(--accent);width:17px;height:17px;cursor:pointer}
+  /* Links inside a consent row (the sign-up Terms acceptance). Without this they inherit
+     the row's colour and read as prose — a consent checkbox whose terms are not visibly
+     reachable is the thing the checkbox exists to avoid. Underlined as well as tinted:
+     colour alone is not an accessible affordance, and on a TV it is often the first thing
+     a calibration profile flattens. */
+  .optrow a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+  .optrow a:hover,.optrow a:focus-visible{color:var(--accent-h)}
   .optrow-block{margin-top:20px}
   .optrow-block.is-hidden{display:none}
   /* ---- Official add-on configure: live "home screen" preview of which rows show ---- */

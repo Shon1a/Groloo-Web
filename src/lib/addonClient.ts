@@ -1,5 +1,6 @@
 import { loadCore, callData } from './heart';
 import { useAddons, type AddonRecord } from '../stores/addons';
+import { useBlocks, addonKey } from '../stores/blocks';
 import type { MediaItem } from './types';
 
 /* Client-direct add-on transport. The BROWSER fetches an installed add-on's streams and
@@ -115,7 +116,36 @@ export function orderLangs(langs: string[]): string[] {
 const QRANK: Record<string, number> = { '4K': 4, '1080p': 3, '720p': 2, '480p': 1 };
 export const qualityRank = (q: string): number => QRANK[q] ?? 0;
 
-const installed = (): AddonRecord[] => useAddons.getState().installed;
+/* Every add-on the account has installed, MINUS the ones it has hidden.
+ *
+ * This is the one choke point both surfaces run through — listAddonCatalogs and
+ * collectAddonStreams each start here — so the block list is applied once, in the place
+ * that cannot be forgotten by a future consumer, rather than at each call site. That
+ * matters more than the tidiness: Play's UGC policy asks for a blocking mechanism, and a
+ * block that hides an add-on's row but still asks it for streams has not blocked
+ * anything. Hiding is total by construction because there is nowhere else to look.
+ *
+ * BLOCKED BY ORIGIN, not by manifest id, matching the store and the server: the same
+ * content reappearing under a new id from the same host stays hidden. A record whose URL
+ * will not parse is treated as unblocked — it has no origin to match, and silently
+ * hiding a row nothing can name would be a bug with no way for the user to undo it.
+ *
+ * Hidden add-ons are deliberately still INSTALLED: they keep their configuration and the
+ * credentialed URL this device may hold the only copy of, and the Add-ons screen still
+ * lists them so the user can unhide. Only what they surface goes away. */
+const installed = (): AddonRecord[] => {
+  const rows = useAddons.getState().installed;
+  const { blocked } = useBlocks.getState();
+  // Fast path: nothing hidden is the overwhelmingly common case, and it should not cost a
+  // URL parse per add-on on every catalog enumeration (listAddonCatalogs is synchronous
+  // and runs from a useMemo on the home screen).
+  if (!Object.keys(blocked).length) return rows;
+  return rows.filter((a) => {
+    let origin = a.origin;
+    if (!origin) { try { origin = new URL(a.url).origin; } catch { return true; } }
+    return blocked[addonKey(origin)] === undefined;
+  });
+};
 
 /* ── the core, three thin call sites ─────────────────────────────────────────── */
 
