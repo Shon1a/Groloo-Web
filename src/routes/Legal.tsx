@@ -58,9 +58,17 @@ export default function Legal() {
 
         <div className="legal-section">
           <h3>{t('legal.contact_head')}</h3>
+          {/* Two addresses, split by legal clock rather than by topic — see the note above
+              CONTACT_EN in lib/terms.ts. This page previously published takedown@ as its
+              ONLY contact, which meant a privacy request and a copyright notice landed in
+              the same inbox under deadlines a month apart. legal@ is the address
+              registered with the Copyright Office as the designated agent; it and the
+              Terms must never drift apart. */}
           <div className="legal-contact">
             <p>{t('legal.contact_body')}</p>
-            <p><a href="mailto:takedown@groloo.com">takedown@groloo.com</a></p>
+            <p><a href="mailto:legal@groloo.com">legal@groloo.com</a></p>
+            <p>{t('legal.contact_privacy')}</p>
+            <p><a href="mailto:privacy@groloo.com">privacy@groloo.com</a></p>
             <p>{t('legal.contact_note')}</p>
           </div>
         </div>

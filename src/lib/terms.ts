@@ -6,10 +6,25 @@
 export type TermsBlock = string | { ol: string[] } | { ul: string[] } | { box: string };
 export interface TermsSection { h: string; body: TermsBlock[] }
 
-const CONTACT_EN = `<p>For general questions about these Terms or the Platform: <a href="mailto:contact@groloo.com">contact@groloo.com</a></p>
-  <p>For copyright / DMCA takedown notices (designated agent): <a href="mailto:legal@groloo.com">legal@groloo.com</a></p>`;
-const CONTACT_KA = `<p>ზოგადი შეკითხვებისთვის ამ პირობებზე ან პლატფორმაზე: <a href="mailto:contact@groloo.com">contact@groloo.com</a></p>
-  <p>საავტორო უფლებების / DMCA შეტყობინებებისთვის (დანიშნული აგენტი): <a href="mailto:legal@groloo.com">legal@groloo.com</a></p>`;
+/* TWO PUBLISHED ADDRESSES, AND NO MORE THAN TWO. This used to name three across two
+ * documents — contact@ here, legal@ here, takedown@ on the Legal page — and routed
+ * privacy requests into the copyright inbox. That is a process defect rather than a
+ * cosmetic one: a GDPR data-subject request runs a ONE MONTH clock and a §512 notice
+ * runs an "expeditiously" one, so they must not arrive indistinguishably.
+ *
+ * legal@   is the DMCA designated agent, and the address registered with the US
+ *          Copyright Office. Whatever is registered there and whatever is published
+ *          here have to stay identical — the safe harbour depends on both.
+ * privacy@ is data protection, and nothing else.
+ *
+ * contact@ is retired: it was never given a mailbox, so publishing it meant publishing
+ * an address that bounced. takedown@ is retired from the published text but the
+ * forwarder stays alive, because it has been in the wild and mail sent to it must not
+ * disappear. Do not add a third address back without giving it a mailbox first. */
+const CONTACT_EN = `<p>For questions about these Terms or the Platform, and for copyright / DMCA takedown notices (designated agent): <a href="mailto:legal@groloo.com">legal@groloo.com</a></p>
+  <p>For privacy and data-protection requests, including access, correction and deletion: <a href="mailto:privacy@groloo.com">privacy@groloo.com</a></p>`;
+const CONTACT_KA = `<p>ამ პირობებთან ან პლატფორმასთან დაკავშირებული შეკითხვებისთვის, აგრეთვე საავტორო უფლებების / DMCA შეტყობინებებისთვის (დანიშნული აგენტი): <a href="mailto:legal@groloo.com">legal@groloo.com</a></p>
+  <p>პერსონალურ მონაცემთა დაცვის მოთხოვნებისთვის, მათ შორის წვდომის, შესწორებისა და წაშლის: <a href="mailto:privacy@groloo.com">privacy@groloo.com</a></p>`;
 
 export const TERMS_DATA: Record<string, TermsSection[]> = {
   en: [
