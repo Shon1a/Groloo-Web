@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { MediaItem } from '../lib/types';
 import { imgW, hueBg, rateClass, rateText } from '../lib/img';
 import { useT } from '../i18n/i18n';
+import { useBlocks, titleKey } from '../stores/blocks';
 
 /* The bare `.poster` tile (gradient plate + fade-in cover + TV tag + rating badge),
  * shared by the rail card (PosterCard) and the drill-down grid card (GridCard) — the
@@ -19,6 +20,23 @@ export interface PosterProps {
 
 export default function Poster({ item, seed, onSelect, progress, onRemove }: PosterProps) {
   const t = useT();
+  /* HIDDEN TITLES VANISH HERE, and here alone.
+   *
+   * This component is the single tile every browse surface renders through — the home
+   * rails (via PosterCard/Row), the drill-down grid (CatalogGrid), Continue Watching and
+   * My List — so one check covers all of them and no future surface can forget it. That
+   * is the same reason addonClient's installed() filters hidden PUBLISHERS in one place:
+   * a blocking mechanism that a new call site can silently opt out of has not blocked
+   * anything, and Play's UGC policy is asking for the mechanism, not the intention.
+   *
+   * Returning null rather than filtering upstream costs a rail one card's width and keeps
+   * every caller's list arithmetic untouched. Two surfaces are deliberately NOT covered
+   * because they do not render a Poster: the hero banner and the detail modal's
+   * recommendation strip, both of which build their own markup. Those are worth revisiting
+   * if title-hiding proves popular; neither is a place a user goes looking for something
+   * they have hidden, and both re-hide on the next open because the modal cannot be opened
+   * from a card that no longer exists. */
+  const blockedTitle = useBlocks((s) => s.blocked[titleKey(item.id)] !== undefined);
   const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
   const img = imgW(item.poster || '', 'w342');
@@ -26,6 +44,9 @@ export default function Poster({ item, seed, onSelect, progress, onRemove }: Pos
   const pct = progress && progress > 0.01 ? Math.max(0, Math.min(1, progress)) : 0;
 
   const open = () => onSelect?.(item);
+  // After every hook, never before — an early return above them would change the hook
+  // order between renders the moment a title is hidden, which React treats as a fatal error.
+  if (blockedTitle) return null;
   return (
     <div
       className="poster"

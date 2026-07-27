@@ -9,13 +9,32 @@ export const HERO_MAX = 8;
 
 /** DPR-aware backdrop rendition: TMDB serves backdrops in w780/w1280/original
  *  only, so pick the smallest that still covers the device's real pixel width.
- *  Returns '' if the title has no art (→ branded gradient fallback). */
+ *  Returns '' if the title has no art (→ branded gradient fallback).
+ *
+ *  w1280 IS THE CEILING, AND `original` IS DELIBERATELY UNREACHABLE. The old line let any
+ *  device wider than 1440 real pixels pull `original`, which for TMDB backdrops means the
+ *  full 3840×2160 source. Decoded to a bitmap in memory that is ~31 MB EACH, and the home
+ *  page holds up to HERO_MAX (8) of them primed in the carousel — ~253 MB of pixmap for a
+ *  background image. On a webOS TV, whose whole app heap is often a few hundred MB, that is
+ *  the single largest out-of-memory trigger in the app; the set kills the tab and the user
+ *  sees the app vanish. w1280 decodes to ~3.7 MB each, ~30 MB for all eight.
+ *
+ *  The perceptual cost is near zero and it is worth being precise about why: the hero
+ *  backdrop is a DECORATIVE layer, always under a heavy gradient scrim with text over it,
+ *  and TMDB offers nothing between w1280 and the 4K original — so the old code was trading
+ *  8× the memory for a 3× resolution bump on an image the design deliberately obscures.
+ *  Behind the scrim, w1280 upscaled to a 1080p panel is indistinguishable from original.
+ *  The one place a sharp eye could tell is the un-scrimmed corner of a 4K or retina
+ *  desktop; that is a real but tiny softening, and it is the correct trade for never
+ *  killing a TV. This is the one Phase 2 change that is not a desktop no-op, by design.
+ *
+ *  w780 is still chosen for genuinely small viewports, so phones do not pay for w1280. */
 export function heroBgUrl(it: MediaItem): string {
   const url = it.backdrop || it.poster || '';
   if (!url) return '';
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const need = (window.innerWidth || 1280) * dpr;
-  const size = need <= 820 ? 'w780' : need <= 1440 ? 'w1280' : 'original';
+  const size = need <= 820 ? 'w780' : 'w1280';
   return imgW(url, size);
 }
 

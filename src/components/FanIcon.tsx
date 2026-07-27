@@ -1,17 +1,9 @@
-import { motion, useAnimation, type Variants } from 'motion/react';
 import type { HTMLAttributes } from 'react';
-import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useImperativeHandle } from 'react';
 import { cn } from '@/lib/utils';
 
-/* lucide-animated's "fan" icon (https://lucide-animated.com/r/fan.json), ported by hand:
- * `shadcn add` needs a components.json + Tailwind, and this app has neither. The upstream
- * "use client" directive is dropped — it means nothing to Vite and rollup warns on
- * module-level directives it cannot bundle.
- *
- * Hover spin is CONTROLLED here: pass a ref and drive it with startAnimation/stopAnimation.
- * Passing a ref flips isControlledRef, which turns the div's own mouse handlers into
- * pass-throughs — so the caller decides what counts as a hover. AppShell hovers the whole
- * 48px rail row, not just the 22px glyph. Without a ref it animates on its own hover. */
+/* Static SVG — resting frame of the former animated fan glyph. See HomeIcon for why the
+ * `motion` hover animation was removed in Phase 2. */
 
 export interface FanIconHandle {
   startAnimation: () => void;
@@ -22,86 +14,27 @@ interface FanIconProps extends HTMLAttributes<HTMLDivElement> {
   size?: number;
 }
 
-const FAN_VARIANTS: Variants = {
-  normal: {
-    rotate: 0,
-    transition: {
-      type: 'spring',
-      stiffness: 60,
-      damping: 10,
-      duration: 0.5,
-    },
-  },
-  animate: {
-    rotate: 270,
-    transition: {
-      delay: 0.1,
-      type: 'spring',
-      stiffness: 80,
-      damping: 13,
-    },
-  },
-};
+const NOOP: FanIconHandle = { startAnimation: () => {}, stopAnimation: () => {} };
 
 const FanIcon = forwardRef<FanIconHandle, FanIconProps>(
-  ({ onMouseEnter, onMouseLeave, className, size = 28, ...props }, ref) => {
-    const controls = useAnimation();
-    const isControlledRef = useRef(false);
-
-    useImperativeHandle(ref, () => {
-      isControlledRef.current = true;
-      return {
-        startAnimation: () => controls.start('animate'),
-        stopAnimation: () => controls.start('normal'),
-      };
-    });
-
-    const handleMouseEnter = useCallback(
-      (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isControlledRef.current) {
-          onMouseEnter?.(e);
-        } else {
-          controls.start('animate');
-        }
-      },
-      [controls, onMouseEnter]
-    );
-
-    const handleMouseLeave = useCallback(
-      (e: React.MouseEvent<HTMLDivElement>) => {
-        if (isControlledRef.current) {
-          onMouseLeave?.(e);
-        } else {
-          controls.start('normal');
-        }
-      },
-      [controls, onMouseLeave]
-    );
-
+  ({ className, size = 28, ...props }, ref) => {
+    useImperativeHandle(ref, () => NOOP);
     return (
-      <div
-        className={cn(className)}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        {...props}
-      >
-        <motion.svg
-          animate={controls}
+      <div className={cn(className)} {...props}>
+        <svg
           fill="none"
           height={size}
-          initial="normal"
           stroke="currentColor"
           strokeLinecap="round"
           strokeLinejoin="round"
           strokeWidth="2"
-          variants={FAN_VARIANTS}
           viewBox="0 0 24 24"
           width={size}
           xmlns="http://www.w3.org/2000/svg"
         >
           <path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z" />
           <path d="M12 12v.01" />
-        </motion.svg>
+        </svg>
       </div>
     );
   }

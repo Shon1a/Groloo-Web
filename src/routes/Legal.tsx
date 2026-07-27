@@ -24,6 +24,21 @@ export default function Legal() {
         <div className="legal-section">
           <h3>{t('legal.privacy_head')}</h3>
           <p>{t('legal.privacy_body')}</p>
+          {/* privacy_body has always promised "you can delete your account at any time"
+              without naming anywhere to do it, which is the kind of unactionable promise
+              a store reviewer reads as a dark pattern. Point at the actual control. */}
+          <p>{t('legal.privacy_delete')}</p>
+        </div>
+
+        <div className="legal-section">
+          <h3>{t('legal.attrib_head')}</h3>
+          <p>{t('legal.attrib_body')}</p>
+          {/* .set-action rather than a bare <a>: the global rule is a{color:inherit;
+              text-decoration:none}, so an anchor here would be an invisible link. */}
+          <button className="set-action" type="button" onClick={() => nav('/attributions')}>
+            <span>{t('legal.attrib_link')}</span>
+            <span aria-hidden="true">→</span>
+          </button>
         </div>
 
         <div className="legal-section">
@@ -43,9 +58,17 @@ export default function Legal() {
 
         <div className="legal-section">
           <h3>{t('legal.contact_head')}</h3>
+          {/* Two addresses, split by legal clock rather than by topic — see the note above
+              CONTACT_EN in lib/terms.ts. This page previously published takedown@ as its
+              ONLY contact, which meant a privacy request and a copyright notice landed in
+              the same inbox under deadlines a month apart. legal@ is the address
+              registered with the Copyright Office as the designated agent; it and the
+              Terms must never drift apart. */}
           <div className="legal-contact">
             <p>{t('legal.contact_body')}</p>
-            <p><a href="mailto:takedown@stredio.com">takedown@stredio.com</a></p>
+            <p><a href="mailto:legal@groloo.com">legal@groloo.com</a></p>
+            <p>{t('legal.contact_privacy')}</p>
+            <p><a href="mailto:privacy@groloo.com">privacy@groloo.com</a></p>
             <p>{t('legal.contact_note')}</p>
           </div>
         </div>

@@ -7,16 +7,23 @@ import { EN } from './en';
 /* ------------------------------------------------------------------ *
  *  i18n — React port of assets/js/i18n.js.
  *
- *  UI strings live in the external repo Shon1a/stredio-translations
+ *  UI strings live in the external repo Shon1a/groloo-translations
  *  (JSON-per-language + index.json manifest), served via jsDelivr. EN is
- *  bundled here as the offline fallback. TVER is the cache-bust token —
- *  bump it whenever translations are pushed so returning users refetch.
- *  (Mirrors the memory rule: TVER lives in one place and busts the CDN cache.)
+ *  bundled here as the offline fallback.
+ *
+ *  THE SHA IS THE VERSION. This used to point at @master with a hand-bumped
+ *  `?v=TVER` token stapled on, because jsDelivr caches a moving ref for ~12h and
+ *  returning users would otherwise sit on stale strings — TVER was last bumped to
+ *  '20260716' for exactly that reason. Pinning the commit supersedes that fix and
+ *  is strictly better: @<sha> is immutable, so jsDelivr caches it forever, every
+ *  build serves byte-identical strings, and there is no second token that can be
+ *  forgotten. It also means a push to groloo-translations no longer silently
+ *  changes what a shipped build renders. To adopt new strings, bump the sha below —
+ *  that is now the one and only step, and it is reviewable.
  * ------------------------------------------------------------------ */
 
-const CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/stredio-translations@master/';
-const TVER = '20260705';
-const cdnUrl = (file: string) => `${CDN}${file}?v=${TVER}`;
+const CDN = 'https://cdn.jsdelivr.net/gh/Shon1a/groloo-translations@a2937489a35c76bd42fb8a051b2a6c0feecc7720/';
+const cdnUrl = (file: string) => `${CDN}${file}`;
 const LANG_KEY = 'sf-lang';
 
 type Dict = Record<string, string>;

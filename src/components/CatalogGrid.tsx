@@ -38,16 +38,27 @@ export default function CatalogGrid({ desc, host = 'cat', onSelect }: CatalogGri
     queryKey: ['grid', desc, lang],
     initialPageParam: 1,
     queryFn: ({ pageParam }) => api<GridResponse>(gridUrl(desc, pageParam as number, lang)),
-    getNextPageParam: (last, pages) => {
+    /* Keep at most 5 pages in memory. "Load more" appends indefinitely otherwise, and each
+     * page is ~20-40 decoded poster bitmaps — on a webOS TV a determined scroll would walk
+     * the tab straight into an out-of-memory kill. react-query drops the oldest page when a
+     * sixth loads; the user is at the BOTTOM when that happens, so the dropped cards are far
+     * above the fold and off-screen. The trade is that scrolling all the way back to page 1
+     * after 5+ loads re-fetches it — the correct trade on memory-constrained hardware. */
+    maxPages: 5,
+    /* Page number from the PARAM, not from pages.length. With maxPages capping the array at
+     * 5, `pages.length + 1` would stick at 6 forever and pagination would stall — the param
+     * of the last page is the real cursor. */
+    getNextPageParam: (last, _pages, lastPageParam) => {
       const tp = Math.max(1, Math.min(500, last.totalPages || 1));
-      const next = pages.length + 1;
+      const next = (lastPageParam as number) + 1;
       return next <= tp ? next : undefined;
     },
   });
 
   const items = q.data?.pages.flatMap((p) => p.results ?? []) ?? [];
   const totalPages = Math.max(1, Math.min(500, q.data?.pages[0]?.totalPages ?? 1));
-  const page = q.data?.pages.length ?? 1;
+  // Current page is the last param loaded, not the retained-page count (capped at 5 by maxPages).
+  const page = (q.data?.pageParams?.[q.data.pageParams.length - 1] as number) ?? 1;
 
   const gridId = host === 'explore' ? 'exploreGrid' : 'catGrid';
   const pagerId = host === 'explore' ? 'explorePager' : 'catPager';

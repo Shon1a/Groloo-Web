@@ -10,7 +10,17 @@ import { ApiError } from '../lib/api';
 
 const emailOk = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 const passOk = (p: string) => p.length >= 8 && /[a-zA-Z]/.test(p) && /\d/.test(p);
-const ageOk = (dob: string) => { if (!dob) return false; const d = new Date(dob); const age = (Date.now() - d.getTime()) / (365.25 * 864e5); return age >= 13; };
+/* 18, not 13. The Terms have always said 18+ while this gate and the server both let
+ * 13-year-olds through, and declaring a 13+ audience drags an app whose add-on
+ * installer accepts arbitrary URLs into Play's Families policy. The server is the
+ * authority; this check only has to be no LOOSER than it, so raising the client first
+ * is safe — a stricter client can never be surprised by a server rejection. */
+const MIN_AGE = 18;
+const ageOk = (dob: string) => { if (!dob) return false; const d = new Date(dob); const age = (Date.now() - d.getTime()) / (365.25 * 864e5); return age >= MIN_AGE; };
+// Latest birth date that still clears the gate. Fed to the date input's `max` so the
+// native picker refuses under-age dates outright — on a D-pad, where scrubbing a date
+// field costs dozens of presses, being stopped at entry beats a rejection afterwards.
+const maxDob = () => { const d = new Date(); d.setFullYear(d.getFullYear() - MIN_AGE); return d.toISOString().slice(0, 10); };
 
 // minimal shape of the Google Identity Services we use
 type GsiId = { initialize: (o: unknown) => void; renderButton: (el: HTMLElement, o: unknown) => void };
@@ -26,12 +36,13 @@ export default function AuthModal() {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [f, setF] = useState({ name: '', surname: '', dob: '', email: '', password: '' });
   const [showPass, setShowPass] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const googleRef = useRef<HTMLDivElement>(null);
 
   // reset when (re)opened
-  useEffect(() => { if (authOpen) { setMode('login'); setErr(''); setF({ name: '', surname: '', dob: '', email: '', password: '' }); } }, [authOpen]);
+  useEffect(() => { if (authOpen) { setMode('login'); setErr(''); setAcceptedTerms(false); setF({ name: '', surname: '', dob: '', email: '', password: '' }); } }, [authOpen]);
 
   const finish = () => { const to = intent; closeAuth(); if (to) nav(to); };
 
@@ -57,6 +68,13 @@ export default function AuthModal() {
     if (!emailOk(f.email)) return setErr(t('auth.err_email'));
     if (!passOk(f.password)) return setErr(t('auth.err_pass'));
     if (mode === 'signup' && !ageOk(f.dob)) return setErr(t('auth.err_age'));
+    /* Play's UGC policy asks for terms the user ACCEPTS, which a link in a footer is not.
+     * An explicit, unticked box on the one screen where an account comes into existence is
+     * the cheapest thing that makes "the user agreed" a fact rather than an assumption —
+     * and the Terms it points at are what carry the repeat-infringer clause the report
+     * queue relies on. Sign-up only: existing accounts are not re-prompted here, which is
+     * a gap to close with a re-acceptance flow if the Terms ever materially change. */
+    if (mode === 'signup' && !acceptedTerms) return setErr(t('auth.err_terms'));
     setBusy(true);
     try {
       if (mode === 'login') await login(f.email, f.password);
@@ -75,7 +93,7 @@ export default function AuthModal() {
     <div className={`auth-overlay${authOpen ? ' open' : ''}`} id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle" aria-hidden={!authOpen} onClick={(e) => { if (e.target === e.currentTarget) closeAuth(); }}>
       <div className="auth-card">
         <button className="auth-dismiss" type="button" aria-label={t('auth.dismiss_aria')} onClick={closeAuth}>✕</button>
-        <div className="auth-brand"><img className="auth-logo" src="/assets/stredio-logo.svg" alt="stredio" /></div>
+        <div className="auth-brand"><img className="auth-logo" src="/assets/groloo-logo.svg" alt="groloo" /></div>
         <div className="auth-kicker mono">{t('auth.kicker')}</div>
 
         <div className="auth-tabs" role="tablist">
@@ -91,7 +109,7 @@ export default function AuthModal() {
         )}
 
         <form className="auth-form" onSubmit={submit} noValidate>
-          <h2 id="authTitle" className="sr-only">STREDIO</h2>
+          <h2 id="authTitle" className="sr-only">GROLOO</h2>
           {mode === 'signup' && (
             <div id="signupFields">
               <div className="auth-row">
@@ -106,7 +124,8 @@ export default function AuthModal() {
               </div>
               <div className="auth-field">
                 <label className="mono">{t('auth.dob')}</label>
-                <input type="date" autoComplete="bday" value={f.dob} onChange={set('dob')} />
+                <input type="date" autoComplete="bday" max={maxDob()} value={f.dob} onChange={set('dob')} />
+                <div className="auth-hint mono">{t('auth.dob_hint')}</div>
               </div>
             </div>
           )}
@@ -122,6 +141,20 @@ export default function AuthModal() {
             </div>
             {mode === 'signup' && <div className="auth-hint mono">{t('auth.pass_hint')}</div>}
           </div>
+          {/* Unticked by default, and never pre-ticked: a pre-ticked consent box is not
+            * consent, and it is the specific pattern regulators single out. The links open
+            * in a new tab so a half-filled sign-up form is not lost to a navigation. */}
+          {mode === 'signup' && (
+            <label className="optrow" style={{ marginTop: 4 }}>
+              <input type="checkbox" checked={acceptedTerms} onChange={(e) => setAcceptedTerms(e.target.checked)} />
+              <span>
+                {t('auth.terms_accept')}{' '}
+                <a href="#/terms" target="_blank" rel="noopener noreferrer">{t('auth.terms_link')}</a>
+                {' '}&amp;{' '}
+                <a href="#/legal" target="_blank" rel="noopener noreferrer">{t('auth.legal_link')}</a>
+              </span>
+            </label>
+          )}
           {err && <div className="auth-error" role="alert">{err}</div>}
           <button className="auth-submit" type="submit" disabled={busy}>
             <span className="auth-submit-label">{t(mode === 'login' ? 'auth.login_cta' : 'auth.signup_cta')}</span>
