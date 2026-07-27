@@ -11,8 +11,12 @@
 # never runs on a push.
 name: Lockfile (Linux)
 
+# push-scoped to this one branch rather than workflow_dispatch: GitHub only offers manual
+# dispatch for workflows that already exist on the DEFAULT branch, and putting a throwaway
+# job on main to fix a branch is the wrong trade.
 on:
-  workflow_dispatch:
+  push:
+    branches: [phase0/store-blockers]
 
 jobs:
   lock:
