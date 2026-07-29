@@ -16,6 +16,7 @@ import StreamLangSelect from './StreamLangSelect';
 import SourceSelect from './SourceSelect';
 import { collectAddonStreams, orderLangs, qualityRank, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
+import { mediaUrl, syncAddressBar, type MediaAddress } from '../../lib/launchIntent';
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
 
@@ -25,6 +26,9 @@ const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080'
 
 const SpeakerOff = (
   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z" /><line x1="22" y1="9" x2="16" y2="15" /><line x1="16" y1="9" x2="22" y2="15" /></svg>
+);
+const LinkIcon = (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
 );
 const SpeakerOn = (
   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>
@@ -138,6 +142,7 @@ export default function DetailModal() {
   const streamsRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const [bdLoaded, setBdLoaded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [pickedEp, setPickedEp] = useState<{ season: number; ep: number } | null>(null);
   const [streams, setStreams] = useState<AddonStream[]>([]);
   const [streamsLoading, setStreamsLoading] = useState(false);
@@ -156,6 +161,7 @@ export default function DetailModal() {
   // Continue-Watching resume so OPEN builds the exact-episode key (id:S#E#)
   useEffect(() => {
     setBdLoaded(false);
+    setCopied(false);
     setPickedEp(target?.resumeEp ? { season: target.resumeEp.season, ep: target.resumeEp.episode } : null);
     setSrcTab('services');
     scrollRef.current?.scrollTo({ top: 0 });
@@ -202,21 +208,44 @@ export default function DetailModal() {
 
   /* Close the modal when the route changes (navigating away dismisses it).
    *
-   * SKIP THE FIRST RUN — this is load-bearing now that the modal is lazy-mounted. React
-   * runs an effect once on mount, and this component now mounts AFTER the click that opened
-   * it (DetailModalGate defers the chunk until first open), so a bare `close()` here fires
-   * on mount and slams shut the modal that was just opened. The symptom is nasty and
-   * intermittent: the FIRST title opened in a session flashes and closes, every one after
-   * works, because the second time the component is already mounted and only a real
-   * pathname change re-runs it. When the modal was always-mounted this effect ran once at
-   * app start against an empty modal and the bug was invisible. The ref makes "mount" and
-   * "the route actually changed" distinguishable, which is the real intent. */
+   * ONLY when the route ACTUALLY changed — this is load-bearing now that the modal is lazy-
+   * mounted. React runs an effect once on mount, and this component now mounts AFTER the click
+   * that opened it (DetailModalGate defers the chunk until first open), so a bare `close()`
+   * here fires on mount and slams shut the modal that was just opened. The symptom is nasty
+   * and intermittent: the FIRST title opened in a session flashes and closes, every one after
+   * works, because the second time the component is already mounted and only a real pathname
+   * change re-runs it. When the modal was always-mounted this effect ran once at app start
+   * against an empty modal and the bug was invisible.
+   *
+   * COMPARE THE PATHNAME, DO NOT COUNT RUNS. A `hasMounted` boolean — the previous shape here
+   * — is defeated by StrictMode, which double-invokes mount effects: the first run flips the
+   * flag, the cleanup runs, and the second run finds the flag already down and closes the
+   * modal anyway. That reduced the fix to "works in production, broken in `npm run dev`", and
+   * it is why the very first title opened in a dev session still did nothing. A deep-linked
+   * load makes it worse than cosmetic, because there the target is set BEFORE mount, so the
+   * spurious close is the only thing that happens and the link looks broken outright.
+   * Remembering the pathname makes "mounted" and "navigated" genuinely distinguishable, which
+   * was always the intent, and it is idempotent however many times React chooses to run it. */
   const { pathname } = useLocation();
-  const mountedPath = useRef(true);
+  const seenPath = useRef(pathname);
   useEffect(() => {
-    if (mountedPath.current) { mountedPath.current = false; return; }
+    if (seenPath.current === pathname) return;
+    seenPath.current = pathname;
     close();
   }, [pathname, close]);
+
+  /* The open title owns the address bar. An overlay with no address could not be copied,
+   * bookmarked, refreshed back into, or handed to a TV launcher — see lib/launchIntent.ts. This
+   * writes `/t/<type>/<id>[/s<n>/e<n>]` while a title is open and restores the page's own path
+   * when it closes, via replaceState so no history entry appears and HashRouter (which reads the
+   * hash, untouched here) carries on as before. Following the PICKED episode rather than the
+   * opened one is what makes a copied series link point at the episode on screen. */
+  const shareAddress: MediaAddress | null = target
+    ? { id: String(target.id), type: target.type, season: pickedEp?.season, episode: pickedEp?.ep }
+    : null;
+  useEffect(() => {
+    syncAddressBar(target ? { id: target.id, type: target.type, resumeEp: pickedEp ? { season: pickedEp.season, episode: pickedEp.ep } : undefined } : null);
+  }, [target, pickedEp]);
 
   // Escape to close + focus the close button on open
   useEffect(() => {
@@ -244,6 +273,24 @@ export default function DetailModal() {
   const epTotal = (meta?.seasonList ?? []).reduce((a, s) => a + (s.episodes || 0), 0);
   const added = mylist.some((m) => String(m.id) === String(target.id));
   const onAdd = () => toggleList({ id: target.id, type: target.type, title, year, rating, poster: meta?.poster || target.poster });
+
+  /* Hand out the title's address. Clipboard only, deliberately — `navigator.share` exists on
+   * desktop Chrome too, where it opens the OS share sheet, so preferring it would make a button
+   * labelled "Copy link" do something else entirely on the platform most people are reading this
+   * on. One behaviour, one honest label, and a share is one paste away. The prompt is the last
+   * resort: `navigator.clipboard` is undefined outside a secure context, which includes
+   * plain-http LAN testing, and a selectable string still lets the user copy by hand. */
+  const onShare = async () => {
+    if (!shareAddress) return;
+    const url = mediaUrl(shareAddress);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      window.prompt(t('modal.copy_link'), url);
+    }
+  };
 
   type Ep = { season: number; ep: number };
   const epsInSeason = (season: number) => meta?.seasonList?.find((s) => s.season === season)?.episodes ?? 0;
@@ -394,6 +441,15 @@ export default function DetailModal() {
                   * a round m-disc to match the chrome and to stay out of Play's way. */}
                 <button className="hero-add m-disc" id="mReport" type="button" aria-label={t('report.cta')} title={t('report.cta')}
                         onClick={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}>⚑</button>
+                {/* Copy this title's link. Web only: on TV the clipboard has nowhere to go and
+                  * every extra button is one more D-pad stop between the user and Play. */}
+                {import.meta.env.MODE !== 'tv' && (
+                  <button className={`hero-add m-disc${copied ? ' on' : ''}`} id="mShare" type="button"
+                          aria-label={t(copied ? 'modal.link_copied' : 'modal.copy_link')} title={t(copied ? 'modal.link_copied' : 'modal.copy_link')}
+                          onClick={() => { void onShare(); }}>
+                    {copied ? '✓' : <span className="m-share-ic" aria-hidden="true">{LinkIcon}</span>}
+                  </button>
+                )}
               </div>
             </div>
             )}

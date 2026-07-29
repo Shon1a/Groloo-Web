@@ -129,6 +129,11 @@ const SEED: Record<string, string> = {
   'modal.watch_authed': 'WATCH',
   'modal.resume': 'RESUME',
   'modal.close_aria': 'Close details',
+  // Share control. Two labels for one button because it reports its own result: the icon
+  // swaps to a tick and the accessible name has to change with it, or a screen reader
+  // announces "Copy link" for a button that has already copied.
+  'modal.copy_link': 'Copy link',
+  'modal.link_copied': 'Link copied',
   'modal.unmute': 'Unmute trailer',
   'modal.mute': 'Mute trailer',
   'modal.loading_synopsis': 'Loading synopsis…',
