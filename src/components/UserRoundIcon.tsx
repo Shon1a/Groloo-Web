@@ -1,27 +1,20 @@
-import type { HTMLAttributes } from 'react';
-import { forwardRef, useImperativeHandle } from 'react';
+import { forwardRef } from 'react';
 
 import { cn } from '@/lib/utils';
+import { useIconAnimation, type AnimatedIconHandle, type AnimatedIconProps } from './useIconAnimation';
 
-/* Static SVG — resting frame of the former animated user glyph. See HomeIcon for why the
- * `motion` hover animation was removed in Phase 2. */
+/* animate-ui's "user-round" glyph. The head and shoulders bob out of step with each other and
+ * settle back — keyframes in app.css (@keyframes ico-user-body / ico-user-head).
+ *
+ * Both tracks end where they started, so a tap in the hoverless mobile dock settles by itself. */
 
-export interface UserRoundIconHandle {
-  startAnimation: () => void;
-  stopAnimation: () => void;
-}
+export type UserRoundIconHandle = AnimatedIconHandle;
 
-interface UserRoundIconProps extends HTMLAttributes<HTMLDivElement> {
-  size?: number;
-}
-
-const NOOP: UserRoundIconHandle = { startAnimation: () => {}, stopAnimation: () => {} };
-
-const UserRoundIcon = forwardRef<UserRoundIconHandle, UserRoundIconProps>(
-  ({ className, size = 28, ...props }, ref) => {
-    useImperativeHandle(ref, () => NOOP);
+const UserRoundIcon = forwardRef<UserRoundIconHandle, AnimatedIconProps>(
+  ({ onMouseEnter, className, size = 28, ...props }, ref) => {
+    const { hostRef, handleMouseEnter } = useIconAnimation(ref, onMouseEnter);
     return (
-      <div className={cn(className)} {...props}>
+      <div className={cn(className)} onMouseEnter={handleMouseEnter} ref={hostRef} {...props}>
         <svg
           fill="none"
           height={size}
@@ -33,8 +26,8 @@ const UserRoundIcon = forwardRef<UserRoundIconHandle, UserRoundIconProps>(
           width={size}
           xmlns="http://www.w3.org/2000/svg"
         >
-          <path d="M20 21a8 8 0 0 0-16 0" />
-          <circle cx="12" cy="8" r="5" />
+          <path className="ico-user-body" d="M20 21a8 8 0 0 0-16 0" />
+          <circle className="ico-user-head" cx="12" cy="8" r="5" />
         </svg>
       </div>
     );

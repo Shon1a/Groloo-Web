@@ -1,28 +1,23 @@
-import type { HTMLAttributes } from 'react';
-import { forwardRef, useImperativeHandle } from 'react';
+import { forwardRef } from 'react';
 
 import { cn } from '@/lib/utils';
+import { useIconAnimation, type AnimatedIconHandle, type AnimatedIconProps } from './useIconAnimation';
 
-/* Static SVG — resting frame of the former animated search glyph. See HomeIcon for why the
- * `motion` hover animation was removed in Phase 2. */
+/* animate-ui's "search" glyph. The magnifier waggles about the tip of its handle, as if being
+ * shaken by it — keyframes in app.css (@keyframes ico-search-wiggle), rotating the whole <svg>
+ * about its bottom-right corner.
+ *
+ * The waggle ends back at 0deg, so a tap in the hoverless mobile dock settles by itself. */
 
-export interface SearchIconHandle {
-  startAnimation: () => void;
-  stopAnimation: () => void;
-}
+export type SearchIconHandle = AnimatedIconHandle;
 
-interface SearchIconProps extends HTMLAttributes<HTMLDivElement> {
-  size?: number;
-}
-
-const NOOP: SearchIconHandle = { startAnimation: () => {}, stopAnimation: () => {} };
-
-const SearchIcon = forwardRef<SearchIconHandle, SearchIconProps>(
-  ({ className, size = 28, ...props }, ref) => {
-    useImperativeHandle(ref, () => NOOP);
+const SearchIcon = forwardRef<SearchIconHandle, AnimatedIconProps>(
+  ({ onMouseEnter, className, size = 28, ...props }, ref) => {
+    const { hostRef, handleMouseEnter } = useIconAnimation(ref, onMouseEnter);
     return (
-      <div className={cn(className)} {...props}>
+      <div className={cn(className)} onMouseEnter={handleMouseEnter} ref={hostRef} {...props}>
         <svg
+          className="ico-search"
           fill="none"
           height={size}
           stroke="currentColor"

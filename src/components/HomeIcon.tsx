@@ -1,36 +1,25 @@
-import type { HTMLAttributes } from 'react';
-import { forwardRef, useImperativeHandle } from 'react';
+import { forwardRef } from 'react';
 
 import { cn } from '@/lib/utils';
+import { useIconAnimation, type AnimatedIconHandle, type AnimatedIconProps } from './useIconAnimation';
 
-/* Static SVG — the resting frame of the former lucide-animated "home" glyph.
+/* lucide-animated's "home" glyph. Only the door animates: it re-draws itself while the roof
+ * and walls hold still. At rest the door is already drawn, so the icon is complete whether or
+ * not it has ever been hovered.
  *
- * The `motion`-driven hover redraw was removed with the whole `motion` dependency in Phase 2.
- * It animated only on hover, which an Android TV D-pad never emits and an LG Magic Remote
- * only sometimes does, and `motion` was the single largest weight in the bundle (~121 kB
- * raw). At rest every one of these glyphs was already fully drawn, so dropping the animation
- * changes nothing a screenshot can see — the resting SVG below IS what shipped.
+ * The redraw was a `motion` pathLength 0→1; it is now a stroke-dashoffset keyframe in app.css
+ * (@keyframes ico-home-door). pathLength="1" below is what makes that exact — it normalises
+ * the path's length so the dash maths is 0→1 instead of "measure the outline first".
  *
- * The start/stopAnimation handle is kept as a shared no-op so the rail in AppShell still
- * drives all seven glyphs through one interface, and re-adding an animation later (as pure
- * CSS, no library) touches only these files, not the rail. */
+ * Driven by a ref: startAnimation/stopAnimation, so the whole rail row owns the hover. */
 
-export interface HomeIconHandle {
-  startAnimation: () => void;
-  stopAnimation: () => void;
-}
+export type HomeIconHandle = AnimatedIconHandle;
 
-interface HomeIconProps extends HTMLAttributes<HTMLDivElement> {
-  size?: number;
-}
-
-const NOOP: HomeIconHandle = { startAnimation: () => {}, stopAnimation: () => {} };
-
-const HomeIcon = forwardRef<HomeIconHandle, HomeIconProps>(
-  ({ className, size = 28, ...props }, ref) => {
-    useImperativeHandle(ref, () => NOOP);
+const HomeIcon = forwardRef<HomeIconHandle, AnimatedIconProps>(
+  ({ onMouseEnter, className, size = 28, ...props }, ref) => {
+    const { hostRef, handleMouseEnter } = useIconAnimation(ref, onMouseEnter);
     return (
-      <div className={cn(className)} {...props}>
+      <div className={cn(className)} onMouseEnter={handleMouseEnter} ref={hostRef} {...props}>
         <svg
           fill="none"
           height={size}
@@ -43,7 +32,11 @@ const HomeIcon = forwardRef<HomeIconHandle, HomeIconProps>(
           xmlns="http://www.w3.org/2000/svg"
         >
           <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-          <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+          <path
+            className="ico-home-door"
+            d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"
+            pathLength={1}
+          />
         </svg>
       </div>
     );
