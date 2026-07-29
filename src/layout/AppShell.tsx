@@ -12,6 +12,7 @@ import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import TvTopNav from '../components/TvTopNav';
 import TvSpatialNav from '../components/TvSpatialNav';
+import TvBackKey from '../components/TvBackKey';
 
 const GATED = ['/addons', '/settings', '/library'];
 
@@ -143,6 +144,7 @@ export default function AppShell() {
       {/* TV build: top menu bar + remote/D-pad navigation. Web build: the left icon rail below. */}
       {IS_TV && <TvTopNav />}
       {IS_TV && <TvSpatialNav />}
+      {IS_TV && <TvBackKey />}
       {/* LEFT ICON RAIL — desktop primary nav */}
       {!IS_TV && (
       <nav className="railbar" id="railbar" aria-label="Primary navigation" ref={railbarRef}>

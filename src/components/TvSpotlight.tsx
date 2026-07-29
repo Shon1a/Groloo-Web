@@ -3,6 +3,9 @@ import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
+import { useTrailer } from './DetailModal/useTrailer';
+import { useMeta } from '../lib/queries';
+import { useSettings } from '../stores/settings';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
  * whenever MODE === 'tv', so home rows, Upcoming and add-on catalogues all get it).
@@ -36,6 +39,33 @@ import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 
 const SPOT_MAX = 12;
 
+/* ms the remote must sit still on a title before its trailer is even asked for.
+ *
+ * Cut from 1500 to claw back the only part of the wait that is ours to spend. Everything after this
+ * belongs to YouTube — fetching the key, loading the embed, and above all the ~4.5s of playback its
+ * pause glyph occupies (see TRAILER_REVEAL_AT) — so this is where a faster start has to come from.
+ * 800ms still filters a walk along a row: pressing right even twice a second never trips it, and
+ * the guarantee that matters (no request for a title merely passed over) is intact. */
+const TRAILER_DWELL = 800;
+/* SECONDS OF THE TRAILER, not seconds on a stopwatch — and that distinction is the fix for a
+ * reported bug rather than a nicety. YouTube stamps a large pause glyph in the dead centre of the
+ * player when autoplay begins; it is not chrome at the edges, so no amount of cropping reaches it,
+ * and the only way past it is to arrive later. A wall-clock delay measured here (2600ms, tuned off
+ * real frames) still showed the glyph on a real TV, because a slower start pushes the glyph later
+ * in real time while a stopwatch keeps ticking. Playback time cannot drift like that: at 3.5s of
+ * video the glyph is long gone however long the video took to get going. It also means a set that
+ * stalls mid-buffer simply waits rather than revealing a frozen frame.
+ *
+ * WHY 4.8 AND NOT LESS. Measured in this component, frame by frame against playback time: the
+ * glyph is still on screen at 3.6s and gone by 4.4s. It is not a flash — it owns the opening of
+ * every trailer. 4.0 was tried and is too tight; it read as clean here and still showed on a real
+ * set, because the last of the fade has no fixed end. So the number is the measurement plus a
+ * margin, and the honest summary is that YouTube owns the first ~4.5 seconds of any preview: there
+ * is no combination of embed parameters or cropping that removes the glyph (it is drawn inside a
+ * cross-origin player, dead centre, where a crop cannot reach), so waiting is the only lever, and
+ * the only way to have both a fast start AND no glyph would be to stop using YouTube's player. */
+const TRAILER_REVEAL_AT = 4.8;
+
 /* Renditions sized to what is painted, not to the source. The billboard is 16:9 of a <=380px
  * row (~675px wide) and thumbs paint at ~228px — see the note in lib/hero.ts for why reaching
  * for `original` on a TV is fatal rather than merely wasteful. */
@@ -50,14 +80,43 @@ export interface TvSpotlightProps {
   items: MediaItem[];
   /** Row heading. Defaults to "Featured". */
   title?: string;
+  /** Category slug behind the row — the destination of its "see all" card. */
+  cat?: string;
   onSelect?: (m: MediaItem) => void;
+  onSeeAll?: (cat: string) => void;
 }
 
-export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps) {
+/* WHAT THE BILLBOARD IS SHOWING. A row walks its titles and then one stop past them, onto its
+ * own category page — so the thing on the billboard is a title OR that final card, and both the
+ * cross-dissolve and the strip have to be able to hold either. */
+type Slot = MediaItem | 'see-all';
+
+export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: TvSpotlightProps) {
   const t = useT();
   const genre = useGenre();
   const list = useMemo(() => items.slice(0, SPOT_MAX), [items]);
   const n = list.length;
+  const heading = title || t('tv.featured');
+
+  /* ---- THE ROW'S OWN PAGE, REACHED FROM THE END OF THE ROW ---------------------------------
+   * The web rail puts "see all" in its HEADING, and this component's heading used to carry a
+   * note explaining that a TV row simply could not have one: the billboard is the row's only
+   * focus stop, so a button above it is not something a remote can ever land on. True, and it
+   * left the TV build with no way to open a category at all — the drill-down pages exist and
+   * were unreachable.
+   *
+   * The fix follows the row's own grammar instead of fighting it. Walking right past the last
+   * title lands on ONE MORE STOP: a blank card at the end of the strip, which becomes the
+   * billboard like any other card, and whose OK opens /browse/<cat>. Nothing new to focus and no
+   * second affordance to explain — the row just got one card longer.
+   *
+   * It is conditional on a destination existing. Add-on catalogue rows (AddonRows) render through
+   * the same component with no `cat`, and a card that goes nowhere is worse than no card. */
+  const canSeeAll = !!cat && !!onSeeAll;
+  const stops = n + (canSeeAll ? 1 : 0);
+  /** What sits at walk position `i` — a title, or the see-all card in the extra slot past them. */
+  const slotAt = (i: number): Slot => (i < n ? list[i] : 'see-all');
+  const goSeeAll = () => { if (cat) onSeeAll?.(cat); };
 
   const [active, setActive] = useState(0);
   const [open, setOpen] = useState(false);
@@ -66,7 +125,7 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
   const [visible, setVisible] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
   // Two billboard layers that swap which is on top, so a change cross-dissolves rather than cuts.
-  const [xfade, setXfade] = useState<{ a: MediaItem; b: MediaItem | null; front: 'a' | 'b' }>(
+  const [xfade, setXfade] = useState<{ a: Slot; b: Slot | null; front: 'a' | 'b' }>(
     () => ({ a: list[0], b: null, front: 'a' }),
   );
   const firstRun = useRef(true);
@@ -76,6 +135,51 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
   const reduceMotion = typeof window !== 'undefined'
     && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
+  /* ---- THE PREVIEW ON THE SHELF ------------------------------------------------------------
+   * Rest on a title and its trailer starts playing behind the title plate, muted; move on and it
+   * is gone. The embed machinery is the modal's, unchanged (useTrailer) — it already mounts late,
+   * reveals only once the video genuinely plays, and gives up quietly on a trailer that is
+   * region-blocked or has embedding disabled, which is most of the hard part.
+   *
+   * WHY A DWELL RATHER THAN A FETCH PER PRESS. The row data has no trailer in it: the key only
+   * comes with /api/meta, one request per title. Walking a row must not fire twelve of those, so
+   * nothing is requested until the remote has STOPPED on a title for TRAILER_DWELL. Flicking
+   * along a shelf is then free, and the request only happens for a card someone is actually
+   * looking at. React Query caches it per title, so coming back to a row costs nothing.
+   *
+   * The whole thing hangs off `open` — the row's own focus state — so leaving the row, opening a
+   * title, or launching the player all tear the embed down for free. */
+  const heroBtnRef = useRef<HTMLButtonElement>(null);
+  const trailerSlotRef = useRef<HTMLDivElement>(null);
+  const rowTrailers = useSettings((s) => s.settings.tvRowTrailers);
+  const [dwelt, setDwelt] = useState<MediaItem | null>(null);
+  // The title being rested on, or nothing when the walk is parked on the see-all card.
+  const resting: MediaItem | undefined = active < n ? list[active] : undefined;
+  useEffect(() => {
+    /* DROPPED FIRST, ARMED SECOND, and the order is the whole correctness of this. Clearing only
+     * in the bail-out branch left the OLD title's video playing while the billboard had already
+     * dissolved to the new one — so for the second and a half before the next trailer replaced it,
+     * the row showed one film's trailer under another film's name. Whatever was playing belongs to
+     * the title just left, so it goes the moment focus moves; the artwork comes back with it. */
+    setDwelt(null);
+    if (!rowTrailers || !open || !resting) return;
+    const id = window.setTimeout(() => setDwelt(resting), TRAILER_DWELL);
+    return () => window.clearTimeout(id);
+    // Keyed on the title's ID rather than the object: the rows arrive inside a fresh array on
+    // every render of Home, and re-arming this timer each time would mean it never fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowTrailers, open, resting?.id]);
+  const { data: trailerMeta } = useMeta(dwelt?.id, dwelt?.type);
+  useTrailer(
+    trailerSlotRef,
+    heroBtnRef,
+    dwelt && rowTrailers ? (trailerMeta?.trailerKey || undefined) : undefined,
+    dwelt?.title || '',
+    // The dwell above has already served as the "don't mount for a passing title" delay, so the
+    // embed goes up as soon as its key lands.
+    { mountDelay: 0, revealAtPlayTime: TRAILER_REVEAL_AT, ignoreLowPower: true },
+  );
+
   /* THE STRIP IS MEMOISED, AND THAT IS A SCROLL FIX, NOT A MICRO-OPTIMISATION.
    *
    * Every arrow press flips `open` on two rows. Without this, React would rebuild 24 <button>
@@ -83,23 +187,49 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
    * where a dropped frame is most visible. The strip depends on nothing that a focus change
    * touches, so it is built once per data change and the open/close toggle becomes what it
    * should be: one class name on the section. */
-  const thumbs = useMemo(() => [...list, ...list].map((it, idx) => {
-    const src = imgW(it.poster || it.backdrop || '', THUMB_RENDITION);
-    return (
+  const thumbs = useMemo(() => {
+    const tile = (it: MediaItem, key: string) => {
+      const src = imgW(it.poster || it.backdrop || '', THUMB_RENDITION);
+      return (
+        <button
+          key={key}
+          type="button"
+          role="listitem"
+          tabIndex={-1}
+          className="tv-spot-thumb"
+          style={{ background: heroFallbackGradient(it) }}
+          aria-label={it.title}
+          onClick={() => onSelect?.(it)}
+        >
+          {src && <img className="tv-spot-thumbimg" src={src} loading="lazy" decoding="async" alt="" />}
+        </button>
+      );
+    };
+    const copy = (pass: number) => list.map((it, i) => tile(it, `p${pass}-${i}`));
+    if (!canSeeAll) return [...copy(0), ...copy(1)];
+    /* POSITION IS THE WHOLE TRICK. The strip is translated so the tile at index `active` hides
+     * behind the billboard and its successors peek to the right, so putting the card at index n —
+     * straight after the last title of the FIRST copy — makes it both the thing you see appear at
+     * the end of the posters and the thing the billboard becomes when you reach it. The second
+     * copy still follows it, so the row's endless up-next preview is unbroken. */
+    return [
+      ...copy(0),
       <button
-        key={`dup-${idx}`}
+        key="see-all"
         type="button"
         role="listitem"
         tabIndex={-1}
-        className="tv-spot-thumb"
-        style={{ background: heroFallbackGradient(it) }}
-        aria-label={it.title}
-        onClick={() => onSelect?.(it)}
+        className="tv-spot-thumb is-seeall"
+        aria-label={`${heading} — ${t('cat.see_all')}`}
+        onClick={goSeeAll}
       >
-        {src && <img className="tv-spot-thumbimg" src={src} loading="lazy" decoding="async" alt="" />}
-      </button>
-    );
-  }), [list, onSelect]);
+        <span className="tv-spot-blank-ic" aria-hidden="true">→</span>
+        <span className="tv-spot-blank-label">{t('cat.see_all')}</span>
+      </button>,
+      ...copy(1),
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list, onSelect, canSeeAll, cat, onSeeAll, heading, t]);
 
   /* Arm the artwork a screenful before the row arrives, so it is decoded by the time it is
    * scrolled to and nothing pops in. Disconnects on the first hit — this is a one-way latch. */
@@ -120,7 +250,7 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
     if (firstRun.current) { firstRun.current = false; return; }
     setXfade((s) => {
       const back: 'a' | 'b' = s.front === 'a' ? 'b' : 'a';
-      return { ...s, [back]: list[active], front: back };
+      return { ...s, [back]: slotAt(active), front: back };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -138,10 +268,13 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
   }, [active]);
 
   if (!n) return null;
-  const cur = list[active] || list[0];
-  const heading = title || t('tv.featured');
+  /** True while the walk is parked on the see-all card rather than on a title. */
+  const onSeeAllCard = canSeeAll && active >= n;
+  const cur = list[Math.min(active, n - 1)] || list[0];
 
-  const step = (delta: number) => setActive((a) => (a + delta + n) % n);
+  // One stop longer than the list when the row has a page of its own; still wraps, so the card
+  // is also one press LEFT from the first title.
+  const step = (delta: number) => setActive((a) => (a + delta + stops) % stops);
 
   /* Until the row is near the viewport the layer keeps the branded gradient and requests no
    * bitmap at all — see the memory note in the header. */
@@ -155,8 +288,9 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
   const tagFor = (it: MediaItem) => (isSeries(it) ? t('nav.series') : t('nav.movies'));
   const logoOf = (it: MediaItem) => it.titleLogo || it.logo;
 
-  // genre · year · rating — the type isn't repeated here, it's the tag on the billboard.
-  const metaBits = [
+  // genre · year · rating — the type isn't repeated here, it's the tag on the billboard. The
+  // see-all card has no metadata of its own; the panel keeps its reserved height and stays blank.
+  const metaBits = onSeeAllCard ? [] : [
     genre(cur.genre || (cur.genres && cur.genres[0]) || ''),
     cur.year ? String(cur.year) : '',
     cur.rating ? `★ ${cur.rating}` : '',
@@ -177,8 +311,8 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
       onFocus={() => setOpen(true)}
       onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }}
     >
-      {/* A plain heading — see the note in Row: a "see all" button here is not reachable by a
-          remote, because the billboard is the only focus stop in a row. */}
+      {/* A plain heading. The web rail's "see all" lives here; on a TV it is the card at the end
+          of the strip instead — see the note above `canSeeAll`. */}
       <h2 className="tv-spot-rowtitle">{heading}</h2>
 
       <div className="tv-spot-stage">
@@ -199,15 +333,36 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
         {/* BILLBOARD — pinned left, over the strip, at 16:9 in every state. */}
         <button
           type="button"
+          ref={heroBtnRef}
           className="tv-spot-hero"
-          aria-label={cur.title}
-          onClick={() => onSelect?.(cur)}
+          aria-label={onSeeAllCard ? `${heading} — ${t('cat.see_all')}` : cur.title}
+          onClick={() => (onSeeAllCard ? goSeeAll() : onSelect?.(cur))}
           onKeyDown={onHeroKey}
         >
+          {/* The preview sits UNDER the artwork rather than over it, and `has-trailer` fades the
+              artwork away to uncover it — which is what keeps the title plate above the video
+              instead of the video swallowing it. See tv.css. */}
+          <div className="tv-spot-trailer-slot" ref={trailerSlotRef} aria-hidden="true" />
           {(['a', 'b'] as const).map((slot) => {
             const it = xfade[slot];
             const on = xfade.front === slot;
             if (!it) return <div key={slot} className="tv-spot-layer" aria-hidden="true" />;
+            /* The see-all card as the billboard: no artwork to request, so it reads as a hole at
+               the end of the row rather than as another title — which is what tells you the row
+               has ended. Same two layers, so arriving on it dissolves like everything else. */
+            if (it === 'see-all') {
+              return (
+                <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
+                  <div className="tv-spot-blank">
+                    <span className="tv-spot-blank-ic" aria-hidden="true">→</span>
+                  </div>
+                  <div className="tv-spot-card-in">
+                    <span className="tv-spot-tag">{t('cat.see_all')}</span>
+                    <span className="tv-spot-cardtitle">{heading}</span>
+                  </div>
+                </div>
+              );
+            }
             const logo = logoOf(it);
             return (
               <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
@@ -230,7 +385,7 @@ export default function TvSpotlight({ items, title, onSelect }: TvSpotlightProps
         <div className="tv-spot-meta">
           {metaBits.map((b, i) => <span key={i}>{b}</span>)}
         </div>
-        {cur.overview && <p className="tv-spot-plot">{cur.overview}</p>}
+        {!onSeeAllCard && cur.overview && <p className="tv-spot-plot">{cur.overview}</p>}
       </div>
     </section>
   );

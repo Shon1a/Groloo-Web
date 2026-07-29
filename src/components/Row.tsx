@@ -29,9 +29,9 @@ export default function Row({ title, cat, items, onSelect, onSeeAll }: RowProps)
   const t = useT();
   if (!items.length) return null;
   if (IS_TV) {
-    // onSeeAll/cat are unused here on purpose — the TV row has no "see all" affordance a remote
-    // can reach; see the heading note in TvSpotlight.
-    return <TvSpotlight items={items} title={title} onSelect={onSelect} />;
+    // The rail's "see all" heading has no equivalent a remote can land on, so the TV row spends
+    // `cat`/`onSeeAll` on a card at the END of its strip instead — see the note in TvSpotlight.
+    return <TvSpotlight items={items} title={title} cat={cat} onSelect={onSelect} onSeeAll={onSeeAll} />;
   }
   return (
     <div className="strip reveal in" data-row={cat}>

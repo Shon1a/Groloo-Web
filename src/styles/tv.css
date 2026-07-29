@@ -441,6 +441,45 @@
   display: block;
 }
 
+/* THE SEE-ALL CARD — the row's own page, sitting at the end of its strip (see TvSpotlight).
+   Deliberately the ONLY thing in a row with no picture on it: an empty framed panel is what makes
+   "the titles have run out" legible from across a room, where a card carrying artwork would just
+   look like one more title. Dashed, because a solid frame at this size reads as a disabled tile.
+   The `--border` variable the rest of this file uses is fully transparent by design, so the frame
+   is written out here rather than inherited from it. */
+.tv-spot-thumb.is-seeall {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.16);
+}
+.tv-spot-blank-ic {
+  font-size: 40px; line-height: 1;
+  color: rgba(255, 255, 255, 0.9);
+}
+.tv-spot-blank-label {
+  font-size: 13px; font-weight: 800; letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+}
+/* The same card as the BILLBOARD, once the walk reaches it. It replaces `.tv-spot-art`, so it
+   fills the layer the artwork would have filled and the title plate below it is unchanged — the
+   arrow is lifted off centre by the height of that plate so the two do not crowd each other. */
+.tv-spot-blank {
+  position: absolute; inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 84px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.16);
+  border-radius: inherit;
+}
+.tv-spot-blank .tv-spot-blank-ic { font-size: 64px; }
+
 /* billboard — pinned left, over the strip, two cross-dissolving layers.
  *
  * IT GROWS WHEN THE REMOTE IS ON IT. 3% — enough to read as "this one", small enough that the row
@@ -478,15 +517,73 @@
 }
 .tv-spot-layer.on { opacity: 1; }
 
+/* ---- THE ROW PREVIEW (muted trailer on the billboard) ------------------------------------
+   UNDERNEATH the artwork, at z-index 0, and the artwork fades off it. The obvious build — video
+   on top of the picture — cannot work here: the tag and the wordmark live INSIDE each artwork
+   layer (they cross-dissolve together, which is the point), so a video painted over the layers
+   covers the title too, and fading the LAYER to reveal a video above it takes the title with it.
+   Uncovering the video from below leaves the plate exactly where it was, on top, legible. */
+.tv-spot-trailer-slot {
+  position: absolute; inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+/* IT IS LAID OUT AT DOUBLE SIZE AND PAINTED SMALL, WHICH IS WHAT FIXES THE PICTURE QUALITY.
+   YouTube chooses a rendition from the player's own size, and this player is about 675px wide —
+   so it served a 360p-class stream, which was then MAGNIFIED by the crop below. Soft twice over,
+   and no embed parameter fixes it (the quality ones are all ignored now; size is the only lever
+   the player still listens to). Measured: `medium` before, `hd720` after.
+
+   200% makes the embed's internal viewport ~1350px, which asks YouTube for a 720p stream, and the
+   scale paints it back down into the box. The two numbers are tied: the crop is 1.35 (it hides
+   YouTube's own chrome, which creeps in at the edges even with modestbranding), so the scale is
+   1.35 ÷ 2. Rendering DOWN also means the picture is now sharper than the box it sits in rather
+   than stretched to fill it.
+
+   The cost is real and belongs on the record: a 720p stream is more to decode than a 360p one, on
+   the hardware least able to afford it. That is the trade this makes deliberately — quality on the
+   shelf, paid for in decode — and it is the first thing to reconsider if a set stutters (the
+   Settings switch turns the whole preview off). */
+.tv-spot-trailer-slot iframe {
+  position: absolute; top: 50%; left: 50%;
+  width: 200%; height: 200%;
+  border: 0;
+  transform: translate(-50%, -50%) scale(0.675);
+  transform-origin: center;
+  opacity: 0;
+  transition: opacity .9s cubic-bezier(.4, 0, .2, 1);
+  pointer-events: none;
+}
+.tv-spot-trailer-slot iframe.on { opacity: 1; }
+/* Only the ART goes; `.tv-spot-card-in` (the tag + wordmark + its scrim) stays put, so a playing
+   preview still says what it is. Slower out than the video is in, so the two overlap rather than
+   handing over through a black frame. */
+.tv-spot-hero.has-trailer .tv-spot-art {
+  opacity: 0;
+  transition: opacity 1.1s cubic-bezier(.4, 0, .2, 1);
+}
+.tv-spot-art { transition: opacity .5s ease; }
+
 .tv-spot-art {
   position: absolute; inset: 0;
   background-size: cover;
   background-repeat: no-repeat;
   background-position: center;
 }
+/* text-align IS LOAD-BEARING, and it is a reset rather than a style choice. `.tv-spot-hero` is a
+   real <button>, and the UA stylesheet gives every button `text-align: center` — which is
+   inherited by everything in here. It goes unnoticed on a card WITH a wordmark, because
+   `.tv-spot-logo` is a block-level <img> with no auto margins and so sits flush left whatever the
+   alignment says. The moment a title has no logo the fallback text has nothing anchoring it and
+   drifts to the middle of the card, which reads as a different design rather than a fallback.
+   Both states must start at the same x — that is the whole point of a fallback. LTR-only `left`
+   rather than `start`, to match a codebase that uses no logical properties anywhere. */
 .tv-spot-card-in {
   position: absolute; left: 0; right: 0; bottom: 0;
   padding: 22px 24px;
+  text-align: left;
   background: linear-gradient(0deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 60%, transparent 100%);
 }
 .tv-spot-tag {
@@ -589,6 +686,47 @@
   color: #fff;
 }
 
+/* ---- The title overlay, at 10-foot scale -------------------------------------------------
+   The web modal is a centred 1180px card, which is right on a desktop and far too small on a
+   TV: at 1920 it occupies 61% of the width, so a third of the screen is wasted on the dimmed
+   home page behind it and every control inside is smaller than it needs to be from a sofa.
+   Here it fills the screen instead, minus a margin.
+
+   NOT SCOPED TO `.tv-shell`, AND THAT IS NOT AN OVERSIGHT. The overlay is mounted in App.tsx as
+   a SIBLING of the shell (so it can sit above every route), which means `.tv-shell .overlay`
+   matches nothing at all — a selector that fails silently and looks correct. Everything in this
+   file is TV-only by virtue of the file, so an unscoped selector is both safe and the only thing
+   that works. The same is true of `.m-ambient` at the top.
+
+   THE MARGIN IS THE OVERLAY'S PADDING, so the modal can simply be 100% of what is left. 48px
+   matches the top bar's own gutter, which is what keeps the overlay's edges on the same vertical
+   line as the nav above it; the 4vh top and bottom preserves the 92vh height the web modal
+   already had. Both sit clear of the ~5% TV overscan cut zone, which is the real constraint on
+   a set that still overscans. */
+.overlay {
+  padding: 4vh 48px;
+}
+.overlay .modal {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: 100%;
+}
+
+/* The cast column is a fixed 300px, sized against a 1180px card. Left alone it would keep that
+   width while the main column absorbed every pixel of the extra ~640, which reads as a wide
+   article with a thin strip bolted to it rather than two columns. Widened in proportion — the
+   synopsis is capped at 64ch upstream, so the main column does not run away either.
+
+   A CLAMP RATHER THAN A SECOND FIXED NUMBER, because both TV resolutions ship. 380px was chosen
+   against 1080p; at 720p — the size the webOS package is actually built at — the card is only
+   1184 wide and that same 380 becomes a third of the body, which is a heavier sidebar than the
+   web has, not a lighter one. 20vw holds the proportion at both, and the floor is simply the
+   web's own 300 so the small end can never come out narrower than the design it started from. */
+.overlay .m-body {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px);
+}
+
 /* ---- Stage 5: remote / D-pad focus ------------------------------------------------------
    A clear focus ring for the element the remote is on (keyboard focus only, so a mouse user
    never sees it), and scroll-margin so moving focus never tucks a tile under the fixed top bar.
@@ -665,6 +803,11 @@
 @media (prefers-reduced-motion: reduce) {
   .tv-spot-strip { transition: none; }
   .tv-spot-layer { transition: none; }
+  /* The preview still plays — it is content, not decoration, and the modal treats it the same
+     way — but it cuts in rather than dissolving. */
+  .tv-spot-trailer-slot iframe,
+  .tv-spot-art,
+  .tv-spot-hero.has-trailer .tv-spot-art { transition: none; }
   .tv-spot-rowtitle, .tv-spot-info { transition: none; }
   .tv-spot.is-open .tv-spot-info { animation: none; }
   .tv-spot-hero { transition: none; }

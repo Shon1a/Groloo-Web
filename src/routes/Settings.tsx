@@ -18,6 +18,8 @@ import ColorPicker from '../components/ColorPicker';
  * deletion to be reachable from inside the app, and the Attributions screen has to sit
  * within a couple of D-pad presses of Settings once the TV shells drop the web footer. */
 
+const IS_TV = import.meta.env.MODE === 'tv';
+
 const icons = {
   interface: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 20h8M12 17v3" /></svg>,
   autoplay: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M10 8.5l5.5 3.5L10 15.5z" fill="currentColor" stroke="none" /></svg>,
@@ -203,6 +205,16 @@ export default function Settings() {
             <label>{t('settings.blur_unwatched')}</label>
             <Toggle checked={settings.blurUnwatched} onChange={set('blurUnwatched')} label={t('settings.blur_unwatched')} />
           </div>
+          {/* TV BUILD ONLY. The switch is here because the cost of a row preview lands on the set
+              itself and no two sets are alike — see the note in the settings store. Hidden in the
+              web build rather than shown-and-inert: an option that does nothing is worse than no
+              option, and the compile-time constant keeps it out of that bundle entirely. */}
+          {IS_TV && (
+            <div className="setting-row">
+              <label>{t('settings.row_trailers')}</label>
+              <Toggle checked={settings.tvRowTrailers} onChange={set('tvRowTrailers')} label={t('settings.row_trailers')} />
+            </div>
+          )}
         </Card>
 
         <Card icon={icons.autoplay} head={t('settings.autoplay_head')} desc={t('settings.autoplay_desc')}>

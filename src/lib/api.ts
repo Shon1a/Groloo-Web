@@ -23,7 +23,33 @@ function resolveApiBase(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="api-base"]');
   if (meta && meta.content.trim()) return meta.content.trim().replace(/\/$/, '');
   const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
-  return isLocal ? '' : 'https://groloo-server.onrender.com';
+  if (isLocal) return '';
+  /* A DEV SERVER OPENED FROM ANOTHER DEVICE ON THE LAN IS STILL LOCAL, and saying so is what
+   * makes testing on a real TV possible at all. `npm run dev:tv -- --host` is the only way to
+   * see the TV build on TV hardware, but the set reaches it as `http://192.168.x.x:5173`, and
+   * on that hostname the check above says "not local" and points every call at the PRODUCTION
+   * API on Render. Render's CORS allowlist naturally does not contain a random private
+   * address, so every request fails preflight and the TV shows an app with no catalog in it —
+   * for a reason nothing on screen explains.
+   *
+   * Treating a private address as local sends the calls same-origin instead, where Vite's
+   * `server.proxy` forwards them to the local API from the server side, and CORS never enters
+   * into it (see vite.config.ts).
+   *
+   * GATED ON `import.meta.env.DEV`, so a production bundle behaves exactly as it did before —
+   * this branch is compiled out of every `vite build`, and the only thing that can reach it is
+   * a dev server someone deliberately exposed with `--host`. That matters because a shipped app
+   * served through a private address (a LAN reverse proxy, say) must still call the real API. */
+  if (import.meta.env.DEV && isPrivateHost(location.hostname)) return '';
+  return 'https://groloo-server.onrender.com';
+}
+
+/** RFC1918 / link-local / mDNS — the addresses a home network hands out. */
+function isPrivateHost(h: string): boolean {
+  return /^10\./.test(h)
+    || /^192\.168\./.test(h)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+    || /\.local$/i.test(h);
 }
 
 export const API_BASE = resolveApiBase();

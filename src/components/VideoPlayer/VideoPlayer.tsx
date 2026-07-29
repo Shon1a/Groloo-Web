@@ -6,6 +6,7 @@ import { useT } from '../../i18n/i18n';
 import { loadHls, isHlsUrl, type HlsInstance } from '../../lib/hls';
 import { toVttBlobUrl } from '../../lib/subtitles';
 import { apiFetch } from '../../lib/api';
+import { registerBackHandler } from '../../lib/tvKeys';
 import EpisodePanel from './EpisodePanel';
 
 // skip-intro heuristic window (s) + credits-tail length when no IntroDB markers exist
@@ -435,7 +436,21 @@ export default function VideoPlayer() {
   useEffect(() => {
     if (!source) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { if (document.fullscreenElement) document.exitFullscreen(); else close(); return; }
+      /* Escape walks OUT one layer at a time. It used to close the whole player from anywhere,
+       * so dismissing the gear menu tore down playback with it — two layers deep, wrong layer
+       * closed. (On TV this handler never sees Escape at all: lib/tvKeys.ts resolves Back in the
+       * capture phase and swallows it. The same order is repeated here because the website has
+       * no such resolver and the bug was the website's too.) */
+      if (e.key === 'Escape') {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (menuOpen) setMenuOpen(false);
+        else if (epPanelOpen) setEpPanelOpen(false);
+        else close();
+        return;
+      }
+      /* Transport keys belong to the VIDEO, so they stand down while a panel is over it —
+       * otherwise Left/Right seeks the film underneath the menu the user is reading. */
+      if (menuOpen || epPanelOpen) return;
       if (e.key === ' ' || e.key === 'k') { e.preventDefault(); togglePlay(); }
       else if (e.key === 'ArrowLeft') nudge(-10);
       else if (e.key === 'ArrowRight') nudge(10);
@@ -447,7 +462,20 @@ export default function VideoPlayer() {
     window.addEventListener('keydown', onKey);
     document.addEventListener('fullscreenchange', onFs);
     return () => { window.removeEventListener('keydown', onKey); document.removeEventListener('fullscreenchange', onFs); };
-  }, [source, close, togglePlay, nudge, toggleMute, toggleFs, bump]);
+  }, [source, close, togglePlay, nudge, toggleMute, toggleFs, bump, menuOpen, epPanelOpen]);
+
+  /* The two layers the Back chain cannot see from outside: both are local state, not a store.
+   * Registered while the player is open so a remote's Back closes the menu, then the episode
+   * panel, then playback — one press each. Inert on the website, where nothing installs the
+   * resolver that calls these. */
+  useEffect(() => {
+    if (!source) return;
+    return registerBackHandler(() => {
+      if (menuOpen) { setMenuOpen(false); return true; }
+      if (epPanelOpen) { setEpPanelOpen(false); return true; }
+      return false;
+    });
+  }, [source, menuOpen, epPanelOpen]);
 
   // picture-enhance: rewrite the unsharp-mask convolution kernel from the clarity
   // slider (identity at 0 → 3×3 Laplacian sharpen at 1; energy-preserving so it
