@@ -218,6 +218,9 @@ const SEED: Record<string, string> = {
   'settings.autoplay_next': 'Auto-play next episode',
   'settings.sub_size': 'Subtitle size',
   'settings.blur_unwatched': 'Blur unwatched episode stills',
+  // TV build only — the row-preview switch. Worded as what it does on screen, not as the
+  // performance trade-off behind it (see the note in stores/settings.ts).
+  'settings.row_trailers': 'Play trailers on the home rows',
   // colour picker — the saturation/brightness square and the hue rail have no visible
   // label of their own, so they carry aria-only names (_a, per ctl.play_a / ui.nav_toggle_a).
   // The trigger reuses the row's visible settings.sub_color / sub_outline key instead.
