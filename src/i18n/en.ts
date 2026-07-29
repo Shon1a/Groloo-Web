@@ -129,6 +129,11 @@ const SEED: Record<string, string> = {
   'modal.watch_authed': 'WATCH',
   'modal.resume': 'RESUME',
   'modal.close_aria': 'Close details',
+  // Share control. Two labels for one button because it reports its own result: the icon
+  // swaps to a tick and the accessible name has to change with it, or a screen reader
+  // announces "Copy link" for a button that has already copied.
+  'modal.copy_link': 'Copy link',
+  'modal.link_copied': 'Link copied',
   'modal.unmute': 'Unmute trailer',
   'modal.mute': 'Mute trailer',
   'modal.loading_synopsis': 'Loading synopsis…',
@@ -218,6 +223,9 @@ const SEED: Record<string, string> = {
   'settings.autoplay_next': 'Auto-play next episode',
   'settings.sub_size': 'Subtitle size',
   'settings.blur_unwatched': 'Blur unwatched episode stills',
+  // TV build only — the row-preview switch. Worded as what it does on screen, not as the
+  // performance trade-off behind it (see the note in stores/settings.ts).
+  'settings.row_trailers': 'Play trailers on the home rows',
   // colour picker — the saturation/brightness square and the hue rail have no visible
   // label of their own, so they carry aria-only names (_a, per ctl.play_a / ui.nav_toggle_a).
   // The trigger reuses the row's visible settings.sub_color / sub_outline key instead.
