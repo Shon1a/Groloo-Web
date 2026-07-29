@@ -572,9 +572,18 @@
   background-repeat: no-repeat;
   background-position: center;
 }
+/* text-align IS LOAD-BEARING, and it is a reset rather than a style choice. `.tv-spot-hero` is a
+   real <button>, and the UA stylesheet gives every button `text-align: center` — which is
+   inherited by everything in here. It goes unnoticed on a card WITH a wordmark, because
+   `.tv-spot-logo` is a block-level <img> with no auto margins and so sits flush left whatever the
+   alignment says. The moment a title has no logo the fallback text has nothing anchoring it and
+   drifts to the middle of the card, which reads as a different design rather than a fallback.
+   Both states must start at the same x — that is the whole point of a fallback. LTR-only `left`
+   rather than `start`, to match a codebase that uses no logical properties anywhere. */
 .tv-spot-card-in {
   position: absolute; left: 0; right: 0; bottom: 0;
   padding: 22px 24px;
+  text-align: left;
   background: linear-gradient(0deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 60%, transparent 100%);
 }
 .tv-spot-tag {
@@ -675,6 +684,47 @@
   letter-spacing: 0;
   text-transform: none;
   color: #fff;
+}
+
+/* ---- The title overlay, at 10-foot scale -------------------------------------------------
+   The web modal is a centred 1180px card, which is right on a desktop and far too small on a
+   TV: at 1920 it occupies 61% of the width, so a third of the screen is wasted on the dimmed
+   home page behind it and every control inside is smaller than it needs to be from a sofa.
+   Here it fills the screen instead, minus a margin.
+
+   NOT SCOPED TO `.tv-shell`, AND THAT IS NOT AN OVERSIGHT. The overlay is mounted in App.tsx as
+   a SIBLING of the shell (so it can sit above every route), which means `.tv-shell .overlay`
+   matches nothing at all — a selector that fails silently and looks correct. Everything in this
+   file is TV-only by virtue of the file, so an unscoped selector is both safe and the only thing
+   that works. The same is true of `.m-ambient` at the top.
+
+   THE MARGIN IS THE OVERLAY'S PADDING, so the modal can simply be 100% of what is left. 48px
+   matches the top bar's own gutter, which is what keeps the overlay's edges on the same vertical
+   line as the nav above it; the 4vh top and bottom preserves the 92vh height the web modal
+   already had. Both sit clear of the ~5% TV overscan cut zone, which is the real constraint on
+   a set that still overscans. */
+.overlay {
+  padding: 4vh 48px;
+}
+.overlay .modal {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: 100%;
+}
+
+/* The cast column is a fixed 300px, sized against a 1180px card. Left alone it would keep that
+   width while the main column absorbed every pixel of the extra ~640, which reads as a wide
+   article with a thin strip bolted to it rather than two columns. Widened in proportion — the
+   synopsis is capped at 64ch upstream, so the main column does not run away either.
+
+   A CLAMP RATHER THAN A SECOND FIXED NUMBER, because both TV resolutions ship. 380px was chosen
+   against 1080p; at 720p — the size the webOS package is actually built at — the card is only
+   1184 wide and that same 380 becomes a third of the body, which is a heavier sidebar than the
+   web has, not a lighter one. 20vw holds the proportion at both, and the floor is simply the
+   web's own 300 so the small end can never come out narrower than the design it started from. */
+.overlay .m-body {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px);
 }
 
 /* ---- Stage 5: remote / D-pad focus ------------------------------------------------------
