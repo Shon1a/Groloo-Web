@@ -9,6 +9,13 @@ const KEY = 'groloo.settings.v1';
 export interface Settings {
   // interface
   blurUnwatched: boolean;
+  /* TV build only: play a muted trailer on the row billboard once the remote rests on a title.
+   * A setting rather than a fixed behaviour because it is the one feature here whose cost lands
+   * squarely on the weakest hardware the app runs on — an autoplaying embed is the heaviest thing
+   * on the screen, and how well a given set copes is not something the app can measure. On by
+   * default (the shelf preview is the expected behaviour on a TV); off is one switch away for a
+   * set where browsing starts to feel sticky. Ignored entirely by the web build. */
+  tvRowTrailers: boolean;
   // auto-play
   autoplayNext: boolean;
   nextPopup: number;          // seconds the next-video popup stays up
@@ -32,6 +39,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   blurUnwatched: false,
+  tvRowTrailers: true,
   autoplayNext: true,
   nextPopup: 15,
   subLang: 'off',
