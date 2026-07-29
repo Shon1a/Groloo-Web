@@ -158,6 +158,86 @@
                                                  the hero loses full-bleed and black cuts appear. */
   }
 
+  /* ---------- rail glyph animations ----------
+     The seven nav glyphs (HomeIcon &co) animate again on hover / tap / keyboard focus. These
+     are the same motions the `motion`-driven versions played before Phase 2 dropped that
+     library — re-authored as plain CSS, so the polish is back with zero bytes of dependency
+     and it all runs on the webOS 22 / Chromium 87 floor.
+
+     NOT inside the min-width:901px block above on purpose: the same components render in the
+     ≤900px floating dock (and in TvTopNav), and these rules have to reach them there too.
+
+     Each icon's root <div> carries `.ico-anim` while it plays. useIconAnimation adds it, and
+     re-adds it after a forced reflow so a second hover replays from frame 0 — see that file.
+
+     NO rule below uses `forwards`, and every track ends on the icon's resting frame. That is
+     what makes the dock safe: a tap there calls startAnimation() and no mouseleave ever
+     follows to undo it, so anything that held a pose would hold it for the rest of the
+     session. The global prefers-reduced-motion block at the top of this file zeroes them all.
+
+     Transforms on the SVG children resolve in viewBox units (transform-box defaults to
+     view-box), so the origins and distances here are plain viewBox coordinates. */
+
+  /* home: the door re-draws itself, roof and walls hold still. pathLength="1" on the path
+     normalises its length, which is what lets the dash run a clean 1 → 0. */
+  .ico-anim .ico-home-door{animation:ico-home-door .6s ease}
+  @keyframes ico-home-door{
+    0%{stroke-dasharray:1;stroke-dashoffset:1;opacity:0}
+    33%{opacity:1}
+    100%{stroke-dasharray:1;stroke-dashoffset:0;opacity:1}
+  }
+
+  /* layers: top sheet drops, bottom sheet rises, both return — the stack closes and reopens */
+  .ico-anim .ico-layers-top{animation:ico-layers-top .6s ease-in-out}
+  .ico-anim .ico-layers-bottom{animation:ico-layers-bottom .6s ease-in-out}
+  @keyframes ico-layers-top{50%{transform:translateY(5px)}}
+  @keyframes ico-layers-bottom{50%{transform:translateY(-5px)}}
+
+  /* clapperboard: the board tips and holds, the hinged arm claps twice as fast. Pivots are the
+     board's bottom-left corner and the arm's hinge — the arm inherits the board's tilt. */
+  .ico-anim .ico-clap-board{animation:ico-clap-board .8s ease-in-out;transform-origin:4px 20px}
+  .ico-anim .ico-clap-arm{animation:ico-clap-arm .4s ease-in-out;transform-origin:3px 11px}
+  @keyframes ico-clap-board{0%,50%{transform:rotate(-10deg)}100%{transform:rotate(0)}}
+  @keyframes ico-clap-arm{
+    0%{transform:rotate(0)}
+    30%{transform:rotate(-10deg)}
+    60%{transform:rotate(16deg)}
+    100%{transform:rotate(0)}
+  }
+
+  /* fan: one full turn, so it lands exactly where it started. The easing overshoots slightly
+     past the end and settles — that's the old spring. */
+  .ico-anim .ico-fan{animation:ico-fan-spin .75s cubic-bezier(.32,1.24,.6,1);transform-origin:50% 50%}
+  @keyframes ico-fan-spin{to{transform:rotate(360deg)}}
+
+  /* search: the magnifier waggles about the tip of its handle */
+  .ico-anim .ico-search{animation:ico-search-wiggle .8s ease-in-out;transform-origin:bottom right}
+  @keyframes ico-search-wiggle{
+    0%{transform:rotate(0)}
+    20%{transform:rotate(17deg)}
+    40%{transform:rotate(-10deg)}
+    60%{transform:rotate(5deg)}
+    80%{transform:rotate(-1deg)}
+    100%{transform:rotate(0)}
+  }
+
+  /* grid: the four squares chase each other one seat clockwise, pause, and come back.
+     11 = the gap between the 7-wide squares, so each lands exactly on its neighbour's seat. */
+  .ico-anim .ico-grid-1{animation:ico-grid-1 .8s ease-in-out}
+  .ico-anim .ico-grid-2{animation:ico-grid-2 .8s ease-in-out}
+  .ico-anim .ico-grid-3{animation:ico-grid-3 .8s ease-in-out}
+  .ico-anim .ico-grid-4{animation:ico-grid-4 .8s ease-in-out}
+  @keyframes ico-grid-1{40%,60%{transform:translateX(11px)}}
+  @keyframes ico-grid-2{40%,60%{transform:translateY(11px)}}
+  @keyframes ico-grid-3{40%,60%{transform:translateX(-11px)}}
+  @keyframes ico-grid-4{40%,60%{transform:translateY(-11px)}}
+
+  /* user: head and shoulders bob out of step and settle */
+  .ico-anim .ico-user-body{animation:ico-user-body .6s ease-in-out}
+  .ico-anim .ico-user-head{animation:ico-user-head .6s ease-in-out}
+  @keyframes ico-user-body{33%{transform:translateY(4px)}66%{transform:translateY(-2px)}}
+  @keyframes ico-user-head{33%{transform:translateY(1px)}66%{transform:translateY(-2px)}}
+
   .search input{order:1;flex:1;min-width:0;background:none;border:none;outline:none;color:#fff;font-family:inherit;font-size:11.5px}
   .search input::placeholder{color:rgba(255,255,255,.45)}
   .search .mono{display:none}                       /* hide the decorative magnifier / enter glyphs */

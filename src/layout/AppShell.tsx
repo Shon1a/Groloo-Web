@@ -48,7 +48,8 @@ type RailIconHandle = { startAnimation: () => void; stopAnimation: () => void };
  * that physically sprang from the old item to the new one on every route change — the
  * Instagram sliding-dock feel. That spring was the last thing holding the `motion`
  * dependency in the app, and `motion` was the bundle's single largest weight, so it went
- * with the icon animations in Phase 2.
+ * with the icon animations in Phase 2. (The icon animations have since come back as plain
+ * CSS keyframes — see useIconAnimation. The pill slide deliberately has not.)
  *
  * WHAT CHANGED AND WHAT DID NOT: the pill's RESTING position is identical — it still sits in
  * the active item, same size, same 999px radius — so nothing a screenshot captures moved.
@@ -154,10 +155,11 @@ export default function AppShell() {
                 className={`rail-item${r.rail === 'myspace' ? ' rail-myspace' : ''}${isActive(r.to) ? ' active' : ''}`}
                 role="button" tabIndex={0} data-rail={r.rail}
                 // The mobile dock has no hover, so the tap plays it there — and no mouseleave
-                // ever follows to call stopAnimation. Every glyph is chosen to survive that:
-                // each either ends where it started, or (FanIcon) holds a pose its own
-                // rotational symmetry makes indistinguishable from rest. See LayersIcon for
-                // the one that could not, and what it cost.
+                // ever follows to call stopAnimation. Every glyph is authored to survive that:
+                // all seven end on their resting frame, so nothing can be stranded mid-pose.
+                // See LayersIcon for the variant that could not, and why it isn't used.
+                // stopAnimation is consequently a no-op; it stays on the handle so the rail
+                // keeps driving all seven glyphs through one interface.
                 onClick={() => { anim.ref.current?.startAnimation(); go(r.to); }}
                 onMouseEnter={() => anim.ref.current?.startAnimation()}
                 onMouseLeave={() => anim.ref.current?.stopAnimation()}
