@@ -23,7 +23,7 @@ function resolveApiBase(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="api-base"]');
   if (meta && meta.content.trim()) return meta.content.trim().replace(/\/$/, '');
   const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
-  return isLocal ? '' : 'https://stredio.onrender.com';
+  return isLocal ? '' : 'https://groloo-server.onrender.com';
 }
 
 export const API_BASE = resolveApiBase();
