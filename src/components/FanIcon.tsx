@@ -1,27 +1,26 @@
-import type { HTMLAttributes } from 'react';
-import { forwardRef, useImperativeHandle } from 'react';
+import { forwardRef } from 'react';
+
 import { cn } from '@/lib/utils';
+import { useIconAnimation, type AnimatedIconHandle, type AnimatedIconProps } from './useIconAnimation';
 
-/* Static SVG — resting frame of the former animated fan glyph. See HomeIcon for why the
- * `motion` hover animation was removed in Phase 2. */
+/* lucide-animated's "fan" glyph — the pinwheel spins on hover. Keyframes in app.css
+ * (@keyframes ico-fan-spin).
+ *
+ * The `motion` version sprang to 270deg and HELD there while hovered, unwinding only on
+ * mouseleave. That was safe only because the blades are 4-fold symmetric, so a stuck 270deg
+ * looks like rest. The CSS version does a full 360 instead: one continuous spin that lands
+ * exactly where it started, so nothing is stuck to begin with and the mobile dock's
+ * stopAnimation-less tap needs no such alibi. The spring overshoot is kept as the easing. */
 
-export interface FanIconHandle {
-  startAnimation: () => void;
-  stopAnimation: () => void;
-}
+export type FanIconHandle = AnimatedIconHandle;
 
-interface FanIconProps extends HTMLAttributes<HTMLDivElement> {
-  size?: number;
-}
-
-const NOOP: FanIconHandle = { startAnimation: () => {}, stopAnimation: () => {} };
-
-const FanIcon = forwardRef<FanIconHandle, FanIconProps>(
-  ({ className, size = 28, ...props }, ref) => {
-    useImperativeHandle(ref, () => NOOP);
+const FanIcon = forwardRef<FanIconHandle, AnimatedIconProps>(
+  ({ onMouseEnter, className, size = 28, ...props }, ref) => {
+    const { hostRef, handleMouseEnter } = useIconAnimation(ref, onMouseEnter);
     return (
-      <div className={cn(className)} {...props}>
+      <div className={cn(className)} onMouseEnter={handleMouseEnter} ref={hostRef} {...props}>
         <svg
+          className="ico-fan"
           fill="none"
           height={size}
           stroke="currentColor"
