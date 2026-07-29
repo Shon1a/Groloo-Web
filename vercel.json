@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["fra1"],
+  "rewrites": [
+    { "source": "/t/(.*)", "destination": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/build/(.*)",
