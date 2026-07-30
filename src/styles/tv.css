@@ -622,6 +622,26 @@
 .tv-spot-logo { display: block; max-width: 62%; max-height: 84px; object-fit: contain; }
 .tv-spot-cardtitle { display: block; font-size: 34px; font-weight: 800; color: #fff; }
 
+/* ---- RESUME PROGRESS (Continue Watching) --------------------------------------------------
+   The same bar the web rail card carries, at TV scale: 6px rather than 5, because it is read
+   from a sofa and it is the only thing on the row that says "you are part-way through this".
+   Drawn at the very bottom edge of the billboard AND of each strip tile — both clip it into
+   their own corners with their existing overflow:hidden + radius, so no corner rounding is
+   repeated here. z-index puts it over the title plate's gradient, which reaches the same edge. */
+.tv-spot-progress {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 6px; z-index: 3;
+  background: rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  pointer-events: none;
+}
+.tv-spot-thumb .tv-spot-progress { height: 5px; }
+.tv-spot-progress > i {
+  display: block; height: 100%; min-width: 4px;
+  background: var(--accent, #ffffff);
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
+}
+
 /* Reserved in BOTH states (see the note at the top of this section): the height is fixed and
    the panel is merely invisible while the row is closed, so opening one never reflows the page.
    The animation is scoped to .is-open — on a closed row it would fight the opacity below and,
@@ -713,46 +733,417 @@
   color: #fff;
 }
 
-/* ---- The title overlay, at 10-foot scale -------------------------------------------------
-   The web modal is a centred 1180px card, which is right on a desktop and far too small on a
-   TV: at 1920 it occupies 61% of the width, so a third of the screen is wasted on the dimmed
-   home page behind it and every control inside is smaller than it needs to be from a sofa.
-   Here it fills the screen instead, minus a margin.
+/* ==== TV TITLE SCREEN ======================================================================
+   The overlay used to be the WEB modal stretched to fill the panel: a 1180px scrolling card
+   with the hero picture, then the synopsis, then episodes, then sources, then a sticky cast
+   column, then a grid of recommendations. Sized up it was still a web page — the one control a
+   viewer opens a title FOR (a source to press play on) lived below the fold, past a dropdown, a
+   column of headshots and twenty thumbnails. About thirty images and thirty D-pad stops.
+
+   The TV build now renders different MARKUP for the same data — src/components/DetailModal/
+   TvDetail.tsx, which explains the shape and what was dropped. This section styles it: one
+   screen, no page scroll, "what it is" on the left and "what you do" on the right, with only
+   the right-hand panel able to move.
 
    NOT SCOPED TO `.tv-shell`, AND THAT IS NOT AN OVERSIGHT. The overlay is mounted in App.tsx as
    a SIBLING of the shell (so it can sit above every route), which means `.tv-shell .overlay`
    matches nothing at all — a selector that fails silently and looks correct. Everything in this
    file is TV-only by virtue of the file, so an unscoped selector is both safe and the only thing
-   that works. The same is true of `.m-ambient` at the top.
+   that works. The same is true of `.m-ambient` at the top. It is also why the focus ring has to
+   be restated at the foot of this section rather than inherited from the `.tv-shell` block.
 
-   THE MARGIN IS THE OVERLAY'S PADDING, so the modal can simply be 100% of what is left. 48px
-   matches the top bar's own gutter, which is what keeps the overlay's edges on the same vertical
-   line as the nav above it; the 4vh top and bottom preserves the 92vh height the web modal
-   already had. Both sit clear of the ~5% TV overscan cut zone, which is the real constraint on
-   a set that still overscans. */
-.overlay {
-  padding: 4vh 48px;
+   TYPE IS SIZED FOR A SOFA, NOT A DESK. Every size below is a clamp with a vw term so the 720p
+   webOS package and a 1080p set land in the same proportion; the floors are the smallest thing
+   still readable across a room, which is roughly 1.6x the web's equivalent. */
+.tv-det {
+  padding: 0;
+  display: block;               /* the web .overlay is a centring flexbox; this one is a canvas */
+  background: #000;
+  overflow: hidden;
 }
-.overlay .modal {
+
+/* ---- Artwork + scrim.
+   ONE picture, at w1280. The web hero paints a second, blurred copy of the poster behind the
+   backdrop as ambience — the single most expensive decorative layer in the app, and invisible
+   under a full-bleed still. It is simply not rendered here.
+
+   The scrim is two linear gradients and nothing else: a left-to-right wash that buys the
+   synopsis its contrast, and a soft floor so the action row never sits on a bright patch of
+   sky. No radial, no blur — those cost fill rate on a TV GPU and neither is load-bearing once
+   the copy has a dark side of the frame to live on. */
+.tv-det-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: #000;
+}
+.tv-det-art img {
   width: 100%;
-  max-width: none;
   height: 100%;
+  object-fit: cover;
+  opacity: .9;
+}
+.tv-det-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .94) 0%, rgba(0, 0, 0, .84) 28%, rgba(0, 0, 0, .42) 58%, rgba(0, 0, 0, .28) 100%),
+    linear-gradient(0deg, rgba(0, 0, 0, .8) 0%, rgba(0, 0, 0, .25) 34%, transparent 62%);
+}
+
+/* ---- The two columns.
+   Padding is the overscan margin — a set that still overscans cuts roughly 5% off each edge, so
+   nothing readable may sit inside that band. `align-items: end` bottom-anchors the copy against
+   the picture the way the row billboards already do, and stretching only the panel means the
+   left column never reflows when a synopsis runs long. */
+.tv-det-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(400px, 33vw, 620px);
+  gap: clamp(32px, 4vw, 76px);
+  align-items: end;
+  padding: clamp(40px, 6vh, 76px) clamp(48px, 4.5vw, 92px);
+}
+.tv-det-info {
+  align-self: end;
+  min-width: 0;
+  max-width: 62ch;
+}
+
+/* ---- Title, meta, synopsis, credits ---- */
+.tv-det-title {
+  margin: 0 0 clamp(12px, 1.4vh, 20px);
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: clamp(40px, 4.4vw, 76px);
+  line-height: 1.08;
+  letter-spacing: .02em;
+  color: #fff;
+  /* No gradient text clip here. The web title paints itself through `background-clip: text`,
+     which forces the whole heading onto its own composited layer for a colour effect that is
+     invisible at this size against a photograph. Plain white reads better and costs nothing. */
+}
+.tv-det-title .title-logo {
+  display: block;
+  width: auto;
+  height: clamp(64px, 8.5vh, 130px);
+  max-width: min(100%, 560px);
+  object-fit: contain;
+  object-position: left center;
+}
+.tv-det-meta {
+  font-family: var(--font-mono);
+  font-size: clamp(17px, 1.15vw, 23px);
+  letter-spacing: .04em;
+  color: #e6e6e6;
+  margin-bottom: 8px;
+}
+.tv-det-genres {
+  font-size: clamp(16px, 1.05vw, 21px);
+  letter-spacing: .02em;
+  color: #a9a9a9;
+  margin-bottom: clamp(14px, 1.8vh, 24px);
+}
+/* Three lines, hard. A synopsis is context, not the reason the screen is open — and an
+   uncapped one pushes the action row down the frame, which on a fixed-height layout is the
+   difference between WATCH sitting where the eye expects it and moving per title. */
+.tv-det-plot {
+  margin: 0 0 clamp(14px, 1.8vh, 22px);
+  font-size: clamp(18px, 1.2vw, 25px);
+  line-height: 1.5;
+  color: #d2d2d2;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* The cast column, flattened to two lines. The web version is a sticky sidebar of circular
+   headshots; at 38px they are unreadable from a sofa, so the names — the actual information —
+   ship as text and a dozen image requests do not happen at all. */
+.tv-det-credits {
+  margin-bottom: clamp(20px, 2.6vh, 34px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tv-det-credit {
+  font-size: clamp(15px, 1vw, 20px);
+  line-height: 1.45;
+  color: #b8b8b8;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tv-det-credit-role {
+  font-family: var(--font-mono);
+  font-size: .74em;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-right: 10px;
+}
+:root[data-lang="ka"] .tv-det-credit-role {
+  text-transform: none;
+  letter-spacing: .06em;
+}
+
+/* ---- Actions ---- */
+.tv-det-actions {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 1vw, 18px);
+}
+.tv-det-watch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border: none;
+  border-radius: 8px;
+  padding: clamp(13px, 1.5vh, 19px) clamp(26px, 2.4vw, 44px);
+  background: #fff;
+  color: #0b0b0b;
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: clamp(18px, 1.25vw, 26px);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  overflow: hidden;
+}
+:root[data-lang="ka"] .tv-det-watch { text-transform: none; letter-spacing: .02em; }
+.tv-det-watch .ic { font-size: .9em; }
+.tv-det-watch.has-resume { padding-bottom: calc(clamp(13px, 1.5vh, 19px) + 3px); }
+.tv-det-resume-at { font-weight: 600; opacity: .55; }
+.tv-det-disc {
+  display: grid;
+  place-items: center;
+  width: clamp(52px, 3.6vw, 68px);
+  height: clamp(52px, 3.6vw, 68px);
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, .38);
+  background: rgba(0, 0, 0, .45);
+  color: #fff;
+  font-size: clamp(22px, 1.5vw, 30px);
+  line-height: 1;
+  cursor: pointer;
+}
+.tv-det-disc.on { border-color: var(--accent); color: var(--accent); }
+
+/* ---- The panel: the only thing on this screen that scrolls -------------------------------
+   `min-height: 0` on both the panel and the list is what actually lets the list scroll: a grid
+   item's default `min-height: auto` refuses to shrink below its content, so without it the
+   panel grows past the viewport and the page scrolls instead of the list — which is the exact
+   behaviour this screen exists to remove.
+
+   TvSpatialNav needs no wiring for it. `scrollParent()` walks up from the focused row to the
+   nearest ancestor with its own overflow, finds `.tv-det-list`, and animates THAT — the same
+   easing it uses for the page. */
+.tv-det-panel {
+  /* TOP-ALIGNED AND CONTENT-HEIGHT, not stretched. Stretched, a title with two sources drew a
+     half-empty black slab down the whole right of the screen; top-aligned it also keeps the
+     panel heading at the same y on every title, which is what stops the eye re-hunting for it
+     between one title and the next. `max-height: 100%` is what still lets a 30-episode list
+     fill the column and scroll. */
+  align-self: start;
   max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  /* NEARLY OPAQUE ON PURPOSE. Every other translucent surface in this build sits over a dark
+     page; this one sits over a full-bleed photograph, and the frosting that would normally
+     separate it (backdrop-filter) is banned at the top of this file because a TV GPU stalls on
+     it. Without the blur, translucency is just a bright picture showing through a list of
+     episode names — so the panel pays for its own contrast with alpha instead. */
+  background: rgba(9, 9, 9, .93);
+  padding: clamp(18px, 2vh, 28px) clamp(16px, 1.4vw, 26px);
+}
+.tv-det-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: clamp(12px, 1.6vh, 20px);
+}
+.tv-det-panel-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: clamp(14px, .95vw, 19px);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: #9a9a9a;
+}
+:root[data-lang="ka"] .tv-det-panel-title { text-transform: none; letter-spacing: .1em; }
+.tv-det-panel-sub { color: var(--accent); letter-spacing: .1em; }
+.tv-det-back {
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 999px;
+  background: transparent;
+  color: #ddd;
+  font-family: var(--font-mono);
+  font-size: clamp(13px, .9vw, 17px);
+  letter-spacing: .06em;
+  padding: 6px 16px;
+  cursor: pointer;
 }
 
-/* The cast column is a fixed 300px, sized against a 1180px card. Left alone it would keep that
-   width while the main column absorbed every pixel of the extra ~640, which reads as a wide
-   article with a thin strip bolted to it rather than two columns. Widened in proportion — the
-   synopsis is capped at 64ch upstream, so the main column does not run away either.
-
-   A CLAMP RATHER THAN A SECOND FIXED NUMBER, because both TV resolutions ship. 380px was chosen
-   against 1080p; at 720p — the size the webOS package is actually built at — the card is only
-   1184 wide and that same 380 becomes a third of the body, which is a heavier sidebar than the
-   web has, not a lighter one. 20vw holds the proportion at both, and the floor is simply the
-   web's own 300 so the small end can never come out narrower than the design it started from. */
-.overlay .m-body {
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px);
+/* Pills replace both dropdowns (source picker, language picker). A menu that opens over itself
+   is a mouse control: on a remote it costs an OK to open, arrows to walk, an OK to choose, and
+   it hides the thing it is choosing between. Laid flat, the options are just there and Left/
+   Right walks them — one press per change, nothing to dismiss. */
+.tv-det-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: clamp(12px, 1.6vh, 18px);
+  flex: 0 0 auto;
 }
+.tv-det-pill {
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .05);
+  color: #cfcfcf;
+  font-size: clamp(15px, 1vw, 19px);
+  padding: clamp(8px, .9vh, 12px) clamp(16px, 1.2vw, 24px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tv-det-pill.on {
+  background: #fff;
+  border-color: #fff;
+  color: #0b0b0b;
+  font-weight: 600;
+}
+.tv-det-seasons { max-height: 30vh; overflow-y: auto; }
+.tv-det-langs .flag { vertical-align: -2px; }
+
+.tv-det-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* The remote drives this list; a visible bar is desktop furniture that only ever obscures a
+     row edge on a panel this size. */
+  scrollbar-width: none;
+}
+.tv-det-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+.tv-det-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  flex: 0 0 auto;
+  text-align: left;
+  text-decoration: none;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .035);
+  color: var(--text);
+  padding: clamp(11px, 1.3vh, 17px) clamp(12px, 1vw, 18px);
+  cursor: pointer;
+}
+.tv-det-row.on { border-color: var(--accent); }
+.tv-det-rowtitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: clamp(17px, 1.15vw, 23px);
+  line-height: 1.3;
+  color: #f0f0f0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tv-det-rowsub {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: clamp(13px, .85vw, 17px);
+  color: #8f8f8f;
+  margin-top: 3px;
+}
+.tv-det-epn {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: clamp(15px, 1vw, 20px);
+  color: var(--accent);
+  min-width: 3.2em;
+}
+.tv-det-chev { flex: 0 0 auto; color: #7d7d7d; font-size: clamp(20px, 1.4vw, 28px); line-height: 1; }
+.tv-det-logo {
+  flex: 0 0 auto;
+  width: clamp(38px, 2.6vw, 52px);
+  height: clamp(38px, 2.6vw, 52px);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .08);
+  display: block;
+}
+.tv-det-logo img { width: 100%; height: 100%; object-fit: cover; }
+.tv-det-row .quality-badge { font-size: clamp(13px, .9vw, 17px); padding: 5px 11px; }
+.tv-det-note {
+  font-size: clamp(16px, 1.05vw, 21px);
+  line-height: 1.5;
+  color: #9a9a9a;
+  padding: clamp(10px, 1.2vh, 16px) 2px;
+}
+.tv-det-signin { margin-top: 14px; }
+
+/* TOP-LEFT, NOT TOP-RIGHT. The panel now starts at the top of the right column, and the web
+   modal's corner ✕ landed straight on top of it. The left corner is the one part of this screen
+   that is always empty — the copy is bottom-anchored — and it is also the corner a viewer
+   reaches by pressing Up from WATCH, which is the only way anyone gets here with a remote. */
+.tv-det-close {
+  position: absolute;
+  top: clamp(24px, 3vh, 40px);
+  left: clamp(28px, 2.4vw, 48px);
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: clamp(46px, 3vw, 58px);
+  height: clamp(46px, 3vw, 58px);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .3);
+  background: rgba(0, 0, 0, .5);
+  color: #fff;
+  font-size: clamp(18px, 1.2vw, 24px);
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* THE FOCUS RING HAS TO BE RESTATED HERE. The `.tv-shell …:focus-visible` block below styles
+   the shell; this overlay is a SIBLING of the shell, so none of it applies inside — see the
+   scoping note at the top of this section. Same ring, same offset, so the remote looks the same
+   whichever layer it is on, plus a fill on list rows: an outline alone is thin against a
+   photograph, and the selected row is the thing the whole screen is pointing at. */
+.tv-det :is(a, button, [tabindex]):focus-visible {
+  outline: 3px solid rgba(255, 255, 255, .72);
+  outline-offset: 3px;
+}
+.tv-det .tv-det-pill:focus-visible,
+.tv-det .tv-det-back:focus-visible,
+.tv-det .tv-det-disc:focus-visible,
+.tv-det .tv-det-close:focus-visible { border-radius: 999px; }
+.tv-det .tv-det-row:focus-visible { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .3); }
+
+/* Keep a focused row clear of the panel's own edges. TvSpatialNav already pads by TV_EDGE_PAD
+   when it scrolls, but scroll-margin is what a native `scrollIntoView` (Left/Right along the
+   pills) honours, and without it the first and last row sit flush against the fade. */
+.tv-det .tv-det-row,
+.tv-det .tv-det-pill { scroll-margin: 24px; }
 
 /* ---- Stage 5: remote / D-pad focus ------------------------------------------------------
    A clear focus ring for the element the remote is on (keyboard focus only, so a mouse user
