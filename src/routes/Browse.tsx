@@ -3,8 +3,11 @@ import { useT } from '../i18n/i18n';
 import { useModal, openItem } from '../stores/modal';
 import { HOME_ROWS, STUDIOS } from '../lib/home';
 import CatalogGrid from '../components/CatalogGrid';
+import TvCatalogRow from '../components/TvCatalogRow';
 import type { GridDesc } from '../lib/grid';
 import type { MediaItem } from '../lib/types';
+
+const IS_TV = import.meta.env.MODE === 'tv';
 
 /* Browse drill-down — the full paginated grid for one category, reached from a
  * row's "see all" or the rail's TV/Movies/Anime surfaces. Port of the #catview
@@ -39,6 +42,24 @@ export default function Browse({ cat: catProp, topLevel }: { cat?: string; topLe
     ? { kind: 'studio', studio: studioKey, title }
     : { kind: 'category', cat, title };
   const onSelect = (item: MediaItem) => openModal(openItem(item));
+
+  /* THE PRIMARY DESTINATIONS ARE ROWS ON A TV, NOT GRIDS. TV / Movies / Anime are the three
+   * pages the top bar leads to, and a grid of small cards is the one surface in the TV build that
+   * still asked the remote to navigate in two dimensions. They render as the same billboard row
+   * the home screen is made of instead — one heading, Left/Right, and a card at the end that
+   * lengthens the row (see TvCatalogRow). The heading is the row's own, so the page carries no
+   * second title above it.
+   *
+   * Only the TOP-LEVEL surfaces. A "see all" drill-down (/browse/<cat>) is reached FROM a row and
+   * keeps the grid: turning it into a row as well would mean walking right off the end of a row
+   * onto a copy of the same row. */
+  if (topLevel && IS_TV) {
+    return (
+      <section className="page active" id="browse" aria-label={title}>
+        <TvCatalogRow desc={desc} title={title} onSelect={onSelect} />
+      </section>
+    );
+  }
 
   if (topLevel) {
     // primary rail destination — render under the #explore scope so the cards get the
