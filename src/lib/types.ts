@@ -36,6 +36,12 @@ export interface MediaItem {
    *  the subject instead of the fixed center/20%. Unset → the historical default. */
   heroFocusX?: number;
   heroFocusY?: number;
+  /** IMDb id (`tt…`). The backend attaches it to every catalog card it lets through (a title
+   *  with no IMDb id is dropped, since no stream add-on could be asked about it), so a row card
+   *  can be looked up by it WITHOUT a detail round-trip — which is what lets the TV billboard
+   *  fetch its trailer the moment someone rests. Absent on the admin Featured Hero and on the
+   *  Upcoming marquee, both of which are exempt from that gate. */
+  imdb?: string;
   [k: string]: unknown;
 }
 
