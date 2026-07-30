@@ -557,6 +557,33 @@
   pointer-events: none;
 }
 .tv-spot-trailer-slot iframe.on { opacity: 1; }
+/* THE PREFERRED PATH NEEDS ALMOST NONE OF THE ABOVE. A trailer played as a video file
+   (useVideoTrailer) is ours: no player chrome creeps in at the edges, and the rendition is chosen
+   by the backend from what the billboard actually paints rather than inferred by YouTube from the
+   element's size. So the double-size layout hack and its counter-scale both go, and the picture is
+   sharper for less decode than the embed it replaces.
+
+   THE ONE THING THAT SURVIVES IS THE CROP, for a different reason than before. It hid YouTube's
+   chrome; here it hides LETTERBOXING BAKED INTO THE FILE. IMDb encodes every trailer into a 16:9
+   container, so a 2.39:1 one arrives with black bands top and bottom as picture content, which no
+   object-fit can reach — and a billboard is not the place for a black band above the wordmark.
+   1.35 is deliberately the number the embed used: a row mixes the two engines title by title, so
+   the framing has to be the same on both or the billboard would visibly re-crop as you walk along
+   it. It costs the edges of a trailer that was already full-frame, which is the same trade the row
+   has always made. */
+.tv-spot-trailer-slot video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transform: scale(1.35);
+  transform-origin: center;
+  border: 0;
+  background: #000;
+  opacity: 0;
+  transition: opacity .9s cubic-bezier(.4, 0, .2, 1);
+  pointer-events: none;
+}
+.tv-spot-trailer-slot video.on { opacity: 1; }
 /* Only the ART goes; `.tv-spot-card-in` (the tag + wordmark + its scrim) stays put, so a playing
    preview still says what it is. Slower out than the video is in, so the two overlap rather than
    handing over through a black frame. */
@@ -806,6 +833,7 @@
   /* The preview still plays — it is content, not decoration, and the modal treats it the same
      way — but it cuts in rather than dissolving. */
   .tv-spot-trailer-slot iframe,
+  .tv-spot-trailer-slot video,
   .tv-spot-art,
   .tv-spot-hero.has-trailer .tv-spot-art { transition: none; }
   .tv-spot-rowtitle, .tv-spot-info { transition: none; }
