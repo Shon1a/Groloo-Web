@@ -4,7 +4,8 @@ import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useTrailer } from './DetailModal/useTrailer';
-import { useMeta } from '../lib/queries';
+import { useVideoTrailer } from './DetailModal/useVideoTrailer';
+import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
 import { useSettings } from '../stores/settings';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
@@ -42,12 +43,27 @@ const SPOT_MAX = 12;
 /* ms the remote must sit still on a title before its trailer is even asked for.
  *
  * Cut from 1500 to claw back the only part of the wait that is ours to spend. Everything after this
- * belongs to YouTube — fetching the key, loading the embed, and above all the ~4.5s of playback its
- * pause glyph occupies (see TRAILER_REVEAL_AT) — so this is where a faster start has to come from.
- * 800ms still filters a walk along a row: pressing right even twice a second never trips it, and
- * the guarantee that matters (no request for a title merely passed over) is intact. */
-const TRAILER_DWELL = 800;
-/* SECONDS OF THE TRAILER, not seconds on a stopwatch — and that distinction is the fix for a
+ * used to belong to YouTube — fetching the key, loading the embed, and above all the ~4.5s of
+ * playback its pause glyph occupies (see TRAILER_REVEAL_AT) — so this is where a faster start had
+ * to come from. Most of that wait is now gone with the embed itself, on every title IMDb has a
+ * trailer file for; this timer keeps the job it always had, which is not starting one at all for a
+ * title someone is merely walking past.
+ *
+ * NOW 500, AND THE GUARANTEE IT PROTECTS HAS MOVED. At 800 this timer was doing two jobs: keeping a
+ * passing title from mounting an embed, and keeping a walk along a row from firing twelve /api/meta
+ * requests. The second job is now done better by warming the neighbours instead (see
+ * TRAILER_PREFETCH_SPAN) — walking onto an adjacent card hits a cache rather than the network — so
+ * the timer is free to shrink toward the only job it still has, which is the embed. 500ms is above
+ * a deliberate walk and comfortably above a held key, and 300ms of pure dead time is gone. */
+const TRAILER_DWELL = 500;
+/* How far either side of the resting title to warm the next preview's data. One card each way,
+ * because one card each way is what a press of Left or Right reaches, and the point is to have the
+ * trailer in hand BEFORE the next rest rather than to cache the row. */
+const TRAILER_PREFETCH_SPAN = 1;
+/* ONLY THE YOUTUBE FALLBACK IS TIMED BY THIS — a title playing IMDb's own file reveals in a third
+ * of a second (see useVideoTrailer), because none of what follows applies to a player we own.
+ *
+ * SECONDS OF THE TRAILER, not seconds on a stopwatch — and that distinction is the fix for a
  * reported bug rather than a nicety. YouTube stamps a large pause glyph in the dead centre of the
  * player when autoplay begins; it is not chrome at the edges, so no amount of cropping reaches it,
  * and the only way past it is to arrive later. A wall-clock delay measured here (2600ms, tuned off
@@ -63,7 +79,10 @@ const TRAILER_DWELL = 800;
  * margin, and the honest summary is that YouTube owns the first ~4.5 seconds of any preview: there
  * is no combination of embed parameters or cropping that removes the glyph (it is drawn inside a
  * cross-origin player, dead centre, where a crop cannot reach), so waiting is the only lever, and
- * the only way to have both a fast start AND no glyph would be to stop using YouTube's player. */
+ * the only way to have both a fast start AND no glyph would be to stop using YouTube's player.
+ *
+ * WHICH IS WHAT THE PREFERRED PATH NOW DOES. This number survives as the fallback's, unchanged and
+ * still correct for what it measures — it is simply no longer what most titles pay. */
 const TRAILER_REVEAL_AT = 4.8;
 
 /* Renditions sized to what is painted, not to the source. The billboard is 16:9 of a <=380px
@@ -141,9 +160,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
    * reveals only once the video genuinely plays, and gives up quietly on a trailer that is
    * region-blocked or has embedding disabled, which is most of the hard part.
    *
-   * WHY A DWELL RATHER THAN A FETCH PER PRESS. The row data has no trailer in it: the key only
-   * comes with /api/meta, one request per title. Walking a row must not fire twelve of those, so
-   * nothing is requested until the remote has STOPPED on a title for TRAILER_DWELL. Flicking
+   * TWO ENGINES, AND THE BILLBOARD PREFERS THE ONE THAT IS NOT YOUTUBE. IMDb publishes its
+   * trailers as ordinary video files; our backend resolves them at /api/imdb-trailer/:imdb, and a
+   * file we play ourselves has no pause glyph, no branding, no ads and no region gate — so it
+   * opens in a third of a second instead of after four and a half (useVideoTrailer). Rows are
+   * keyed by the IMDb id the CARD already carries, so unlike the embed's key it costs no detail
+   * request to find out. The embed remains the fallback, for the titles IMDb has nothing for and
+   * for the feeds whose cards carry no id at all (the Featured Hero, Upcoming).
+   *
+   * WHY A DWELL RATHER THAN A FETCH PER PRESS. Walking a row must not fire twelve requests, so
+   * nothing is asked for until the remote has STOPPED on a title for TRAILER_DWELL. Flicking
    * along a shelf is then free, and the request only happens for a card someone is actually
    * looking at. React Query caches it per title, so coming back to a row costs nothing.
    *
@@ -153,6 +179,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
   const trailerSlotRef = useRef<HTMLDivElement>(null);
   const rowTrailers = useSettings((s) => s.settings.tvRowTrailers);
   const [dwelt, setDwelt] = useState<MediaItem | null>(null);
+  /* Set when the video engine reports it could not play this title's file — a link whose
+   * signature has expired, a codec a set will not decode, a refused autoplay. It drops that
+   * title to the embed for as long as it is the one being rested on, and clears with the dwell,
+   * so the next visit tries the good path again rather than inheriting a verdict. */
+  const [videoFailed, setVideoFailed] = useState(false);
   // The title being rested on, or nothing when the walk is parked on the see-all card.
   const resting: MediaItem | undefined = active < n ? list[active] : undefined;
   useEffect(() => {
@@ -162,6 +193,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
      * the row showed one film's trailer under another film's name. Whatever was playing belongs to
      * the title just left, so it goes the moment focus moves; the artwork comes back with it. */
     setDwelt(null);
+    setVideoFailed(false);
+    setMetaImdb(undefined);
     if (!rowTrailers || !open || !resting) return;
     const id = window.setTimeout(() => setDwelt(resting), TRAILER_DWELL);
     return () => window.clearTimeout(id);
@@ -169,14 +202,74 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
     // every render of Home, and re-arming this timer each time would mean it never fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowTrailers, open, resting?.id]);
-  const { data: trailerMeta } = useMeta(dwelt?.id, dwelt?.type);
+  /* Warm the cards either side of the one being rested on, so the NEXT rest does not begin with a
+   * round-trip. Hung off `dwelt` rather than `resting` on purpose: it fires only once the dwell has
+   * already been satisfied, so a walk along the row still warms nothing, and the request goes out
+   * while the current trailer is loading — time that was being spent waiting anyway. */
+  const prefetchMeta = usePrefetchMeta();
+  const prefetchImdbTrailer = usePrefetchImdbTrailer();
+  useEffect(() => {
+    if (!rowTrailers || !open || !dwelt || n < 2) return;
+    const at = list.findIndex((it) => it.id === dwelt.id);
+    if (at < 0) return;
+    const near: MediaItem[] = [];
+    for (let d = 1; d <= TRAILER_PREFETCH_SPAN; d++) {
+      // Wrapped, because the walk itself wraps — the card left of the first is the last.
+      near.push(list[(at + d) % n], list[(at - d + n) % n]);
+    }
+    /* Each neighbour is warmed on the path IT will take, not on one path for the row. A card
+     * with an IMDb id is going to play a file, so its trailer link is what wants fetching early;
+     * a card without one still needs the embed's key out of /api/meta. Warming both for every
+     * neighbour would double a fan-out that exists precisely to stay small. */
+    const kept = near.filter(Boolean);
+    prefetchImdbTrailer(kept.map((it) => it.imdb).filter(Boolean) as string[]);
+    const noImdb = kept.filter((it) => !it.imdb);
+    if (noImdb.length) prefetchMeta(noImdb);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowTrailers, open, dwelt?.id, n]);
+
+  /* ---- PICKING AN ENGINE, ONCE PER RESTED TITLE ---------------------------------------------
+   * IMDb's file first; the YouTube embed only for what it cannot cover. The two hooks below are
+   * both mounted and exactly one is ever armed — each takes `undefined` as "not you", tears its
+   * own player down and leaves the slot alone, so the handover needs no coordination beyond
+   * which of them is handed a source. */
+  const armed = !!dwelt && rowTrailers;
+  /* LATCHED, AND THE LATCH IS WHAT KEEPS THIS FROM OSCILLATING. Most cards carry their IMDb id,
+   * but the ungated feeds (Upcoming, the Featured Hero) do not — and those titles fetch /api/meta
+   * for the embed anyway, which carries the id. Reading it straight off `trailerMeta` would spin:
+   * an id found there arms the video, the video disarms the embed, the embed's query goes idle and
+   * the id vanishes again. Held in state, it survives the request that produced it, so an Upcoming
+   * title gets the good engine on the round-trip it was already paying for. Cleared with the dwell. */
+  const [metaImdb, setMetaImdb] = useState<string | undefined>(undefined);
+  const imdbId = armed ? (dwelt?.imdb || metaImdb) : undefined;
+  const imdbTrailer = useImdbTrailer(videoFailed ? undefined : imdbId);
+  const videoUrl = videoFailed ? undefined : (imdbTrailer.data?.url || undefined);
+  /* The embed is not asked for SPECULATIVELY, and that is the point of this line: /api/meta is a
+   * whole detail payload fetched for one string, so it is requested only once IMDb has actually
+   * come back without a trailer (or the card never had an id to ask with). The common case is one
+   * request for the preview, not two. */
+  const imdbSettled = !imdbId || imdbTrailer.isFetched || videoFailed;
+  const wantEmbed = armed && imdbSettled && !videoUrl;
+  const { data: trailerMeta } = useMeta(wantEmbed ? dwelt?.id : undefined, dwelt?.type);
+  useEffect(() => {
+    if (typeof trailerMeta?.imdb === 'string' && !dwelt?.imdb) setMetaImdb(trailerMeta.imdb);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trailerMeta?.imdb, dwelt?.id]);
+
+  useVideoTrailer(
+    trailerSlotRef,
+    heroBtnRef,
+    videoUrl,
+    dwelt?.title || '',
+    // The dwell above has already served as the "don't mount for a passing title" delay.
+    { mountDelay: 0, onFail: () => setVideoFailed(true) },
+  );
   useTrailer(
     trailerSlotRef,
     heroBtnRef,
-    dwelt && rowTrailers ? (trailerMeta?.trailerKey || undefined) : undefined,
+    wantEmbed ? (trailerMeta?.trailerKey || undefined) : undefined,
     dwelt?.title || '',
-    // The dwell above has already served as the "don't mount for a passing title" delay, so the
-    // embed goes up as soon as its key lands.
+    // Same reasoning as above: the embed goes up as soon as its key lands.
     { mountDelay: 0, revealAtPlayTime: TRAILER_REVEAL_AT, ignoreLowPower: true },
   );
 
