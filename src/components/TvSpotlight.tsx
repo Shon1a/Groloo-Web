@@ -4,7 +4,7 @@ import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useTrailer } from './DetailModal/useTrailer';
-import { useVideoTrailer } from './DetailModal/useVideoTrailer';
+import { useVideoTrailer, trailerStartOffset } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
 import { useSettings } from '../stores/settings';
 
@@ -85,6 +85,12 @@ const TRAILER_PREFETCH_SPAN = 1;
  * still correct for what it measures — it is simply no longer what most titles pay. */
 const TRAILER_REVEAL_AT = 4.8;
 
+/* MUST TRACK `.tv-spot-trailer-slot video`'s scale in tv.css. The preview is magnified to hide
+ * the letterboxing IMDb bakes into its files, which means the video is sampled at more than the
+ * billboard's width — so the rendition has to be chosen against the magnified size, not the box.
+ * Wrong here and the picture goes soft for a reason nothing on screen explains. */
+const BILLBOARD_TRAILER_CROP = 1.35;
+
 /* Renditions sized to what is painted, not to the source. The billboard is 16:9 of a <=380px
  * row (~675px wide) and thumbs paint at ~228px — see the note in lib/hero.ts for why reaching
  * for `original` on a TV is fatal rather than merely wasteful. */
@@ -103,17 +109,52 @@ export interface TvSpotlightProps {
   cat?: string;
   onSelect?: (m: MediaItem) => void;
   onSeeAll?: (cat: string) => void;
+  /* ---- THE TWO PROPS CONTINUE WATCHING NEEDS, AND NOTHING ELSE USES ---------------------------
+   * That row was the last rail left on the TV home, and the reason recorded in tv.css was that
+   * its cards carry two things a billboard has nowhere to put. Both turn out to be small.
+   *
+   * `resumeOf` is the first: how far through a title you are, which is the whole point of the
+   * row. It draws as a bar across the foot of the billboard and of every strip tile, and its
+   * note (S2:E4) leads the info line. The remove ✕ is the one thing genuinely dropped — a
+   * corner button is a mouse affordance with no D-pad stop, and the row tidies itself anyway
+   * (a title watched to the end leaves it without being asked). */
+  resumeOf?: (item: MediaItem) => { pct: number; note?: string } | undefined;
+  /** `enrich` is the second: watch history stores a poster and a title and nothing else, so
+   *  unlike a catalogue card these arrive with no backdrop, no wordmark and no synopsis — the
+   *  billboard would be a portrait poster cropped to 16:9 above an empty panel. Set this and the
+   *  row fetches the rested title's detail to fill those three in (one request, cached by React
+   *  Query, with the neighbours warmed so walking the row is instant).
+   *
+   *  IT IS ALSO WHAT PUTS A WORDMARK ON THE BROWSE ROWS. `titleLogo` is a per-title lookup the
+   *  server does only for /api/home (the `logos=1` flag — see queries.ts); /api/browse ignores it
+   *  and answers with plain text titles, so the TV / Movies / Anime billboards were the one place
+   *  in the build showing a title set in type next to rows showing the real artwork. The detail
+   *  payload carries the same logo, so enriching those rows closes the gap from this side without
+   *  waiting on the backend to learn the flag. */
+  enrich?: boolean;
+  /** How many titles the row walks. Home rows keep the SPOT_MAX default; a page that IS one row
+   *  (the TV / Movies / Anime surfaces) raises it, because there the row is the whole screen. */
+  max?: number;
+  /* ---- THE OTHER THING THE END CARD CAN BE ----------------------------------------------------
+   * A row that has no page of its own to send you to, because it already IS the page, ends in a
+   * card that LENGTHENS it instead of leaving it. Same card, same single focus stop, different
+   * verb — see the note on `canSeeAll`. Mutually exclusive with `cat`/`onSeeAll`: two end cards
+   * would be two answers to "what is past the last title", and the row only has room for one. */
+  onMore?: () => void;
+  /** Reflected on the end card while the next batch is in flight, so OK gives feedback instead of
+   *  appearing to do nothing on a slow connection. */
+  moreBusy?: boolean;
 }
 
-/* WHAT THE BILLBOARD IS SHOWING. A row walks its titles and then one stop past them, onto its
- * own category page — so the thing on the billboard is a title OR that final card, and both the
- * cross-dissolve and the strip have to be able to hold either. */
-type Slot = MediaItem | 'see-all';
+/* WHAT THE BILLBOARD IS SHOWING. A row walks its titles and then one stop past them, onto its own
+ * category page or onto more of itself — so the thing on the billboard is a title OR that final
+ * card, and both the cross-dissolve and the strip have to be able to hold either. */
+type Slot = MediaItem | 'end';
 
-export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: TvSpotlightProps) {
+export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, resumeOf, enrich, max, onMore, moreBusy }: TvSpotlightProps) {
   const t = useT();
   const genre = useGenre();
-  const list = useMemo(() => items.slice(0, SPOT_MAX), [items]);
+  const list = useMemo(() => items.slice(0, max || SPOT_MAX), [items, max]);
   const n = list.length;
   const heading = title || t('tv.featured');
 
@@ -132,10 +173,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
    * It is conditional on a destination existing. Add-on catalogue rows (AddonRows) render through
    * the same component with no `cat`, and a card that goes nowhere is worse than no card. */
   const canSeeAll = !!cat && !!onSeeAll;
-  const stops = n + (canSeeAll ? 1 : 0);
-  /** What sits at walk position `i` — a title, or the see-all card in the extra slot past them. */
-  const slotAt = (i: number): Slot => (i < n ? list[i] : 'see-all');
-  const goSeeAll = () => { if (cat) onSeeAll?.(cat); };
+  const canMore = !canSeeAll && !!onMore;
+  const hasEnd = canSeeAll || canMore;
+  const stops = n + (hasEnd ? 1 : 0);
+  /** What sits at walk position `i` — a title, or the end card in the extra slot past them. */
+  const slotAt = (i: number): Slot => (i < n ? list[i] : 'end');
+  /* The end card's two forms. "See all" leaves for the category page; "load more" makes the row
+   * longer and, because the walk does not move, the card the billboard is showing simply becomes
+   * the first of the titles that just arrived. */
+  const endLabel = canSeeAll ? t('cat.see_all') : (moreBusy ? t('grid.loading') : t('grid.load_more'));
+  const endIcon = canSeeAll ? '→' : '+';
+  const goEnd = () => { if (canSeeAll && cat) onSeeAll?.(cat); else if (canMore && !moreBusy) onMore?.(); };
 
   const [active, setActive] = useState(0);
   const [open, setOpen] = useState(false);
@@ -261,8 +309,20 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
     heroBtnRef,
     videoUrl,
     dwelt?.title || '',
-    // The dwell above has already served as the "don't mount for a passing title" delay.
-    { mountDelay: 0, onFail: () => setVideoFailed(true) },
+    {
+      // The dwell above has already served as the "don't mount for a passing title" delay.
+      mountDelay: 0,
+      /* Not from the beginning — see trailerStartOffset. A preview is a few seconds long and the
+       * opening of a trailer is logos, a rating card, and sometimes a recap of the earlier films;
+       * IMDb gives us the runtime, so the preview can start where the film itself does. */
+      startAt: trailerStartOffset(imdbTrailer.data?.runtime),
+      /* Let the engine measure the billboard and take the rendition that suits it, rather than
+       * playing the one the backend guessed at. The crop is the magnification in tv.css, and it
+       * belongs in this number: a video blown up 1.35x is sampled at 1.35x its box. */
+      renditions: imdbTrailer.data?.urls,
+      cropScale: BILLBOARD_TRAILER_CROP,
+      onFail: () => setVideoFailed(true),
+    },
   );
   useTrailer(
     trailerSlotRef,
@@ -272,6 +332,55 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
     // Same reasoning as above: the embed goes up as soon as its key lands.
     { mountDelay: 0, revealAtPlayTime: TRAILER_REVEAL_AT, ignoreLowPower: true },
   );
+
+  /* ---- THE ARTWORK A HISTORY CARD DOES NOT CARRY (`enrich`) ---------------------------------
+   * NOT ON A DWELL, unlike the trailer above, and the difference is the point: a trailer is
+   * something you opt into by stopping, while the backdrop IS the billboard — half a second of
+   * cropped poster before it appears would read as the row loading twice. So the rested title's
+   * detail is asked for the moment focus lands on it, and the walk is made free instead by
+   * warming the neighbours (the same one-card-either-way span the preview uses, for the same
+   * reason: one press of Left or Right is what happens next).
+   *
+   * Gated on `visible` rather than on `open`, to match the artwork it feeds — a row nowhere near
+   * the viewport requests nothing, and a row you can see has its billboard filled in whether or
+   * not the remote has ever been on it.
+   *
+   * ACCUMULATED IN A MAP RATHER THAN READ STRAIGHT OFF THE QUERY, because the billboard
+   * cross-dissolves: for half a second the OUTGOING layer is still painting the title just left,
+   * and a lookup that only knew the current one would drop that layer back to a bare gradient
+   * mid-fade — a flash of the fallback on every press. The map keeps what it has seen, so both
+   * layers can always answer for themselves. */
+  const [artById, setArtById] = useState<Record<string, Partial<MediaItem>>>({});
+  const { data: detail } = useMeta(enrich && visible ? resting?.id : undefined, resting?.type);
+  useEffect(() => {
+    if (!enrich || !detail || !resting) return;
+    const k = String(resting.id);
+    // The detail we fetched for the artwork also carries the IMDb id, which is the key to the
+    // preview that is NOT a YouTube embed — so an enriched row gets the fast trailer path for
+    // free, on a request it was already making. (The latch it feeds is documented above.)
+    if (typeof detail.imdb === 'string') setMetaImdb(detail.imdb);
+    const add: Partial<MediaItem> = {};
+    if (detail.backdrop) add.backdrop = detail.backdrop;
+    if (detail.titleLogo) add.titleLogo = detail.titleLogo;
+    if (detail.plot) add.overview = detail.plot;
+    if (!Object.keys(add).length) return;
+    // Written once per title: re-setting an entry that already exists would re-render this row
+    // for no change, and on a state update keyed off a query result that is a loop.
+    setArtById((m) => (m[k] ? m : { ...m, [k]: add }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enrich, detail, resting?.id]);
+  useEffect(() => {
+    if (!enrich || !open || !visible || n < 2) return;
+    const near: MediaItem[] = [];
+    for (let d = 1; d <= TRAILER_PREFETCH_SPAN; d++) near.push(list[(active + d) % n], list[(active - d + n) % n]);
+    prefetchMeta(near.filter(Boolean));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enrich, open, visible, active, n]);
+  /** A card as the billboard should paint it — its own fields, plus whatever `enrich` found. */
+  const withArt = (it: MediaItem): MediaItem => {
+    const a = enrich ? artById[String(it.id)] : undefined;
+    return a ? { ...it, ...a } : it;
+  };
 
   /* THE STRIP IS MEMOISED, AND THAT IS A SCROLL FIX, NOT A MICRO-OPTIMISATION.
    *
@@ -283,6 +392,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
   const thumbs = useMemo(() => {
     const tile = (it: MediaItem, key: string) => {
       const src = imgW(it.poster || it.backdrop || '', THUMB_RENDITION);
+      const res = resumeOf?.(it);
       return (
         <button
           key={key}
@@ -295,11 +405,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
           onClick={() => onSelect?.(it)}
         >
           {src && <img className="tv-spot-thumbimg" src={src} loading="lazy" decoding="async" alt="" />}
+          {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}
         </button>
       );
     };
     const copy = (pass: number) => list.map((it, i) => tile(it, `p${pass}-${i}`));
-    if (!canSeeAll) return [...copy(0), ...copy(1)];
+    if (!hasEnd) return [...copy(0), ...copy(1)];
     /* POSITION IS THE WHOLE TRICK. The strip is translated so the tile at index `active` hides
      * behind the billboard and its successors peek to the right, so putting the card at index n —
      * straight after the last title of the FIRST copy — makes it both the thing you see appear at
@@ -308,21 +419,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
     return [
       ...copy(0),
       <button
-        key="see-all"
+        key="end"
         type="button"
         role="listitem"
         tabIndex={-1}
         className="tv-spot-thumb is-seeall"
-        aria-label={`${heading} — ${t('cat.see_all')}`}
-        onClick={goSeeAll}
+        aria-label={`${heading} — ${endLabel}`}
+        onClick={goEnd}
       >
-        <span className="tv-spot-blank-ic" aria-hidden="true">→</span>
-        <span className="tv-spot-blank-label">{t('cat.see_all')}</span>
+        <span className="tv-spot-blank-ic" aria-hidden="true">{endIcon}</span>
+        <span className="tv-spot-blank-label">{endLabel}</span>
       </button>,
       ...copy(1),
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [list, onSelect, canSeeAll, cat, onSeeAll, heading, t]);
+  }, [list, onSelect, hasEnd, canSeeAll, cat, onSeeAll, onMore, moreBusy, endLabel, endIcon, heading, t, resumeOf]);
 
   /* Arm the artwork a screenful before the row arrives, so it is decoded by the time it is
    * scrolled to and nothing pops in. Disconnects on the first hit — this is a one-way latch. */
@@ -337,8 +448,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
     return () => io.disconnect();
   }, []);
 
-  // Drive the cross-dissolve off `active`: load the focused title into the hidden layer and
-  // flip it to the front.
+  /* Drive the cross-dissolve off `active`: load the focused title into the hidden layer and flip
+   * it to the front.
+   *
+   * ALSO OFF `n`, which is what makes the "load more" card work. Pressing OK on it does not move
+   * the walk — the position it is standing on simply stops being the end card and becomes the
+   * first title of the batch that just arrived. Without the length in here nothing would tell the
+   * billboard that, and it would go on showing a "+" card until the next press. */
   useEffect(() => {
     if (firstRun.current) { firstRun.current = false; return; }
     setXfade((s) => {
@@ -346,7 +462,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
       return { ...s, [back]: slotAt(active), front: back };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  }, [active, n]);
 
   // Suppress the strip's scroll animation on a wrap / multi-step jump, so it resets instead of
   // rewinding through every card.
@@ -361,8 +477,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
   }, [active]);
 
   if (!n) return null;
-  /** True while the walk is parked on the see-all card rather than on a title. */
-  const onSeeAllCard = canSeeAll && active >= n;
+  /** True while the walk is parked on the end card rather than on a title. */
+  const onSeeAllCard = hasEnd && active >= n;
   const cur = list[Math.min(active, n - 1)] || list[0];
 
   // One stop longer than the list when the row has a page of its own; still wraps, so the card
@@ -372,7 +488,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
   /* Until the row is near the viewport the layer keeps the branded gradient and requests no
    * bitmap at all — see the memory note in the header. */
   const heroArt = (it: MediaItem) => {
-    const bg = visible ? imgW(it.backdrop || it.poster || '', BILLBOARD_RENDITION) : '';
+    /* ON AN `enrich` ROW A POSTER IS NOT AN ACCEPTABLE STAND-IN for the backdrop that has not
+     * arrived yet: it is a portrait crammed into 16:9, which reads as a broken picture rather
+     * than as a card waiting. The branded gradient already exists for exactly this and holds the
+     * frame for the one request. Catalogue rows keep the old fallback — their cards genuinely
+     * sometimes have a poster and no backdrop, with nothing else coming. */
+    const source = enrich ? it.backdrop : (it.backdrop || it.poster);
+    const bg = visible ? imgW(source || '', BILLBOARD_RENDITION) : '';
     return {
       backgroundImage: bg ? `url('${bg}')` : heroFallbackGradient(it),
       backgroundPosition: heroBgPosition(it),
@@ -381,12 +503,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
   const tagFor = (it: MediaItem) => (isSeries(it) ? t('nav.series') : t('nav.movies'));
   const logoOf = (it: MediaItem) => it.titleLogo || it.logo;
 
-  // genre · year · rating — the type isn't repeated here, it's the tag on the billboard. The
-  // see-all card has no metadata of its own; the panel keeps its reserved height and stays blank.
+  const curArt = withArt(cur);
+  // [S2:E4 ·] genre · year · rating — the type isn't repeated here, it's the tag on the billboard.
+  // The episode leads when there is one, because on a resume row it is the most specific thing the
+  // line can say. The see-all card has no metadata of its own; the panel keeps its reserved height
+  // and stays blank.
   const metaBits = onSeeAllCard ? [] : [
-    genre(cur.genre || (cur.genres && cur.genres[0]) || ''),
-    cur.year ? String(cur.year) : '',
-    cur.rating ? `★ ${cur.rating}` : '',
+    (!onSeeAllCard && resumeOf?.(cur)?.note) || '',
+    genre(curArt.genre || (curArt.genres && curArt.genres[0]) || ''),
+    curArt.year ? String(curArt.year) : '',
+    curArt.rating ? `★ ${curArt.rating}` : '',
   ].filter(Boolean);
 
   const onHeroKey = (e: ReactKeyboardEvent) => {
@@ -428,8 +554,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
           type="button"
           ref={heroBtnRef}
           className="tv-spot-hero"
-          aria-label={onSeeAllCard ? `${heading} — ${t('cat.see_all')}` : cur.title}
-          onClick={() => (onSeeAllCard ? goSeeAll() : onSelect?.(cur))}
+          aria-label={onSeeAllCard ? `${heading} — ${endLabel}` : cur.title}
+          onClick={() => (onSeeAllCard ? goEnd() : onSelect?.(cur))}
           onKeyDown={onHeroKey}
         >
           {/* The preview sits UNDER the artwork rather than over it, and `has-trailer` fades the
@@ -440,32 +566,38 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
             const it = xfade[slot];
             const on = xfade.front === slot;
             if (!it) return <div key={slot} className="tv-spot-layer" aria-hidden="true" />;
-            /* The see-all card as the billboard: no artwork to request, so it reads as a hole at
-               the end of the row rather than as another title — which is what tells you the row
-               has ended. Same two layers, so arriving on it dissolves like everything else. */
-            if (it === 'see-all') {
+            /* The end card as the billboard: no artwork to request, so it reads as a hole at the
+               end of the row rather than as another title — which is what tells you the row has
+               ended. Same two layers, so arriving on it dissolves like everything else. */
+            if (it === 'end') {
               return (
                 <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
                   <div className="tv-spot-blank">
-                    <span className="tv-spot-blank-ic" aria-hidden="true">→</span>
+                    <span className="tv-spot-blank-ic" aria-hidden="true">{endIcon}</span>
                   </div>
                   <div className="tv-spot-card-in">
-                    <span className="tv-spot-tag">{t('cat.see_all')}</span>
+                    <span className="tv-spot-tag">{endLabel}</span>
                     <span className="tv-spot-cardtitle">{heading}</span>
                   </div>
                 </div>
               );
             }
-            const logo = logoOf(it);
+            const art = withArt(it);
+            const logo = logoOf(art);
+            const res = resumeOf?.(it);
             return (
               <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
-                <div className="tv-spot-art" style={heroArt(it)} />
+                <div className="tv-spot-art" style={heroArt(art)} />
                 <div className="tv-spot-card-in">
                   <span className="tv-spot-tag">{tagFor(it)}</span>
                   {logo
                     ? <img className="tv-spot-logo" src={logo} alt={it.title} />
                     : <span className="tv-spot-cardtitle">{it.title}</span>}
                 </div>
+                {/* Outside the plate and pinned to the card's own bottom edge, so it survives the
+                    trailer taking the artwork away — where you are in a title is not a thing that
+                    should blink out because a preview started. */}
+                {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}
               </div>
             );
           })}
@@ -478,7 +610,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll }: T
         <div className="tv-spot-meta">
           {metaBits.map((b, i) => <span key={i}>{b}</span>)}
         </div>
-        {!onSeeAllCard && cur.overview && <p className="tv-spot-plot">{cur.overview}</p>}
+        {!onSeeAllCard && curArt.overview && <p className="tv-spot-plot">{curArt.overview}</p>}
       </div>
     </section>
   );

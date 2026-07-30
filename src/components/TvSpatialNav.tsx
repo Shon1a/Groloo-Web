@@ -155,6 +155,30 @@ function scrollParent(el: HTMLElement, boundary: HTMLElement | null): Scrollable
   return null;
 }
 
+/* A CONTROL SCROLLED OUT OF ITS PANEL IS NOT A NEIGHBOUR.
+ *
+ * getBoundingClientRect reports where an element WOULD be, not whether you can see it: a row 20
+ * places down a scrolling list still has honest viewport coordinates, hundreds of pixels below
+ * the fold. `pick()` scores on those coordinates, so from a control beside a tall panel the
+ * geometry said "dead ahead, a long way down" and focus jumped from the WATCH row straight into
+ * episode 27 — the list scrolled itself there to show the selection, and from the sofa the panel
+ * appeared to have thrown itself down at random. Observed on the TV title screen; it applies to
+ * any scrolling panel with something alongside it.
+ *
+ * The rule is about ENTERING, not moving. Coming from outside a scroller you may only land on a
+ * row that is actually on screen — that is what the viewer is pointing at. Once focus is inside,
+ * every row is fair game again, because walking off the edge of the list and having it scroll is
+ * the entire point of a list. Comparing the two scroll parents is what separates the two cases;
+ * `null` (no scrolling ancestor) compares equal to itself, so the whole check costs nothing on a
+ * page that has none. */
+function unreachable(el: HTMLElement, curBox: Scrollable, boundary: HTMLElement | null): boolean {
+  const box = scrollParent(el, boundary);
+  if (!box || box === curBox) return false;
+  const b = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return r.bottom <= b.top + 1 || r.top >= b.bottom - 1 || r.right <= b.left + 1 || r.left >= b.right - 1;
+}
+
 function makeScroller() {
   let raf = 0;
   let guard = 0;
@@ -313,7 +337,9 @@ export default function TvSpatialNav() {
       if (!cur) { cands[0].focus(); return true; }
 
       if (layer) {
-        const next = pick(dir, cur.getBoundingClientRect(), cands.filter((c) => c !== cur));
+        const curBox = scrollParent(cur, layer);
+        const reachable = cands.filter((c) => c !== cur && !unreachable(c, curBox, layer));
+        const next = pick(dir, cur.getBoundingClientRect(), reachable);
         if (!next) return false;
         next.focus({ preventScroll: true });
         if (dir === 'left' || dir === 'right') {

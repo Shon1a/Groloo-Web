@@ -17,8 +17,15 @@ import SourceSelect from './SourceSelect';
 import { collectAddonStreams, orderLangs, qualityRank, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
 import { mediaUrl, syncAddressBar, type MediaAddress } from '../../lib/launchIntent';
+import TvDetail from './TvDetail';
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
+
+/* The TV build renders a different SHAPE for the same data — one screen, no page scroll, the
+ * sources beside the synopsis rather than below it. See TvDetail.tsx for what that is and why.
+ * Every hook, fetch and handler in this file is shared; only the markup below forks, so the two
+ * builds can never drift on behaviour. Folds to `false` on the web bundle. */
+const IS_TV = import.meta.env.MODE === 'tv';
 
 /* Detail modal — faithful port of the #overlay markup + openInfoModal/enrichModalMeta/
  * renderCast/renderRecs (assets/js/app.js). Seeded from the clicked card for an instant
@@ -380,6 +387,38 @@ export default function DetailModal() {
     streamsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   const watchLabel = signedIn ? t(resume ? 'modal.resume' : 'modal.watch_authed') : t('modal.watch');
+
+  /* WATCH ON A TV PLAYS. The web button scrolls the page to the chooser, because on the web the
+   * chooser is a screen further down; here it is already on screen beside the button, so
+   * scrolling to it is both impossible and pointless. Pressing WATCH therefore starts the best
+   * source we have (resume position included — the player seeks itself), and when there is
+   * nothing to start it hands the remote to the panel where the choice is, which is the honest
+   * answer to "I pressed play and nothing happened". */
+  const onWatchTv = () => {
+    if (hasSource) { playBest(); return; }
+    document.querySelector<HTMLElement>('.tv-det-panel .tv-det-row, .tv-det-panel .tv-det-pill')?.focus();
+  };
+
+  if (IS_TV) {
+    return (
+      <TvDetail
+        target={target} meta={meta} ready={ready} isSeries={isTv}
+        title={title} titleLogo={titleLogo} rating={rating} year={year}
+        genreChips={genreChips} plot={plot} epTotal={epTotal}
+        close={close}
+        watchLabel={watchLabel} onWatch={onWatchTv}
+        hasResume={!!resume} resumePct={resumePct} resumeMin={resumeMin}
+        added={added} onAdd={onAdd}
+        onReport={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}
+        srcTab={srcTab} setSrcTab={setSrcTab}
+        signedIn={signedIn} openAuth={openAuth}
+        streamsLoading={streamsLoading} shownStreams={shownStreams}
+        availableLangs={availableLangs} lang={lang} setLang={setLang}
+        playStream={playStream} streamTitle={streamTitle}
+        pickedEp={pickedEp} setPickedEp={setPickedEp}
+      />
+    );
+  }
 
   return (
     <div
