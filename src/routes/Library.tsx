@@ -11,6 +11,8 @@ import type { MediaItem } from '../lib/types';
  * Settings), an account card (sign-in state + actions), then the saved watchlist
  * grid. Port of the #myspace markup. */
 
+const IS_TV = import.meta.env.MODE === 'tv';
+
 const icons = {
   mylist: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" /></svg>,
   new: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></svg>,
@@ -25,6 +27,7 @@ export default function Library() {
   const user = useAuth((s) => s.user);
   const openAuth = useAuth((s) => s.openAuth);
   const logout = useAuth((s) => s.logout);
+  const openLink = useAuth((s) => s.openLink);
   const openModal = useModal((s) => s.open);
   const listRef = useRef<HTMLHeadingElement>(null);
   const onSelect = (item: MediaItem) => openModal(openItem(item));
@@ -83,6 +86,21 @@ export default function Library() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
               <span>{t('nav.admin')}</span>
             </a>
+          )}
+          {/* LINK A TV, in the account card and nowhere else on this page. This is the
+              popup the TV's sign-in screen sends people to: it tells them to open the
+              site and approve the code from their account, and this row is what "their
+              account" means on the web. Settings has the same entry — that one is where
+              you look for it, this one is where you land.
+              Signed-in only, unlike the Settings row: the popup handles a signed-out
+              visitor by raising sign-in over itself, but offering an account action from
+              a card that currently reads "not signed in" is a step that explains nothing.
+              TV build never renders it — LinkTvModal is web-only (see App.tsx). */}
+          {user && !IS_TV && (
+            <button className="set-action" type="button" onClick={() => openLink()}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2" /><path d="M8 21h8" /></svg>
+              <span>{t('link.title')}</span>
+            </button>
           )}
           {user ? (
             <button className="set-action set-action-danger" type="button" onClick={() => logout()}>

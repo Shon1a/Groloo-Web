@@ -14,8 +14,14 @@ export interface User {
   isAdmin?: boolean;
 }
 
+/* Everything but the credentials is optional, and the age gate can be satisfied EITHER
+ * way — mirroring createUser/validateAge in Groloo-server/server/auth.js. The web form
+ * sends a `dob`; the TV form sends `over18: true`, because typing an exact date on a
+ * D-pad on-screen keyboard is a miserable job and the affirmation is the only fact the
+ * gate actually needs. Sending neither is a rejection server-side, not a pass. */
 export interface SignupData {
-  email: string; password: string; name: string; surname: string; dob: string;
+  email: string; password: string;
+  name?: string; surname?: string; dob?: string; over18?: boolean;
 }
 
 interface AuthConfig { google: boolean; googleClientId?: string }
@@ -26,14 +32,31 @@ interface AuthState {
   config: AuthConfig | null;
   authOpen: boolean;
   intent: string | null;
+  /* The web account popup that claims a code shown on a TV (LinkTvModal). Its own flag
+   * rather than a mode of `authOpen`, because the two can be open AT ONCE and stacked:
+   * a signed-out user who opens it is shown sign-in over the top and comes back to the
+   * code they already typed. Sharing one flag would close the popup to show the form. */
+  linkOpen: boolean;
+  /* A code the popup should start with — set when arriving from the #/link deep link so
+   * the ?code= prefill survives the hand-off. Never auto-claimed; see LinkTvModal. */
+  linkCode: string;
   refresh: () => Promise<void>;
   loadConfig: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   signup: (d: SignupData) => Promise<void>;
   googleLogin: (credential: string) => Promise<void>;
+  /* Adopt a session minted somewhere other than a form on this device — today that is
+   * exclusively the device-link poll, where the token is handed to the holder of the
+   * pairing secret rather than to a password. Deliberately NOT called `linkLogin`: what
+   * it does is install a session the caller has already been given, and every future
+   * out-of-band sign-in (a native shell resuming a token, say) wants the same three
+   * lines rather than its own copy of them. */
+  adoptSession: (token: string, user: User) => void;
   logout: () => Promise<void>;
   openAuth: (intent?: string) => void;
   closeAuth: () => void;
+  openLink: (code?: string) => void;
+  closeLink: () => void;
 }
 
 const jsonPost = (path: string, body: unknown) =>
@@ -45,6 +68,8 @@ export const useAuth = create<AuthState>((set) => ({
   config: null,
   authOpen: false,
   intent: null,
+  linkOpen: false,
+  linkCode: '',
 
   refresh: async () => {
     try {
@@ -71,10 +96,18 @@ export const useAuth = create<AuthState>((set) => ({
     const { user, token } = await jsonPost('/api/auth/google', { credential });
     setSessionToken(token); set({ user, authOpen: false });
   },
+  adoptSession: (token, user) => {
+    setSessionToken(token); set({ user, authOpen: false });
+  },
   logout: async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
     setSessionToken(null); set({ user: null });
   },
   openAuth: (intent) => set({ authOpen: true, intent: intent ?? null }),
   closeAuth: () => set({ authOpen: false, intent: null }),
+  /* The code is kept when `code` is omitted rather than cleared, so reopening the popup
+   * after a sign-in detour still has what the user typed. closeLink is what forgets it —
+   * a pairing code is short-lived and there is no reason for one to outlive its popup. */
+  openLink: (code) => set(code === undefined ? { linkOpen: true } : { linkOpen: true, linkCode: code }),
+  closeLink: () => set({ linkOpen: false, linkCode: '' }),
 }));

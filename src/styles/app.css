@@ -2237,6 +2237,51 @@
   .auth-foot a:hover{color:var(--accent-h)}
   .auth-note{text-align:center;font-size:15px;color:var(--text-muted);opacity:.9;margin-top:14px;line-height:1.5}
   @media(max-width:480px){ .auth-card{padding:32px 22px 24px} }
+
+  /* ---------- link a TV: the account popup (LinkTvModal) ----------
+     Rides on .auth-overlay / .auth-card so it IS the sign-in card — same width, same
+     chrome, same entrance — because it is the same moment in the same flow and a second
+     card style would read as a different app. Only what this sheet actually adds is
+     below: the oversized code field, the confirmation panel, and a two-button footer.
+     Every one of these is unique to this sheet; none has a sibling elsewhere to share
+     a class with, which is why they are their own names rather than tweaks to .auth-*. */
+  .linktv-lede{color:var(--text-muted);font-size:15.5px;line-height:1.65;margin-bottom:14px}
+  /* The reverse-phishing warning. Accented left edge rather than a colour wash: it has to
+     read as "stop and think" without looking like an error the user caused. */
+  .linktv-warn{font-size:13.5px;line-height:1.6;color:var(--text);background:rgba(255,255,255,.05);
+    border-left:2px solid var(--accent);border-radius:0 8px 8px 0;padding:11px 13px;margin-bottom:20px}
+  /* --border is globally transparent (the app is deliberately borderless), so the one
+     control on this sheet that must read as "type here" states its own hairline. */
+  .linktv-input{width:100%;font-weight:600;font-size:clamp(26px,7vw,34px);line-height:1.15;
+    letter-spacing:.16em;text-indent:.16em;text-align:center;color:var(--text);
+    background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.18);border-radius:12px;
+    padding:16px 8px;min-height:70px;outline:none;transition:border-color .18s,background .18s}
+  .linktv-input:focus{border-color:var(--accent);background:rgba(255,255,255,.08)}
+  .linktv-input::placeholder{color:rgba(255,255,255,.2);font-weight:400;letter-spacing:.12em}
+  .linktv-input:disabled{opacity:.55}
+  .linktv-confirm h3,.linktv-done h3{font-size:19px;font-weight:400;margin-bottom:9px}
+  .linktv-confirm p,.linktv-done p{color:var(--text-muted);font-size:15px;line-height:1.65;margin-bottom:11px}
+  .linktv-device-prefix{margin-bottom:5px!important}
+  /* The one attacker-controlled string on this sheet. Boxed and broken freely so a long
+     name wraps instead of stretching the card — and so it is visibly a QUOTED value
+     rather than a sentence the app is saying. */
+  .linktv-device{font-family:var(--font-mono);font-size:14.5px;line-height:1.5;color:var(--text);
+    background:rgba(255,255,255,.06);border-radius:9px;padding:12px 14px;margin:0 0 12px;
+    word-break:break-word;overflow-wrap:anywhere}
+  .linktv-countdown{font-size:12.5px;letter-spacing:.06em;color:var(--text-muted);margin-bottom:16px!important}
+  .linktv-actions{display:grid;gap:9px;margin-top:4px}
+  /* Two secondary buttons sharing .auth-submit's geometry but not its fill: the primary
+     action on every step of this sheet is a single white button, and a second one beside
+     it would make the choice look symmetrical when it is not. */
+  .linktv-btn-ghost,.linktv-btn-danger{width:100%;min-height:44px;border:none;border-radius:5px;
+    font-family:var(--font-mono);font-size:15px;letter-spacing:.1em;cursor:pointer;transition:.2s;
+    background:rgba(255,255,255,.09);color:var(--text)}
+  .linktv-btn-ghost:hover{background:rgba(255,255,255,.15)}
+  .linktv-btn-danger{color:var(--danger)}
+  .linktv-btn-danger:hover{background:rgba(255,255,255,.14)}
+  .linktv-btn-ghost:disabled,.linktv-btn-danger:disabled{opacity:.5;cursor:default}
+  .linktv-done{text-align:center;padding:4px 0}
+  .linktv-mark{font-size:40px;line-height:1;margin-bottom:12px}
   /* ---- option-row checkbox list (add-on configure: catalog-row / provider pickers) ---- */
   .optrow-list{display:flex;flex-direction:column;gap:8px;margin:6px 0 4px}
   .optrow{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--border);

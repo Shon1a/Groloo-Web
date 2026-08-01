@@ -167,6 +167,31 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     // Mirrors the "paths" entry in tsconfig.app.json — keep the two in step.
     alias: {
+      /* ORDER IS LOAD-BEARING: Vite tries alias entries IN ORDER and takes the first match,
+       * and '@' is a prefix of every path below it. With '@' first this entry never fired —
+       * '@/layout/RailBar' resolved through the general rule to the real component and the
+       * TV bundle was byte-identical (358.16 kB either way). Specific before general. */
+      /* THE DESKTOP RAIL IS ALIASED AWAY IN THE TV BUILD, and this is the only thing that
+       * actually keeps its animated glyphs out of dist-tv.
+       *
+       * AppShell already renders it behind `{!IS_TV && <RailBar …/>}`, and that gate does
+       * remove the markup — `railbar`, `rail-item` and `rail-pill` are all absent from the TV
+       * bundle without this line. What it does NOT remove is the seven glyph MODULES behind
+       * it: each is a top-level `forwardRef(...)` call plus a `displayName` assignment, which
+       * rollup will not treat as side-effect-free, so the module survives its last importer
+       * being eliminated. Verified by grep: `ico-home-door` — a keyframe belonging to a glyph
+       * that exists only on this rail — was still in dist-tv. `/*#__PURE__*​/` annotations on
+       * the forwardRef calls were tried and changed nothing, hash-for-hash.
+       *
+       * Measured: 5.12 kB raw / ~1 kB gzip of animated icon code the TV never renders. The
+       * bigger point is the runtime one — those glyphs animate on mouseenter, and a Magic
+       * Remote IS a pointer, so on a TV they are a transform animation nobody asked for. See
+       * TvTopNav (which now draws its two glyphs as inert SVG) and section 4 of tv.css.
+       *
+       * Web builds resolve the real component; only `--mode tv` gets the null stub. */
+      ...(mode === 'tv'
+        ? { '@/layout/RailBar': fileURLToPath(new URL('./src/layout/RailBar.tv.tsx', import.meta.url)) }
+        : {}),
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
@@ -213,9 +238,21 @@ export default defineConfig(({ mode }) => ({
     // same-origin request and CORS never applies. Lets `npm run dev` show real
     // catalog data without running the Express server locally. In production the
     // app talks to the backend directly (see src/lib/api.ts API_BASE).
+    /* THE TARGET IS SETTABLE, because the two things this proxy is for want different ones.
+     * Working ON the backend means the local Express on 8787, which is the default and is
+     * unchanged. Working on the FRONTEND — a TV layout, say — means you want the real catalog
+     * and do not want to run a backend or hold a TMDB key at all, and pointing this at the
+     * deployed API is the whole reason it goes through a server-side proxy rather than being
+     * fetched directly: the browser's request stays same-origin, so Render's CORS allowlist
+     * (which does not contain localhost, and should not) never gets a say.
+     *
+     *   API_PROXY=https://groloo-server.onrender.com npm run dev:tv
+     *
+     * Sign-in will not survive the trip — the session cookie is issued for the backend's own
+     * domain — but everything the catalog serves does. */
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8787',
+        target: process.env.API_PROXY || 'http://127.0.0.1:8787',
         changeOrigin: true,
         secure: true,
       },

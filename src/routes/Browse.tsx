@@ -52,10 +52,14 @@ export default function Browse({ cat: catProp, topLevel }: { cat?: string; topLe
    *
    * Only the TOP-LEVEL surfaces. A "see all" drill-down (/browse/<cat>) is reached FROM a row and
    * keeps the grid: turning it into a row as well would mean walking right off the end of a row
-   * onto a copy of the same row. */
+   * onto a copy of the same row.
+   *
+   * The page carries ONE row and nothing else, so it is centred in the space under the top bar
+   * (.tv-onerow) rather than pinned to it — anchored at the top, the bottom two thirds of a 16:9
+   * screen sat empty and read as a page that had failed to finish loading. */
   if (topLevel && IS_TV) {
     return (
-      <section className="page active" id="browse" aria-label={title}>
+      <section className="page active tv-onerow" id="browse" aria-label={title}>
         <TvCatalogRow desc={desc} title={title} onSelect={onSelect} />
       </section>
     );

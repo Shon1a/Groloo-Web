@@ -217,6 +217,7 @@ export function useVideoTrailer(
       const show = () => {
         if (revealed.current || done) return;
         revealed.current = true;
+        stopWatch();
         if (revealTimer) { window.clearTimeout(revealTimer); revealTimer = 0; }
         if (videoRef.current !== v) return;
         v.classList.add('on');
@@ -228,6 +229,7 @@ export function useVideoTrailer(
       const teardown = () => {
         if (done) return;
         done = true;
+        stopWatch();
         if (revealTimer) { window.clearTimeout(revealTimer); revealTimer = 0; }
         v.removeEventListener('timeupdate', onTime);
         v.removeEventListener('seeking', onSeeking);
@@ -262,6 +264,38 @@ export function useVideoTrailer(
         if (v.currentTime - origin >= revealAt) show();
       }
 
+      /* WATCHED PER FRAME, NOT PER `timeupdate`.
+       *
+       * `timeupdate` is specified as "about 4 to 66 times a second" and browsers sit at the slow
+       * end — ~4Hz in practice, so a 250ms quantum on a 300ms threshold. Measured on this row:
+       * the video reached `playing` at 2965ms and the reveal landed at 3492ms, and essentially
+       * all of that 527ms was waiting for the next tick to notice a threshold already crossed.
+       *
+       * `requestVideoFrameCallback` fires once per PRESENTED frame, which is both the finest
+       * resolution available and the honest one — it says a frame has actually been painted, not
+       * that a clock advanced. It is Chromium 83, inside the 87 floor this build targets, and
+       * `rAF` covers anything older. `timeupdate` stays wired as the backstop for the case both
+       * are throttled (a backgrounded tab presents no frames and runs no rAF). */
+      let rafId = 0;
+      let vfcId = 0;
+      const hasVfc = typeof (v as HTMLVideoElement & { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback === 'function';
+      type WithVfc = HTMLVideoElement & {
+        requestVideoFrameCallback: (cb: () => void) => number;
+        cancelVideoFrameCallback: (id: number) => void;
+      };
+      const tick = () => {
+        if (done || revealed.current) return;
+        onTime();
+        if (revealed.current) return;
+        if (hasVfc) vfcId = (v as WithVfc).requestVideoFrameCallback(tick);
+        else rafId = requestAnimationFrame(tick);
+      };
+      const stopWatch = () => {
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+        if (vfcId && hasVfc) { try { (v as WithVfc).cancelVideoFrameCallback(vfcId); } catch { /* ignore */ } vfcId = 0; }
+      };
+      tick();
+
       v.addEventListener('timeupdate', onTime);
       v.addEventListener('seeking', onSeeking);
       v.addEventListener('ended', teardown);
@@ -288,6 +322,12 @@ export function useVideoTrailer(
     }, mountDelay);
 
     return () => {
+      /* Latching `done` here is what stops the per-frame watcher above. This path does NOT run
+       * `teardown` (it predates it and tears the element down itself), so without this the `rAF`
+       * fallback would keep rescheduling against a removed element for the life of the page. The
+       * `requestVideoFrameCallback` path self-stops — a detached, paused video presents no
+       * frames — which is exactly the kind of difference that leaks only on old hardware. */
+      done = true;
       window.clearTimeout(mountTimer);
       if (revealTimer) window.clearTimeout(revealTimer);
       if (el) {

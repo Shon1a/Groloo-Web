@@ -139,6 +139,7 @@ export default function Settings() {
 
   const user = useAuth((s) => s.user);
   const logout = useAuth((s) => s.logout);
+  const openLink = useAuth((s) => s.openLink);
   const clearAddons = useAddons((s) => s.clear);
   const clearBlocks = useBlocks((s) => s.clear);
   // Deletion is irreversible and there is no undo on the server, so the destructive
@@ -337,7 +338,14 @@ export default function Settings() {
               its own terms, so the row never has to be hidden to stay honest. */}
           <div className="setting-row">
             <label>{t('link.title')}</label>
-            <button className="set-action" type="button" onClick={() => nav('/link')}>
+            {/* A POPUP ON THE WEB, THE PAGE ON A TV — and the split is not cosmetic.
+                Claiming a code is a keyboard job done next to the TV that is showing it,
+                so on the website it should never cost a navigation away from whatever the
+                user was doing: LinkTvModal opens over the page and returns them to it.
+                LinkTvModal is web-only (see App.tsx), so the TV build keeps the route —
+                where the flow is near-useless anyway, since a TV is the device being
+                linked rather than the one doing the linking. */}
+            <button className="set-action" type="button" onClick={() => (IS_TV ? nav('/link') : openLink())}>
               <span>{t('settings.view')}</span>
               <span aria-hidden="true">→</span>
             </button>
