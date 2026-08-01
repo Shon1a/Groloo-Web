@@ -100,10 +100,10 @@ export interface TvDetailProps {
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
 
-/* ---- THE TWO DISC GLYPHS, AS DRAWN ICONS ---------------------------------------------------
- * `+` and `✓` were typed characters, and that is why they never matched the ⚑ beside them: a
- * text glyph's weight belongs to the font, and in this one the plus is a hairline at a size where
- * the flag is a solid shape. No font-weight fixes it — `+` has no bold in most faces, and even
+/* ---- THE DISC GLYPHS, AS DRAWN ICONS -------------------------------------------------------
+ * `+`, `✓` and `⚑` were typed characters, and that is why they never matched each other: a text
+ * glyph's weight belongs to the font, and in this one the plus is a hairline at a size where the
+ * flag is a solid shape. No font-weight fixes it — `+` has no bold in most faces, and even
  * where it does it thickens the strokes without squaring the ends.
  *
  * Drawn instead, at the house icon spec (24-unit box, `currentColor`, round caps and joins) but
@@ -125,6 +125,25 @@ function CheckIcon() {
     <svg viewBox="0 0 24 24" width="1.14em" height="1.14em" fill="none" stroke="currentColor"
          strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+/* THE FLAG WAS THE LAST TYPED GLYPH IN THE ROW, and on the TV it was the one that broke: `⚑`
+ * (U+2691) is missing from the system faces most TV browsers ship, so it fell through to the
+ * emoji font and came back as a colour bitmap — an orange-and-white pennant in a box, ignoring
+ * `color`, so it stayed that way through hover and through the white focus fill where every
+ * other glyph flips to dark. Where even the emoji font lacks it the fallback is tofu, a literal
+ * square. Drawn, it is the same shape everywhere and inherits `currentColor` like its siblings.
+ *
+ * Same spec as the two above, and the banner is deliberately open (stroke, not fill) so its
+ * visual weight lands beside a stroked `+` rather than beside the solid block the text glyph
+ * was. */
+function FlagIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="1.14em" height="1.14em" fill="none" stroke="currentColor"
+         strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 21V3.6" />
+      <path d="M6 4.8h12.4L15.3 9.6l3.1 4.8H6" />
     </svg>
   );
 }
@@ -282,7 +301,9 @@ export default function TvDetail(p: TvDetailProps) {
           {added ? <CheckIcon /> : <PlusIcon />}
         </button>
         <button className="tv-det-disc" id="mReport" type="button"
-                aria-label={t('report.cta')} title={t('report.cta')} onClick={onReport}>⚑</button>
+                aria-label={t('report.cta')} title={t('report.cta')} onClick={onReport}>
+          <FlagIcon />
+        </button>
       </div>
       {/* CLOSE JOINS THE ROW, pushed to its far end (`margin-left: auto` in tv.css).
           It was pinned to the top-left corner of the overlay — the one control that was nowhere

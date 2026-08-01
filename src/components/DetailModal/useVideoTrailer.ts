@@ -130,6 +130,19 @@ export interface VideoTrailerOptions {
    * 403s because its signature has expired. The billboard uses it to fall back to the YouTube
    * embed for that title, so a dead IMDb link costs a beat rather than the preview. */
   onFail?: () => void;
+  /* CALLER-OWNED SOUND, for a surface where mute outlives the trailer that is playing.
+   *
+   * The modal does not pass it and does not need to: one trailer, one mute button beside it, and
+   * the engine's own `muted` state is the whole story. The TV shelf is the other case — the red
+   * button toggles sound for the PREVIEW, not for a title, so it has to survive the walk to the
+   * next card, which tears this engine down and builds a new one. State that lives inside the
+   * engine cannot do that, so when this is supplied the engine follows it instead and `muted` is
+   * just a mirror.
+   *
+   * Applied AFTER playback has started, never before: `play()` is only permitted on a muted
+   * element without user activation, so a video that mounted unmuted would be refused outright
+   * and `onFail` would throw away a perfectly good trailer over its volume. */
+  sound?: boolean;
 }
 
 export function useVideoTrailer(
@@ -158,11 +171,19 @@ export function useVideoTrailer(
   const renditionsRef = useRef(opts?.renditions);
   renditionsRef.current = opts?.renditions;
   const cropScale = opts?.cropScale ?? 1;
+  /* Read through a ref inside the mount effect for the same reason as the renditions above: the
+   * effect runs on `src` alone, and a preview that restarted because someone pressed the red
+   * button would defeat the point of the button. */
+  const soundOpt = opts?.sound;
+  const soundRef = useRef(!!soundOpt);
+  soundRef.current = !!soundOpt;
 
   useEffect(() => {
     const slot = slotRef.current, hero = heroRef.current;
     revealed.current = false;
-    setMuted(true);
+    // The element below always STARTS muted whatever the caller wants (autoplay policy); this is
+    // the intent, which `start` applies once the file is actually running.
+    setMuted(!soundRef.current);
     muteFnRef.current = null;
     hero?.classList.remove('has-trailer');
     videoRef.current = null;
@@ -235,6 +256,7 @@ export function useVideoTrailer(
         v.removeEventListener('seeking', onSeeking);
         v.removeEventListener('ended', teardown);
         v.removeEventListener('error', fail);
+        v.removeEventListener('pause', onPause);
         try { v.pause(); v.removeAttribute('src'); v.load(); } catch { /* ignore */ }
         v.remove();
         if (videoRef.current === v) videoRef.current = null;
@@ -258,6 +280,20 @@ export function useVideoTrailer(
        * origin off one of those would record the position we are LEAVING, and the jump to the
        * target would then read as half a minute of instant progress and reveal on the spot. */
       function onSeeking() { origin = null; }
+
+      /* THE ONE WAY UNMUTING CAN GO WRONG, ANSWERED IN PLACE. Chromium's policy is that an
+       * element which began playing muted without user activation is PAUSED if it is later
+       * unmuted — and the row does exactly that, on the frame the red button is pressed. The
+       * press itself grants activation, so this should not fire; what it covers is the set whose
+       * activation has lapsed, or a policy stricter than the one documented. Going back to muted
+       * and resuming turns the worst case into "the button appeared not to work", instead of a
+       * billboard that silently freezes on the frame the viewer asked for sound. */
+      function onPause() {
+        if (done || v.ended || v.muted) return;
+        v.muted = true;
+        const r = v.play();
+        if (r && typeof r.catch === 'function') r.catch(() => { /* nothing left to try */ });
+      }
       function onTime() {
         if (v.seeking) return;
         if (origin === null) { origin = v.currentTime; return; }
@@ -300,6 +336,7 @@ export function useVideoTrailer(
       v.addEventListener('seeking', onSeeking);
       v.addEventListener('ended', teardown);
       v.addEventListener('error', fail);
+      v.addEventListener('pause', onPause);
 
       const start = () => {
         if (done) return;   // torn down while we waited on metadata
@@ -313,7 +350,11 @@ export function useVideoTrailer(
         // Muted autoplay is permitted everywhere, but a set can still refuse (power saving, an
         // ancient policy); treat a rejection as this engine failing rather than a dead billboard.
         const p = v.play();
-        if (p && typeof p.catch === 'function') p.catch(() => fail());
+        if (p && typeof p.then === 'function') {
+          // Sound is applied HERE, on the far side of the promise: the element had to be muted
+          // for `play()` to be allowed at all, and this is the first moment it need not be.
+          p.then(() => { if (!done) muteFnRef.current?.(!soundRef.current); }).catch(() => fail());
+        }
       };
       if (v.readyState >= 1) start();
       else v.addEventListener('loadedmetadata', start, { once: true });
@@ -339,6 +380,16 @@ export function useVideoTrailer(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
+
+  /* The caller's switch, applied to a preview that is already running. Deliberately does NOT
+   * touch the mount effect above — this is a property of the element, not of the src, and the
+   * one thing pressing the button must never do is restart the trailer. Skipped entirely when
+   * the caller owns no sound state (the modal), which keeps `toggleMute` the only writer there. */
+  useEffect(() => {
+    if (soundOpt === undefined) return;
+    setMuted(!soundOpt);
+    muteFnRef.current?.(!soundOpt);
+  }, [soundOpt]);
 
   const toggleMute = () => setMuted((m) => { const nm = !m; muteFnRef.current?.(nm); return nm; });
   return { muted, toggleMute };
