@@ -3,10 +3,11 @@ import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
-import { useTrailer } from './DetailModal/useTrailer';
 import { useVideoTrailer, trailerStartOffset } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
 import { useSettings } from '../stores/settings';
+import { usePreviewSound } from '../stores/previewSound';
+import { isPreviewSoundKey } from '../lib/tvKeys';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
  * whenever MODE === 'tv', so home rows, Upcoming and add-on catalogues all get it).
@@ -38,16 +39,20 @@ import { useSettings } from '../stores/settings';
  * so the artwork walked to the next poster on its own while the page moved. The remote — focus —
  * is the only thing that drives this component. A click still opens a title. */
 
-const SPOT_MAX = 12;
+/* Titles a home row walks. Cut from 12 as part of the TV fill-rate pass: the strip paints at most
+ * ~5 posters to the right of the billboard at 1080p, and every title past that is DOM and bitmap
+ * nobody has seen — 13 rows made it the largest passive load on the screen. Nothing is lost: the
+ * card at the end of every row opens the full browse grid. Rows that ARE a page (TV / Movies /
+ * Anime) pass their own `max` and are unaffected. */
+const SPOT_MAX = 10;
 
 /* ms the remote must sit still on a title before its trailer is even asked for.
  *
  * Cut from 1500 to claw back the only part of the wait that is ours to spend. Everything after this
  * used to belong to YouTube — fetching the key, loading the embed, and above all the ~4.5s of
- * playback its pause glyph occupies (see TRAILER_REVEAL_AT) — so this is where a faster start had
- * to come from. Most of that wait is now gone with the embed itself, on every title IMDb has a
- * trailer file for; this timer keeps the job it always had, which is not starting one at all for a
- * title someone is merely walking past.
+ * playback its pause glyph occupied — so this is where a faster start had to come from. All of that
+ * wait is now gone with the embed itself; this timer keeps the job it always had, which is not
+ * starting a preview at all for a title someone is merely walking past.
  *
  * NOW 500, AND THE GUARANTEE IT PROTECTS HAS MOVED. At 800 this timer was doing two jobs: keeping a
  * passing title from mounting an embed, and keeping a walk along a row from firing twelve /api/meta
@@ -60,30 +65,20 @@ const TRAILER_DWELL = 500;
  * because one card each way is what a press of Left or Right reaches, and the point is to have the
  * trailer in hand BEFORE the next rest rather than to cache the row. */
 const TRAILER_PREFETCH_SPAN = 1;
-/* ONLY THE YOUTUBE FALLBACK IS TIMED BY THIS — a title playing IMDb's own file reveals in a third
- * of a second (see useVideoTrailer), because none of what follows applies to a player we own.
+/* THE YOUTUBE EMBED IS GONE FROM THIS ROW, AND IT WAS THE MOST EXPENSIVE THING ON THE SCREEN.
  *
- * SECONDS OF THE TRAILER, not seconds on a stopwatch — and that distinction is the fix for a
- * reported bug rather than a nicety. YouTube stamps a large pause glyph in the dead centre of the
- * player when autoplay begins; it is not chrome at the edges, so no amount of cropping reaches it,
- * and the only way past it is to arrive later. A wall-clock delay measured here (2600ms, tuned off
- * real frames) still showed the glyph on a real TV, because a slower start pushes the glyph later
- * in real time while a stopwatch keeps ticking. Playback time cannot drift like that: at 3.5s of
- * video the glyph is long gone however long the video took to get going. It also means a set that
- * stalls mid-buffer simply waits rather than revealing a frozen frame.
+ * It was a cross-origin iframe: a second player with its own JS, its own decoder and its own
+ * compositing, mounted over a home screen that is already holding a dozen rows of artwork. On a
+ * TV that is not a fallback, it is the thing that makes the shelf stutter — and it was also the
+ * worst preview of the two, because YouTube stamps a pause glyph in the dead centre of the player
+ * that no crop can reach and that took ~4.8 SECONDS of playback to fade (the whole of the old
+ * TRAILER_REVEAL_AT, removed with it).
  *
- * WHY 4.8 AND NOT LESS. Measured in this component, frame by frame against playback time: the
- * glyph is still on screen at 3.6s and gone by 4.4s. It is not a flash — it owns the opening of
- * every trailer. 4.0 was tried and is too tight; it read as clean here and still showed on a real
- * set, because the last of the fade has no fixed end. So the number is the measurement plus a
- * margin, and the honest summary is that YouTube owns the first ~4.5 seconds of any preview: there
- * is no combination of embed parameters or cropping that removes the glyph (it is drawn inside a
- * cross-origin player, dead centre, where a crop cannot reach), so waiting is the only lever, and
- * the only way to have both a fast start AND no glyph would be to stop using YouTube's player.
- *
- * WHICH IS WHAT THE PREFERRED PATH NOW DOES. This number survives as the fallback's, unchanged and
- * still correct for what it measures — it is simply no longer what most titles pay. */
-const TRAILER_REVEAL_AT = 4.8;
+ * WHAT A TITLE WITHOUT AN IMDb TRAILER DOES NOW: nothing. The artwork stays up, which is exactly
+ * what a resting row already looks like, so the row loses a preview rather than gaining a defect.
+ * The /api/meta lookup that used to fetch the embed's key is KEPT — but only to read the IMDb id
+ * off it, which is what lets the ungated feeds (Upcoming, the Featured Hero) reach the file
+ * engine at all. See `wantImdbLookup` below. */
 
 /* MUST TRACK `.tv-spot-trailer-slot video`'s scale in tv.css. The preview is magnified to hide
  * the letterboxing IMDb bakes into its files, which means the video is sampled at more than the
@@ -96,6 +91,27 @@ const BILLBOARD_TRAILER_CROP = 1.35;
  * for `original` on a TV is fatal rather than merely wasteful. */
 const BILLBOARD_RENDITION = 'w780';
 const THUMB_RENDITION = 'w342';
+
+/* THE SOUND BADGE'S TWO GLYPHS, and they are the player's own — same 24-unit box, same filled
+ * cone, same 1.8 stroke on the waves and on the cross. Copied rather than imported because the
+ * player is a lazily-loaded chunk and a home row must not pull it in for two paths; a private
+ * icon that quietly diverged from the one beside it would be the worse outcome, so if either
+ * moves, both move (VideoPlayer's IcVolHud / IcVolMuteHud).
+ *
+ * Sized at 1em so a single font-size in tv.css drives them across both TV resolutions. */
+const IcSoundOn = (
+  <svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden="true">
+    <path d="M4 9v6h4l5 5V4L8 9H4z" />
+    <path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <path d="M18.5 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+  </svg>
+);
+const IcSoundOff = (
+  <svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden="true">
+    <path d="M4 9v6h4l5 5V4L8 9H4z" />
+    <path d="M16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+  </svg>
+);
 
 function isSeries(it: MediaItem) {
   return it.type === 'tv' || it.type === 'series';
@@ -197,24 +213,51 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   );
   const firstRun = useRef(true);
   const trackRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
   const prevActiveRef = useRef(0);
+
+  /* ---- WHEN THE STRIP'S DUPLICATE COPY IS ALLOWED TO EXIST -----------------------------------
+   * See the note in `thumbs`. The copy is the row's endless up-next preview and it is only ever
+   * LOOKED at near the end of a walk, so a row nobody has touched should not be paying for it.
+   * Two things can expose it, and both are latched rather than tracked — once built it stays, so
+   * walking back and forth never re-decodes a poster:
+   *
+   *   THE ROW WAS FOCUSED. A walk cannot begin any other way, and mounting on the focus itself is
+   *   a whole press earlier than the first Left/Right that could need it. Deliberately not a
+   *   threshold on `active`: how many posters fit beside the billboard depends on the panel, so
+   *   any fixed number is wrong somewhere.
+   *
+   *   THE STRIP DOES NOT FILL THE RAIL. On a very wide set (a 4K panel holds ~12 posters beside
+   *   the billboard) the last title of the first copy can sit short of the right edge with the
+   *   row at rest, which would leave visible empty track. Measured rather than derived: one pair
+   *   of rects, once, against the real layout — no CSS-variable arithmetic to keep in step. */
+  const [dup, setDup] = useState(false);
+  useEffect(() => {
+    if (dup) return;
+    if (open) { setDup(true); return; }
+    if (!visible) return;
+    const rail = railRef.current, track = trackRef.current;
+    if (!rail || !track) return;
+    // A frame late, so the measurement is of a settled strip rather than of one mid-transition.
+    const id = requestAnimationFrame(() => {
+      if (track.getBoundingClientRect().right < rail.getBoundingClientRect().right - 1) setDup(true);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [dup, open, visible, n]);
 
   const reduceMotion = typeof window !== 'undefined'
     && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
   /* ---- THE PREVIEW ON THE SHELF ------------------------------------------------------------
    * Rest on a title and its trailer starts playing behind the title plate, muted; move on and it
-   * is gone. The embed machinery is the modal's, unchanged (useTrailer) — it already mounts late,
-   * reveals only once the video genuinely plays, and gives up quietly on a trailer that is
-   * region-blocked or has embedding disabled, which is most of the hard part.
+   * is gone.
    *
-   * TWO ENGINES, AND THE BILLBOARD PREFERS THE ONE THAT IS NOT YOUTUBE. IMDb publishes its
-   * trailers as ordinary video files; our backend resolves them at /api/imdb-trailer/:imdb, and a
-   * file we play ourselves has no pause glyph, no branding, no ads and no region gate — so it
-   * opens in a third of a second instead of after four and a half (useVideoTrailer). Rows are
-   * keyed by the IMDb id the CARD already carries, so unlike the embed's key it costs no detail
-   * request to find out. The embed remains the fallback, for the titles IMDb has nothing for and
-   * for the feeds whose cards carry no id at all (the Featured Hero, Upcoming).
+   * ONE ENGINE, AND IT IS A FILE WE PLAY OURSELVES. IMDb publishes its trailers as ordinary video
+   * files; our backend resolves them at /api/imdb-trailer/:imdb, and a <video> we own has no pause
+   * glyph, no branding, no ads and no region gate — so it opens in a third of a second
+   * (useVideoTrailer). Rows are keyed by the IMDb id the CARD already carries, so it usually costs
+   * no detail request to find out. A title IMDb has nothing for simply keeps its artwork; there is
+   * no embed behind it any more, for the reason at the head of the file.
    *
    * WHY A DWELL RATHER THAN A FETCH PER PRESS. Walking a row must not fire twelve requests, so
    * nothing is asked for until the remote has STOPPED on a title for TRAILER_DWELL. Flicking
@@ -226,6 +269,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const heroBtnRef = useRef<HTMLButtonElement>(null);
   const trailerSlotRef = useRef<HTMLDivElement>(null);
   const rowTrailers = useSettings((s) => s.settings.tvRowTrailers);
+  /* Selected field by field rather than as one object: every row on the screen subscribes to
+   * this store, and a selector returning `{on, toggle}` would build a new object per render and
+   * re-render all dozen of them on any state change anywhere. */
+  const soundOn = usePreviewSound((s) => s.on);
+  const toggleSound = usePreviewSound((s) => s.toggle);
   const [dwelt, setDwelt] = useState<MediaItem | null>(null);
   /* Set when the video engine reports it could not play this title's file — a link whose
    * signature has expired, a codec a set will not decode, a refused autoplay. It drops that
@@ -276,29 +324,26 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowTrailers, open, dwelt?.id, n]);
 
-  /* ---- PICKING AN ENGINE, ONCE PER RESTED TITLE ---------------------------------------------
-   * IMDb's file first; the YouTube embed only for what it cannot cover. The two hooks below are
-   * both mounted and exactly one is ever armed — each takes `undefined` as "not you", tears its
-   * own player down and leaves the slot alone, so the handover needs no coordination beyond
-   * which of them is handed a source. */
+  /* ---- ONE ENGINE, AND A TITLE EITHER HAS A TRAILER OR IT DOES NOT ---------------------------
+   * IMDb's file, played by a <video> we own. There is no second engine any more — see the note
+   * at the head of the file for why the embed went. */
   const armed = !!dwelt && rowTrailers;
   /* LATCHED, AND THE LATCH IS WHAT KEEPS THIS FROM OSCILLATING. Most cards carry their IMDb id,
-   * but the ungated feeds (Upcoming, the Featured Hero) do not — and those titles fetch /api/meta
-   * for the embed anyway, which carries the id. Reading it straight off `trailerMeta` would spin:
-   * an id found there arms the video, the video disarms the embed, the embed's query goes idle and
-   * the id vanishes again. Held in state, it survives the request that produced it, so an Upcoming
-   * title gets the good engine on the round-trip it was already paying for. Cleared with the dwell. */
+   * but the ungated feeds (Upcoming, the Featured Hero) do not, and without one there is nothing
+   * to ask /api/imdb-trailer with. Reading the id straight off `trailerMeta` would spin: an id
+   * found there arms the video, the armed video would disarm the lookup, the query goes idle and
+   * the id vanishes again. Held in state, it survives the request that produced it. Cleared with
+   * the dwell. */
   const [metaImdb, setMetaImdb] = useState<string | undefined>(undefined);
   const imdbId = armed ? (dwelt?.imdb || metaImdb) : undefined;
   const imdbTrailer = useImdbTrailer(videoFailed ? undefined : imdbId);
   const videoUrl = videoFailed ? undefined : (imdbTrailer.data?.url || undefined);
-  /* The embed is not asked for SPECULATIVELY, and that is the point of this line: /api/meta is a
-   * whole detail payload fetched for one string, so it is requested only once IMDb has actually
-   * come back without a trailer (or the card never had an id to ask with). The common case is one
-   * request for the preview, not two. */
-  const imdbSettled = !imdbId || imdbTrailer.isFetched || videoFailed;
-  const wantEmbed = armed && imdbSettled && !videoUrl;
-  const { data: trailerMeta } = useMeta(wantEmbed ? dwelt?.id : undefined, dwelt?.type);
+  /* /api/meta IS ONLY EVER ASKED FOR AN ID WE DO NOT ALREADY HAVE. It is a whole detail payload
+   * fetched for one string, so it goes out only for a card that arrived without an IMDb id — and
+   * never for a card that has one, which is the common case and now costs exactly one request for
+   * the preview. (`enrich` rows resolve the same id from the detail they already fetch, below.) */
+  const wantImdbLookup = armed && !dwelt?.imdb && !metaImdb;
+  const { data: trailerMeta } = useMeta(wantImdbLookup ? dwelt?.id : undefined, dwelt?.type);
   useEffect(() => {
     if (typeof trailerMeta?.imdb === 'string' && !dwelt?.imdb) setMetaImdb(trailerMeta.imdb);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -321,17 +366,37 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * belongs in this number: a video blown up 1.35x is sampled at 1.35x its box. */
       renditions: imdbTrailer.data?.urls,
       cropScale: BILLBOARD_TRAILER_CROP,
+      /* Nowhere to fall back TO any more, so this is just "stop trying this title": the file is
+       * dropped, the artwork stays, and the flag clears with the dwell so the next visit tries
+       * the link again rather than inheriting a verdict about an expired signature. */
       onFail: () => setVideoFailed(true),
+      /* Sound is the store's, not the engine's — see previewSound.ts. The engine still starts
+       * every file muted for the autoplay policy and applies this the moment it is playing. */
+      sound: soundOn,
     },
   );
-  useTrailer(
-    trailerSlotRef,
-    heroBtnRef,
-    wantEmbed ? (trailerMeta?.trailerKey || undefined) : undefined,
-    dwelt?.title || '',
-    // Same reasoning as above: the embed goes up as soon as its key lands.
-    { mountDelay: 0, revealAtPlayTime: TRAILER_REVEAL_AT, ignoreLowPower: true },
-  );
+
+  /* ---- THE RED BUTTON --------------------------------------------------------------------
+   * Volume up/down was the ask and it cannot be done — Android routes those keys to the system
+   * before the WebView, webOS handles them in firmware, and Tizen only yields them to a
+   * registerKey that steals them from the television. The full reasoning is on isPreviewSoundKey.
+   * Red is what a TV platform will actually hand an app, and it is on every remote in the room.
+   *
+   * SCOPED TO THE ROW THE REMOTE IS ON, which is what `open` means and why the listener lives
+   * here rather than in tvKeys beside its predicate. A home screen mounts a dozen of these and
+   * exactly one is focused, so exactly one is listening — and opening a title or the player
+   * clears `open`, which unbinds this for free along with tearing the preview down. Pressing red
+   * anywhere else on the app does nothing at all, which is correct: there is no preview to hear.
+   *
+   * NOT PREVENTED, NOT STOPPED. The press is read and passed on. Red carries no meaning to the
+   * platform outside an app that claims it, and the keyboard's mute key must go on muting the
+   * machine — swallowing it would leave someone unable to silence a set from our screen. */
+  useEffect(() => {
+    if (!open || !rowTrailers) return;
+    const onKey = (e: KeyboardEvent) => { if (isPreviewSoundKey(e)) toggleSound(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, rowTrailers, toggleSound]);
 
   /* ---- THE ARTWORK A HISTORY CARD DOES NOT CARRY (`enrich`) ---------------------------------
    * NOT ON A DWELL, unlike the trailer above, and the difference is the point: a trailer is
@@ -409,15 +474,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         </button>
       );
     };
-    const copy = (pass: number) => list.map((it, i) => tile(it, `p${pass}-${i}`));
-    if (!hasEnd) return [...copy(0), ...copy(1)];
-    /* POSITION IS THE WHOLE TRICK. The strip is translated so the tile at index `active` hides
-     * behind the billboard and its successors peek to the right, so putting the card at index n —
-     * straight after the last title of the FIRST copy — makes it both the thing you see appear at
-     * the end of the posters and the thing the billboard becomes when you reach it. The second
-     * copy still follows it, so the row's endless up-next preview is unbroken. */
-    return [
-      ...copy(0),
+    const endCard = (
       <button
         key="end"
         type="button"
@@ -429,11 +486,29 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       >
         <span className="tv-spot-blank-ic" aria-hidden="true">{endIcon}</span>
         <span className="tv-spot-blank-label">{endLabel}</span>
-      </button>,
-      ...copy(1),
-    ];
+      </button>
+    );
+    const copy = (pass: number) => list.map((it, i) => tile(it, `p${pass}-${i}`));
+    /* THE SECOND COPY IS NOT BUILT UNTIL SOMETHING COULD SEE IT — the single biggest cut in the
+     * TV build's passive load. The duplicate exists only so the up-next area is never empty near
+     * the END of a walk; a row nobody has touched is parked at index 0 with the copy sitting
+     * entirely off the right of a strip that is `overflow: hidden`. Home shows ~13 of these rows
+     * and 12 of them are never focused, so the browser was rastering a second full set of posters
+     * per row purely to keep them clipped.
+     *
+     * `dup` latches on the first thing that can expose it (see the `wrap` effect) and never
+     * clears — unmounting a copy the walk might come back to would throw away decoded bitmaps and
+     * pop them back in, which is the artefact this whole component is arranged to avoid. */
+    if (!dup) return hasEnd ? [...copy(0), endCard] : copy(0);
+    if (!hasEnd) return [...copy(0), ...copy(1)];
+    /* POSITION IS THE WHOLE TRICK. The strip is translated so the tile at index `active` hides
+     * behind the billboard and its successors peek to the right, so putting the card at index n —
+     * straight after the last title of the FIRST copy — makes it both the thing you see appear at
+     * the end of the posters and the thing the billboard becomes when you reach it. The second
+     * copy still follows it, so the row's endless up-next preview is unbroken. */
+    return [...copy(0), endCard, ...copy(1)];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [list, onSelect, hasEnd, canSeeAll, cat, onSeeAll, onMore, moreBusy, endLabel, endIcon, heading, t, resumeOf]);
+  }, [list, onSelect, hasEnd, dup, canSeeAll, cat, onSeeAll, onMore, moreBusy, endLabel, endIcon, heading, t, resumeOf]);
 
   /* Arm the artwork a screenful before the row arrives, so it is decoded by the time it is
    * scrolled to and nothing pops in. Disconnects on the first hit — this is a one-way latch. */
@@ -537,7 +612,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       <div className="tv-spot-stage">
         {/* The strip's window — it carries the clip the stage used to, so the billboard on top is
             free to grow past the row when the remote reaches it. See tv.css. */}
-        <div className="tv-spot-rail">
+        <div className="tv-spot-rail" ref={railRef}>
           {/* STRIP TRACK — all titles, portrait; translated so the focused one hides behind the
               billboard and its successors peek to the right. `--active` drives the transform. */}
           <div className="tv-spot-strip" ref={trackRef} style={{ '--active': active } as CSSProperties} role="list">
@@ -601,6 +676,18 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
               </div>
             );
           })}
+          {/* THE SOUND BADGE. A speaker, crossed while the preview is muted — the STATE of the
+              thing playing, not the action red performs, which is how every player on this screen
+              already reads (see the same pair of glyphs in VideoPlayer).
+
+              SHOWN ONLY WHILE A TRAILER IS ACTUALLY UP, and that is CSS rather than state: the
+              engine puts `has-trailer` on this button at the reveal and takes it off at teardown,
+              so the badge is tied to the thing it controls without this component having to learn
+              when playback began. Decorative to a screen reader — it reports the state of a
+              preview that is itself `aria-hidden`. */}
+          <span className="tv-spot-sound" aria-hidden="true">
+            {soundOn ? IcSoundOn : IcSoundOff}
+          </span>
         </button>
       </div>
 
