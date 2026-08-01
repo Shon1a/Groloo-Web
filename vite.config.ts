@@ -66,20 +66,27 @@ export default defineConfig(({ mode }) => ({
         // /assets/* names are revisioned by workbox's own content hash.
         // The rail's PNGs used to be listed here too; the rail is all inline SVG components now.
         //
-        // `wasm` is here for the vendored Heart core under /assets/heart/<ver>/. While the core
-        // still came off jsDelivr it was kept offline by the CDN runtime-cache route below;
-        // serving it from our own origin means it matches no runtime route at all, so the
-        // precache is now the only thing keeping it available. `**/*.js` already swept up the
-        // glue script, and that half is the dangerous one: the glue loads happily from cache,
-        // then mod.default() reaches for groloo_heart_bg.wasm, misses, and the whole core drops
-        // to the JS fallback with heartStatus.stage === 'instantiate' — a degradation that never
-        // reproduces online. Both files must appear in: grep -o 'heart[^"]*' dist/sw.js.
+        // `wasm` is here for the vendored Rust core under /assets/groloo-core/<build>/. It is
+        // served from our own origin, so it matches no runtime route at all and the precache is
+        // the only thing keeping it available offline. `**/*.js` already swept up the glue
+        // script, and that half is the dangerous one: the glue loads happily from cache, then
+        // mod.default() reaches for groloo_core_bg.wasm, misses, and the whole core drops to the
+        // JS fallback with coreStatus.stage === 'instantiate' — a degradation that never
+        // reproduces online. Both files must appear in: grep -o 'groloo-core[^"]*' dist/sw.js.
         // Size matters here as well: workbox drops anything above its 2 MiB
         // maximumFileSizeToCacheInBytes default from the manifest with only a build-log warning,
-        // and a core that grows past it would fail exactly the same silent way. Today's is 238 KB.
+        // and a core that grows past it would fail exactly the same silent way. Today's is 435 KB.
         globPatterns: ['**/*.{js,css,html,woff2,svg,ico,webmanifest,wasm}'],
         // Big, rarely-touched, or not needed offline — fetched normally instead.
-        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js'],
+        //
+        // /assets/heart/ IS THE OLD CORE AND NOTHING IMPORTS IT. It is the pre-groloo-core Heart
+        // build, superseded by /assets/groloo-core/; `grep -rn "assets/heart" src/` returns
+        // nothing, so no code path can ever ask for it. The precache did not care about that: the
+        // js/wasm globPattern above matched it on name alone, so every first visit downloaded and
+        // stored 277 KB (a 244 KB .wasm plus its glue) for a module that will never be
+        // instantiated. Ignored rather than deleted so the vendored folder stays available if a
+        // rollback ever wants it; it is safe to delete public/assets/heart/ outright.
+        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [
@@ -238,21 +245,31 @@ export default defineConfig(({ mode }) => ({
     // same-origin request and CORS never applies. Lets `npm run dev` show real
     // catalog data without running the Express server locally. In production the
     // app talks to the backend directly (see src/lib/api.ts API_BASE).
-    /* THE TARGET IS SETTABLE, because the two things this proxy is for want different ones.
-     * Working ON the backend means the local Express on 8787, which is the default and is
-     * unchanged. Working on the FRONTEND — a TV layout, say — means you want the real catalog
-     * and do not want to run a backend or hold a TMDB key at all, and pointing this at the
-     * deployed API is the whole reason it goes through a server-side proxy rather than being
-     * fetched directly: the browser's request stays same-origin, so Render's CORS allowlist
-     * (which does not contain localhost, and should not) never gets a say.
+    /* THE TARGET IS SETTABLE, because the two things this proxy is for want different ones, and
+     * THE DEPLOYED API IS THE DEFAULT because only one of them is the common case. Working on
+     * the FRONTEND — a TV layout, say — means you want the real catalog and do not want to run a
+     * backend or hold a TMDB key at all, and pointing this at the deployed API is the whole
+     * reason it goes through a server-side proxy rather than being fetched directly: the
+     * browser's request stays same-origin, so Render's CORS allowlist (which does not contain
+     * localhost, and should not) never gets a say.
      *
-     *   API_PROXY=https://groloo-server.onrender.com npm run dev:tv
+     * The local Express used to be the default, and the failure was silent in the worst way:
+     * with nothing listening on 8787 every catalog call 502s, and the home screen still RENDERS
+     * — the Studios row is a hardcoded list, so the page comes up looking merely empty rather
+     * than broken. Diagnosing that costs more than the flag it saves.
      *
-     * Sign-in will not survive the trip — the session cookie is issued for the backend's own
-     * domain — but everything the catalog serves does. */
+     * Working ON the backend is the other case, and it is one variable away:
+     *
+     *   $env:API_PROXY = "http://127.0.0.1:8787"; npm run dev:tv     (PowerShell)
+     *   API_PROXY=http://127.0.0.1:8787 npm run dev:tv               (bash)
+     *
+     * TWO THINGS TO EXPECT FROM THE DEFAULT. Render spins the instance down when it is idle, so
+     * the first request after a quiet spell wakes it and can 502 once or twice before it
+     * answers. And sign-in will not survive the trip — the session cookie is issued for the
+     * backend's own domain — though everything the catalog serves does. */
     proxy: {
       '/api': {
-        target: process.env.API_PROXY || 'http://127.0.0.1:8787',
+        target: process.env.API_PROXY || 'https://groloo-server.onrender.com',
         changeOrigin: true,
         secure: true,
       },
