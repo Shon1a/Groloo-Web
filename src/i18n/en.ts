@@ -164,6 +164,11 @@ const SEED: Record<string, string> = {
   'modal.episodes_count': '{n} Episodes',
   'modal.episode_n': 'Episode {n}',
   'modal.episodes_unavailable': 'Episodes unavailable.',
+  // The TV episode deck's one-line answer to "how much of this is left?". {time} is already
+  // formatted ("27m", "1h 22m") — the unit is not a separate key because languages that put it
+  // elsewhere in the sentence need to move the whole placeholder anyway.
+  'modal.ep_left': '{time} left',
+  'modal.ep_watched': 'Watched',
   'modal.trailer_title': 'Trailer: {title}',
   'mylist.add': 'Add to My List',
   'mylist.remove': 'Remove from My List',
@@ -357,6 +362,45 @@ const SEED: Record<string, string> = {
   'auth.err_generic': 'Something went wrong. Please try again.',
   'auth.signin': 'Sign in',
 
+  /* TV sign-in (TvAuthModal) — the pairing screen the `--mode tv` build shows instead of
+   * the web form card. Every string here is read from a sofa, so the constraint is not
+   * length but WHAT IT ASKS THE READER TO DO: the three steps are the whole interface,
+   * and they are numbered because a viewer glancing up between presses on a phone needs
+   * to find their place again. `step_open` names the site the SERVER advertises (the code
+   * substitutes it in) rather than a hard-coded host — see prettyUrl in TvAuthModal.
+   * The sign-up path is deliberately never spelled out as a separate flow: creating an
+   * account and approving a code are the same three steps on the same web page, and
+   * describing them as two things would double the apparent cost of getting in. */
+  'tvauth.title': 'Sign In From Another Device',
+  // 'tvauth.kicker' and 'tvauth.step_open' are no longer rendered on TV: the kicker restated the
+  // title, and "go to <url>" is the QR code's job now. Both keys stay so the external
+  // groloo-translations files that already carry them do not 404 against a missing entry.
+  'tvauth.kicker': '// no typing — approve this TV from any signed-in device',
+  'tvauth.step_open': 'On your phone or computer, go to',
+  'tvauth.qr_aria': 'QR code — scan it to open the sign-in page with this code filled in',
+  // No longer "…or open the address below": the caption under the QR is gone, so there is no
+  // address below to open. Copy must not name something that is not on screen.
+  'tvauth.step_account': 'Scan the code with your phone and sign in.',
+  'tvauth.step_code': 'Approve this TV when your phone asks.',
+  'tvauth.code_label': 'YOUR CODE',
+  'tvauth.expires_in': 'Expires in {time}',
+  'tvauth.new_code': 'Get a new code',
+  'tvauth.retry': 'Try again',
+  'tvauth.expired': 'This code expired. Get a new one to carry on.',
+  'tvauth.denied': 'Sign-in was rejected on the other device.',
+  'tvauth.err_code': 'Couldn’t reach GROLOO to get a code. Check the TV’s network and try again.',
+  'tvauth.err_busy': 'Too many TVs are pairing right now — try again in a minute.',
+  'tvauth.use_email': 'No other device? Sign in with email instead →',
+  'tvauth.use_code': '← Back to the code',
+  'tvauth.email_title': 'Sign in with email',
+  'tvauth.email_kicker': '// this one needs the on-screen keyboard',
+  /* One box carrying BOTH statements, because on a TV each extra control is another
+   * journey across an on-screen keyboard — and both are things the user must actively
+   * affirm rather than have assumed. 18 matches MIN_AGE in lib/authRules.ts and the
+   * Terms' eligibility clause; the three have to move together or the copy lies. */
+  'tvauth.terms_accept': 'I am 18 or older and I accept the',
+  'tvauth.err_terms': 'Confirm you are 18 or older and accept the Terms to create an account.',
+
   // device link (#/link) — the phone-side claim screen for a code shown on a TV.
   // Every string here is read on a 5" screen by someone who has just been told to
   // "go to groloo.vercel.app/link", so it stays short and names the TV, not the
@@ -388,6 +432,15 @@ const SEED: Record<string, string> = {
   'link.rejected_head': 'Request rejected',
   'link.rejected_body': 'Nothing was signed in, and the code is now dead. If it really was your own TV, get a new code there and try again.',
   'link.another': 'Link another device',
+  /* The account popup (LinkTvModal). Same flow as the page above and deliberately the
+   * same strings for everything that is genuinely the same — only the framing differs,
+   * because the reader arrived from their own account menu rather than from a TV telling
+   * them a URL, and so already knows why they are here. `warn` is NOT re-worded for the
+   * popup: it is the anti-reverse-phishing sentence, and it earns its place unchanged. */
+  'link.popup_kicker': '// enter the code showing on your TV',
+  'link.popup_lede': 'Your TV is showing an eight-character code. Type it here and we’ll sign that TV in to this account.',
+  'link.done_close': 'Done',
+  'link.dismiss_aria': 'Close without linking a TV',
 
   // Wording tracks the server's messages for the same machine codes — a user who sees
   // both (page copy here, raw API text in a support screenshot) should read one story.

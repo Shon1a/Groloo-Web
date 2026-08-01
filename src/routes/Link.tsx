@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../stores/auth';
 import { useT } from '../i18n/i18n';
 import { apiPost, errorCode, errorMessage } from '../lib/api';
+import { formatLinkCode, normalizeLinkCode, LINK_CODE_LEN } from '../lib/linkCode';
 
 /* ------------------------------------------------------------------ *
  *  #/link — the companion half of device-link sign-in (RFC 8628).
@@ -27,23 +28,10 @@ import { apiPost, errorCode, errorMessage } from '../lib/api';
  *     opens it. Hence one field, thumb-sized targets, and no chrome to navigate.
  * ------------------------------------------------------------------ */
 
-/* Mirrors LINK_ALPHABET in Groloo-server/server/auth.js — 25 symbols with 0 O 1 I L
- * (classic ambiguity) and B G S U Z Q (B/8, G/6, S/5, U/V, Z/2, Q/O across a living
- * room) removed. Kept here only to normalize input the same way the server does; the
- * server remains the authority and re-normalizes everything it is sent. */
-const LINK_ALPHABET = '23456789ACDEFHJKMNPRTVWXY';
-const LINK_CODE_LEN = 8;
-const NOT_ALPHABET = new RegExp(`[^${LINK_ALPHABET}]`, 'g');
-
-/* Uppercase, drop everything outside the alphabet, cap at 8. Dropping rather than
- * folding is deliberate and matches the server: a typed `O` could have been meant as
- * `0` or `Q`, neither of which is in the alphabet, so guessing would turn a wrong code
- * into a *different* wrong code — the short result and an honest "check the
- * characters" beats a confident lookup of something the user never saw. */
-const normalize = (raw: string) => raw.toUpperCase().replace(NOT_ALPHABET, '').slice(0, LINK_CODE_LEN);
-/* Rendered as XXXX-XXXX to match the TV, which shows the hyphen. It is presentation
- * only — the hyphen is stripped straight back out on the next keystroke. */
-const format = (code: string) => (code.length > 4 ? `${code.slice(0, 4)}-${code.slice(4)}` : code);
+/* The alphabet and both string helpers moved to lib/linkCode.ts when the account popup
+ * (LinkTvModal) grew a second field that accepts a code — two copies of a normalization
+ * rule is one copy too many, and the one that drifts is always the older one. The server
+ * remains the authority and re-normalizes everything it is sent. */
 
 const PLATFORMS = ['webos', 'androidtv', 'tizen', 'browser', 'other'] as const;
 type Platform = (typeof PLATFORMS)[number];
@@ -118,7 +106,7 @@ export default function Link() {
   const deadline = useRef(0);
 
   const prefill = params.get('code') || '';
-  useEffect(() => { const c = normalize(prefill); if (c) setCode(c); }, [prefill]);
+  useEffect(() => { const c = normalizeLinkCode(prefill); if (c) setCode(c); }, [prefill]);
 
   const complete = code.length === LINK_CODE_LEN;
 
@@ -158,7 +146,7 @@ export default function Link() {
   }, [phase, t]);
 
   const onCode = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCode(normalize(e.target.value));
+    setCode(normalizeLinkCode(e.target.value));
     if (err) setErr('');
   };
 
@@ -276,7 +264,7 @@ export default function Link() {
                 id="linkCode"
                 className="link-input"
                 type="text"
-                value={format(code)}
+                value={formatLinkCode(code)}
                 onChange={onCode}
                 /* Not autoCapitalize="characters": on iOS that leaves the shift key
                    latched and the field visibly fighting the user. We uppercase in

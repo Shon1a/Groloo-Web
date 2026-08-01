@@ -2,6 +2,7 @@ import { usePlayer } from '../stores/player';
 import { useModal } from '../stores/modal';
 import { useReport } from '../stores/report';
 import { useAuth } from '../stores/auth';
+import { mirroredHref } from './launchIntent';
 
 /* BACK, FOR A REAL REMOTE — one intent, several carriers, one resolution order.
  *
@@ -83,6 +84,20 @@ function platformExit(): boolean {
 }
 
 /**
+ * Is anything layered over the page right now? Exactly the set `handleBack` steps 1–3 can
+ * consume, and nothing from step 4 onwards — the browser-Back trap in `installTvKeys` must not
+ * intercept a press that is genuinely meant to navigate.
+ */
+function layerOpen(): boolean {
+  return handlers.length > 0
+    || !!document.fullscreenElement
+    || !!usePlayer.getState().source
+    || useAuth.getState().authOpen
+    || !!useReport.getState().target
+    || !!useModal.getState().target;
+}
+
+/**
  * Resolve one Back press. Returns true when a layer consumed it, so the caller knows whether to
  * swallow the key. Exported plainly because the Android carrier is a bridge message, not a key.
  */
@@ -121,10 +136,23 @@ export function handleBack(): boolean {
 /* webOS and Tizen send their own codes and no matching `key`, so this reads BOTH: `key` for the
  * desktop and for remotes that bother to send a name, `keyCode` for the two TV platforms that
  * do not. `keyCode` is deprecated for text but is the only thing carrying these. */
-const BACK_KEYS = new Set(['Escape', 'BrowserBack', 'GoBack']);
+const BACK_KEYS = new Set(['Escape', 'BrowserBack', 'GoBack', 'Backspace']);
 const BACK_CODES = new Set([461, 10009]);
 
+/* BACKSPACE IS A BACK KEY EVERYWHERE EXCEPT IN A TEXT FIELD, where it is the delete key and
+ * nothing else. It is on the list because a desktop keyboard driving the TV build has no Back
+ * button, and Escape is not what anyone reaches for — but a Backspace that navigated out of the
+ * search box mid-word instead of deleting a letter would be a far worse bug than the one it
+ * fixes. Escape and the two platform codes need no such guard: none of them mean anything to a
+ * text field, so they are checked before the target is. */
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+}
+
 export function isBackKey(e: KeyboardEvent): boolean {
+  if (e.key === 'Backspace') return !isTyping(e.target);
   return BACK_KEYS.has(e.key) || BACK_CODES.has(e.keyCode);
 }
 
@@ -148,12 +176,42 @@ export function installTvKeys(): () => void {
   };
   window.addEventListener('keydown', onKey, true);
 
+  /* ---- THE BROWSER'S BACK, ROUTED INTO THE SAME CHAIN -------------------------------------
+   * Alt+Left (and the mouse's back button, and a trackpad swipe) is Back as far as anyone using
+   * it is concerned — but it is history navigation, and this app deliberately keeps modal state
+   * OUT of history: syncAddressBar mirrors the open title with `replaceState`, so no entry is
+   * ever pushed for it (see the note there, and A.6). The consequence is the reported bug: from
+   * a title's sources view, Alt+Left skipped the sources, skipped the episode deck, skipped the
+   * title, and landed on whatever page was open before the modal.
+   *
+   * The fix is NOT to start pushing entries — that would make the modal route-backed, which is
+   * the thing A.6 rules out, and would put entries between the viewer and the launcher on a TV
+   * where "enough Back presses must exit" is a certification requirement. Instead the pop is
+   * UNDONE and handed to `handleBack`, so Alt+Left steps the layers exactly as the remote's Back,
+   * Escape and Backspace already do: sources → deck → close → then, with nothing layered, out.
+   *
+   * HISTORY DEPTH IS UNCHANGED, which is what makes this safe to do on every press. `back()`
+   * moved us to entry N-1 with N still ahead; pushing the mirrored URL truncates that forward
+   * entry and re-adds it with the same address. Popped one, pushed one, same stack, same URLs —
+   * so the exit path still takes exactly as many presses as it did before.
+   *
+   * Only when something is actually layered. With nothing open the listener stands aside and the
+   * browser navigates normally, which is what Back means on a page. */
+  const onPop = () => {
+    if (!layerOpen()) return;
+    const restore = mirroredHref() || location.href;
+    try { history.pushState(null, '', restore); } catch { /* non-fatal — the step below still runs */ }
+    handleBack();
+  };
+  window.addEventListener('popstate', onPop);
+
   /* The Android shell has no key to send, so give it a function to call. Named rather than
    * anonymous so `GrolooBack.handle()` reads the same from Kotlin as it does here. */
   (window as unknown as { GrolooBack?: { handle: () => boolean } }).GrolooBack = { handle: handleBack };
 
   return () => {
     window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('popstate', onPop);
     delete (window as unknown as { GrolooBack?: unknown }).GrolooBack;
   };
 }

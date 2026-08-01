@@ -36,7 +36,18 @@ const Attributions = lazy(() => import('./routes/Attributions'));
 import DetailModalGate from './components/DetailModal/DetailModalGate';
 import VideoPlayerGate from './components/VideoPlayer/VideoPlayerGate';
 import AuthModal from './components/AuthModal';
+import TvAuthModal from './components/TvAuthModal';
+import LinkTvModal from './components/LinkTvModal';
 import ReportModal from './components/ReportModal';
+
+/* WHICH SIGN-IN SCREEN THIS BUILD SHIPS. `import.meta.env.MODE` is a Vite compile-time
+ * constant, so exactly one of the two below survives the build and the other is dropped
+ * with its imports — the TV never carries the web form-card, and the web never carries
+ * the pairing screen. See TvAuthModal for why a TV cannot be asked to type a password.
+ * LinkTvModal is the reverse of that pairing screen (the account popup that approves a
+ * TV's code) and is therefore web-only for the same reason: a TV is the thing being
+ * linked, never the thing doing the linking. */
+const IS_TV = import.meta.env.MODE === 'tv';
 
 /* Route fallback: nothing. A lazy route's chunk is a few KB over a connection already warm
  * from the app shell, so it resolves in well under a frame on anything but a cold cache —
@@ -117,7 +128,12 @@ export default function App() {
           and DOM order is the only thing deciding — mounted last, the report sheet
           swallowed every click meant for the sign-in form behind it. */}
       <ReportModal />
-      <AuthModal />
+      {/* LinkTvModal sits BELOW the sign-in card for the same DOM-order reason the report
+          sheet does: a signed-out visitor who opens it raises AuthModal on top and this
+          popup stays mounted underneath, holding the code they already typed. Mounted
+          last, it would swallow every click meant for the sign-in form in front of it. */}
+      {!IS_TV && <LinkTvModal />}
+      {IS_TV ? <TvAuthModal /> : <AuthModal />}
     </HashRouter>
   );
 }

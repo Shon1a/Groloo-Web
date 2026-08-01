@@ -292,12 +292,65 @@ export default function TvSpatialNav() {
           return;
         }
       }
-      if (!layerNow || seeded) return;
-      const primary = layerNow.querySelector<HTMLElement>('#mWatch');
-      if (primary) { primary.focus({ preventScroll: true }); seeded = true; return; }
-      // No primary action (report sheet, sign-in): just make sure focus is inside at all.
+      if (!layerNow) return;
+
+      /* FOCUS CAN FALL OUT OF A LAYER WITHOUT THE LAYER CHANGING, and `seeded` used to hide it.
+       *
+       * The detail overlay swaps what its panel contains: pick an episode and the episode deck
+       * unmounts so the sources for that episode can take its place. The element the remote was
+       * on goes with it, and the browser hands focus back to <body> — still inside the same open
+       * layer, so `seeded` was true and this returned without doing anything. The remote then
+       * pointed at nothing: the next arrow press restarted from the first candidate in the
+       * overlay (the ✕), which is not where anyone was. Pressing OK appeared to lose the remote.
+       *
+       * So the check is now "is focus INSIDE this layer", not "have we seeded it once". Both jobs
+       * the flag was doing survive: a user who has moved on is left alone (focus is inside, we
+       * return), and the seed still only happens when it needs to. */
       const ae = document.activeElement as HTMLElement | null;
-      if (!ae || !layerNow.contains(ae)) candidates(layerNow)[0]?.focus({ preventScroll: true });
+      const inside = !!ae && ae !== document.body && layerNow.contains(ae);
+
+      /* 1. FOCUS ESCAPED THE LAYER — always recover, seeded or not. The detail overlay swaps what
+       * its panel contains (pick an episode and the deck unmounts so sources can take its place),
+       * and the element the remote was on goes with it, leaving focus on <body> inside a layer
+       * that is still open. */
+      if (!inside) {
+        /* WHERE TO PUT IT BACK, most meaningful first. A plain `candidates()[0]` is the ✕ in the
+         * corner, and that is the wrong answer whenever the layer has real content: pressing Back
+         * out of the sources panel re-mounts the episode deck, the deck focuses its card, and a
+         * frame later that card's node is replaced as the render window shifts — so focus lands
+         * on <body> for one tick and this branch runs. Measured: card focused at 10ms, node gone
+         * at 16ms, ✕ at 18ms. The deck had done its job; the recovery undid it.
+         *
+         * Ordered lookups rather than one comma-selector, because `querySelector` returns the
+         * first match in DOCUMENT order, not in list order — with a list the ✕ would win, being
+         * first in the markup, and the bug would look fixed while doing nothing. */
+        const fallback = ['#mWatch', '.tv-ep-card.on', '.tv-chipmenu-btn', '.tv-det-row']
+          .map((sel) => layerNow!.querySelector<HTMLElement>(sel))
+          .find(Boolean);
+        if (fallback) { fallback.focus({ preventScroll: true }); seeded = true; return; }
+        /* Nothing real to hold yet. An overlay opens on its loading veil, so this branch runs
+         * first with only the ✕ to offer. `seeded` deliberately stays false: parking on the ✕ is
+         * holding the remote somewhere valid, not seeding, and claiming otherwise leaves every
+         * title focused on its close button forever — which is exactly what marking it did. */
+        candidates(layerNow)[0]?.focus({ preventScroll: true });
+        return;
+      }
+
+      /* 2. FOCUS IS INSIDE. Move it to the primary action at most once, and only off the ✕ that
+       * DetailModal auto-focuses on open. ANYTHING ELSE means a component has deliberately taken
+       * the remote — and overriding that is how a series kept opening on WATCH despite the deck
+       * asking for the card. Whoever got there first wins; this only fills a vacuum.
+       *
+       * `#mWatch` USUALLY DOES NOT EXIST ANY MORE. The TV title screen dropped its WATCH button,
+       * so on that layer this lookup finds nothing and the components seed themselves instead:
+       * TvEpisodeDeck claims its card when a season loads, TvDetail claims the sources panel.
+       * The lookup stays because it is the correct answer for any layer that DOES have one
+       * primary action, and because `seeded` must not be set by a miss — a layer whose primary
+       * has not rendered yet has to be allowed to try again. */
+      if (seeded) return;
+      if (ae !== layerNow.querySelector<HTMLElement>('#closeModal')) { seeded = true; return; }
+      const primary = layerNow.querySelector<HTMLElement>('#mWatch');
+      if (primary) { primary.focus({ preventScroll: true }); seeded = true; }
     };
 
     /* Coalesced to one check per frame: a modal opening is a burst of mutations, and this only

@@ -1,7 +1,5 @@
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { SearchIcon } from './SearchIcon';
-import { UserRoundIcon } from './UserRoundIcon';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 
@@ -10,6 +8,43 @@ import { useAuth } from '../stores/auth';
  * horizontal bar: a profile avatar on the left, the nav items centred, and a deliberately
  * empty right side (no logo). Web never imports this — the AppShell branch that mounts it is
  * a compile-time-false dead branch on the default build, so Vite drops it. */
+
+/* THE TWO GLYPHS ARE INERT SVG, NOT THE ANIMATED ICON COMPONENTS, and that is the point.
+ *
+ * The bar used to render <UserRoundIcon> and <SearchIcon> — the same animate-ui glyphs the
+ * desktop rail uses, each a wrapper <div> with a mouseenter handler that adds `.ico-anim` to
+ * replay a CSS keyframe track (the avatar's head and shoulders bob; the magnifier waggles).
+ *
+ * On a TV that is cost with no audience. The obvious half is what it costs to SHIP: those two
+ * modules pull in useIconAnimation (useImperativeHandle / useCallback / a forced reflow) and
+ * the `cn` helper, for two glyphs that are eleven lines of path data between them.
+ *
+ * The half that actually bites is that the animation is not unreachable. "A TV has no pointer"
+ * is not true of the sets this build targets: LG's Magic Remote is a POINTER, and Samsung ships
+ * a click-wheel remote that moves a cursor too. Waving one across the bar fires mouseenter,
+ * which starts a transform animation on an element inside the fixed top bar — over the hero
+ * video, on a Mali-G31-class GPU, at the exact moment the viewer is also scrolling. It is
+ * precisely the class of decorative effect the TV effect budget in tv.css exists to remove.
+ *
+ * So the TV draws them as plain <svg>: same paths, same stroke, same 24px, nothing to drive.
+ * The desktop rail keeps its animated glyphs untouched — see layout/RailBar.tsx. tv.css also
+ * neutralises `.ico-anim` outright, so any animated glyph that reaches this build in future is
+ * inert rather than a regression nobody notices until it is on a shelf. */
+const ICON = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
+
+const UserGlyph = () => (
+  <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true" {...ICON}>
+    <path d="M20 21a8 8 0 0 0-16 0" />
+    <circle cx="12" cy="8" r="5" />
+  </svg>
+);
+
+const SearchGlyph = () => (
+  <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true" {...ICON}>
+    <path d="m21 21-4.34-4.34" />
+    <circle cx="11" cy="11" r="8" />
+  </svg>
+);
 
 const GATED = ['/addons', '/settings', '/library'];
 
@@ -55,7 +90,7 @@ export default function TvTopNav() {
           aria-label={t('myspace.title')}
           onClick={() => go('/library')}
         >
-          <UserRoundIcon size={24} />
+          <UserGlyph />
         </button>
       </div>
 
@@ -76,7 +111,7 @@ export default function TvTopNav() {
           aria-label={t('nav.search')}
           onClick={() => go('/explore')}
         >
-          <SearchIcon size={24} />
+          <SearchGlyph />
         </button>
         {ITEMS.map((it) => (
           <button

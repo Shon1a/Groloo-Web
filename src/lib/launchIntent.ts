@@ -222,6 +222,18 @@ export function syncAddressBar(target: ModalTarget | null): void {
   const path = target
     ? mediaPath({ id: String(target.id), type: target.type, season: target.resumeEp?.season, episode: target.resumeEp?.episode })
     : basePath;
-  if (location.pathname === path) return;
-  try { history.replaceState(null, '', `${path}${location.search}${location.hash}`); } catch { /* non-fatal */ }
+  if (location.pathname !== path) {
+    try { history.replaceState(null, '', `${path}${location.search}${location.hash}`); } catch { /* non-fatal */ }
+  }
+  mirrored = location.href;
 }
+
+/* THE URL THIS FILE LAST MIRRORED, for the browser-Back trap in tvKeys.
+ *
+ * Because nothing here pushes a history entry, a browser Back pressed while a title is open pops
+ * straight past it to whatever page preceded the modal. tvKeys catches that and re-states this
+ * address instead, so the press reaches the app's own back chain rather than leaving the screen.
+ * It has to be recorded rather than recomputed: by the time popstate fires, `location` is already
+ * the previous entry and both the path AND the hash have moved. */
+let mirrored = '';
+export const mirroredHref = (): string => mirrored;

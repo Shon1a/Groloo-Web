@@ -164,12 +164,22 @@ export default function DetailModal() {
   // the trailer remounts — exactly where the user left off.
   const { muted, toggleMute } = useTrailer(slotRef, heroRef, playerOpen ? undefined : (meta?.trailerKey || undefined), meta?.title || target?.title || '');
 
-  // reset backdrop fade + scroll on each new title; seed the picked episode from a
-  // Continue-Watching resume so OPEN builds the exact-episode key (id:S#E#)
+  /* Reset backdrop fade + scroll on each new title; seed the picked episode from a
+   * Continue-Watching resume so OPEN builds the exact-episode key (id:S#E#).
+   *
+   * EXCEPT ON TV, WHERE PRE-PICKING SKIPS THE SCREEN THE VIEWER CAME FOR. Picking an episode is
+   * what swaps the episode deck out for that episode's sources, so seeding it from `resumeEp`
+   * meant opening a Continue-Watching series went straight to a list of sources and the deck was
+   * never seen at all. On a TV the deck IS the answer to "where am I in this show" — it opens on
+   * the resume episode, lifted and showing how much is left (TvDetail hands `resumeEp` to it for
+   * exactly that). One OK press from there reaches the same sources.
+   *
+   * The web modal keeps the old behaviour: it shows episodes and sources at once, so there is no
+   * screen to skip and pre-picking only saves a click. */
   useEffect(() => {
     setBdLoaded(false);
     setCopied(false);
-    setPickedEp(target?.resumeEp ? { season: target.resumeEp.season, ep: target.resumeEp.episode } : null);
+    setPickedEp(!IS_TV && target?.resumeEp ? { season: target.resumeEp.season, ep: target.resumeEp.episode } : null);
     setSrcTab('services');
     scrollRef.current?.scrollTo({ top: 0 });
   }, [target?.id, target?.resumeEp?.season, target?.resumeEp?.episode]);
@@ -388,16 +398,13 @@ export default function DetailModal() {
   };
   const watchLabel = signedIn ? t(resume ? 'modal.resume' : 'modal.watch_authed') : t('modal.watch');
 
-  /* WATCH ON A TV PLAYS. The web button scrolls the page to the chooser, because on the web the
-   * chooser is a screen further down; here it is already on screen beside the button, so
-   * scrolling to it is both impossible and pointless. Pressing WATCH therefore starts the best
-   * source we have (resume position included — the player seeks itself), and when there is
-   * nothing to start it hands the remote to the panel where the choice is, which is the honest
-   * answer to "I pressed play and nothing happened". */
-  const onWatchTv = () => {
-    if (hasSource) { playBest(); return; }
-    document.querySelector<HTMLElement>('.tv-det-panel .tv-det-row, .tv-det-panel .tv-det-pill')?.focus();
-  };
+  /* THE TV BUILD HAS NO WATCH BUTTON, so `onWatchTv` is gone with it.
+   *
+   * It used to start the best source in one press, which sounds like a loss and mostly is not:
+   * on a series it could not play anything until an episode was chosen (the deck is that choice),
+   * and on a film "best" was a guess made on the viewer's behalf between sources they were about
+   * to be shown anyway. The panel beside it lists them, and picking one is the same press.
+   * What it did cost is a quick resume, which is worth remembering if this is revisited. */
 
   if (IS_TV) {
     return (
@@ -406,8 +413,6 @@ export default function DetailModal() {
         title={title} titleLogo={titleLogo} rating={rating} year={year}
         genreChips={genreChips} plot={plot} epTotal={epTotal}
         close={close}
-        watchLabel={watchLabel} onWatch={onWatchTv}
-        hasResume={!!resume} resumePct={resumePct} resumeMin={resumeMin}
         added={added} onAdd={onAdd}
         onReport={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}
         srcTab={srcTab} setSrcTab={setSrcTab}
