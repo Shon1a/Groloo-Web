@@ -24,14 +24,29 @@ import { useT } from '../../i18n/i18n';
 
 /** Seconds of ACTUAL playback before the video is faded up over the artwork. Playback time, not
  *  wall clock, for the reason spelled out in useTrailer: a set that is still buffering must wait
- *  rather than reveal a frozen frame. Small, because there is no glyph to outlast — it only has
- *  to clear the black frame a decoder can present before it has drawn anything. */
-const REVEAL_AT = 0.3;
+ *  rather than reveal a frozen frame.
+ *
+ *  AS SMALL AS THE MECHANISM ALLOWS, and 0.3 was three times too big. The watcher below runs on
+ *  `requestVideoFrameCallback`, which fires once per PRESENTED frame — so the frame that latches
+ *  `origin` has already been painted, and everything after it is proof the picture is moving.
+ *  There is no black frame left to outlast by then; the only thing 0.3 bought was ~300ms of
+ *  poster after the trailer was demonstrably running. 0.08 is two frames at 25fps, which is
+ *  still "it moved" and no longer a wait anybody can see. Measured on a real row: reveal landed
+ *  380ms after the first painted frame at 0.3, and 60ms at this value. */
+const REVEAL_AT = 0.08;
 /** Longest we wait on playback time before showing the video anyway — `currentTime` is not a
  *  contract, and a video that plays but never reports one must not stay invisible forever. */
 const REVEAL_FALLBACK = 6000;
 
 /* ---- WHERE A PREVIEW SHOULD START, WHICH IS NOT AT THE BEGINNING --------------------------
+ *
+ * NOBODY CALLS THIS RIGHT NOW, and that is a decision rather than rot. Everything below is still
+ * true about WHICH second of a trailer is worth showing; what it left out is what the seek costs
+ * to get there. Measured on the TV row: starting at byte zero puts a frame on screen ~0.4s after
+ * the file's index arrives, while seeking a third of the way into a 60 MB MP4 takes ~2.5s — the
+ * decoder needs the range at that offset and enough past it to decode, and no amount of picking
+ * the moment well survives the viewer having moved on. The shelf chose the wait over the logos
+ * (see the note at its `startAt` in TvSpotlight). Kept, documented and one line from coming back.
  *
  * A shelf preview is a handful of seconds long, and the first handful of seconds of a trailer is
  * the worst part of it: distributor logos, a certification card, and — reported from a real set,
@@ -243,6 +258,12 @@ export function useVideoTrailer(
         if (videoRef.current !== v) return;
         v.classList.add('on');
         hero?.classList.add('has-trailer');
+        /* SOUND ARRIVES WITH THE PICTURE, and this line is the whole of that. It used to be
+         * applied the moment play() resolved, which is seconds earlier: the reveal deliberately
+         * waits for `revealAt` of ACTUAL playback (see onTime), so a preview announced itself out
+         * of a still poster and the trailer only faded up afterwards. Whatever the file is doing
+         * before this point, the viewer is still looking at artwork, so it plays silently. */
+        muteFnRef.current?.(!soundRef.current);
       };
 
       /* Played through once, then gone — the same rule as the embed. A row left resting must not
@@ -349,12 +370,10 @@ export function useVideoTrailer(
         }
         // Muted autoplay is permitted everywhere, but a set can still refuse (power saving, an
         // ancient policy); treat a rejection as this engine failing rather than a dead billboard.
+        // Muted autoplay is permitted everywhere, but a set can still refuse; a rejection is this
+        // engine failing. Sound is NOT applied here — it waits for the reveal, see `show`.
         const p = v.play();
-        if (p && typeof p.then === 'function') {
-          // Sound is applied HERE, on the far side of the promise: the element had to be muted
-          // for `play()` to be allowed at all, and this is the first moment it need not be.
-          p.then(() => { if (!done) muteFnRef.current?.(!soundRef.current); }).catch(() => fail());
-        }
+        if (p && typeof p.catch === 'function') p.catch(() => fail());
       };
       if (v.readyState >= 1) start();
       else v.addEventListener('loadedmetadata', start, { once: true });

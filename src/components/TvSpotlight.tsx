@@ -3,7 +3,7 @@ import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
-import { useVideoTrailer, trailerStartOffset } from './DetailModal/useVideoTrailer';
+import { useVideoTrailer } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
 import { useSettings } from '../stores/settings';
 import { usePreviewSound } from '../stores/previewSound';
@@ -91,6 +91,8 @@ const BILLBOARD_TRAILER_CROP = 1.35;
  * for `original` on a TV is fatal rather than merely wasteful. */
 const BILLBOARD_RENDITION = 'w780';
 const THUMB_RENDITION = 'w342';
+/** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
+const LOGO_RENDITION = 'w300';
 
 /* THE SOUND BADGE'S TWO GLYPHS, and they are the player's own — same 24-unit box, same filled
  * cone, same 1.8 stroke on the waves and on the cross. Copied rather than imported because the
@@ -357,10 +359,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     {
       // The dwell above has already served as the "don't mount for a passing title" delay.
       mountDelay: 0,
-      /* Not from the beginning — see trailerStartOffset. A preview is a few seconds long and the
-       * opening of a trailer is logos, a rating card, and sometimes a recap of the earlier films;
-       * IMDb gives us the runtime, so the preview can start where the film itself does. */
-      startAt: trailerStartOffset(imdbTrailer.data?.runtime),
+      /* FROM THE TOP, AND THE SEEK IS WHAT THIS IS BUYING BACK.
+       *
+       * The preview used to start a third of the way in (trailerStartOffset, still there and
+       * still right about what it says) to skip the logos, the rating card and the franchise
+       * recap. It cost far more than it looked: seeking into a 60 MB progressive MP4 means the
+       * decoder cannot present a frame until it has the byte range at that offset AND enough
+       * after it to decode, and measured on this row that was ~2.5s — against ~0.4s to start at
+       * byte zero, where the file is already arriving. The whole reveal went from 3.4s to ~1.2s
+       * by deleting one line.
+       *
+       * So the shelf preview now opens on whatever the trailer opens on, logos included. That is
+       * a real cost and it is the one that was chosen: a preview that appears while you are still
+       * looking at the card beats a better-chosen three seconds later, because three seconds is
+       * longer than most people rest on a title at all. Put `startAt` back if the logos ever
+       * matter more than the wait. */
       /* Let the engine measure the billboard and take the rendition that suits it, rather than
        * playing the one the backend guessed at. The crop is the magnification in tv.css, and it
        * belongs in this number: a video blown up 1.35x is sampled at 1.35x its box. */
@@ -469,7 +482,26 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           aria-label={it.title}
           onClick={() => onSelect?.(it)}
         >
-          {src && <img className="tv-spot-thumbimg" src={src} loading="lazy" decoding="async" alt="" />}
+          {/* `data-src`, NOT `src` — the effect below decides which tiles are close enough to the
+              walk to be worth a bitmap. See the note there; `loading="lazy"` cannot do this job.
+
+              THE GRADIENT IS DROPPED THE MOMENT THE POSTER COVERS IT. It is the plate a tile shows
+              while it has no picture, and it was staying underneath one forever: measured on a
+              settled home screen, 106 of 147 tiles were painting a gradient beneath a fully opaque
+              poster, so every repaint of a row filled each of those rects twice. Cleared straight
+              on the node rather than through state — this lives inside a useMemo whose entire
+              purpose is to not rebuild on a focus change, and a setState per poster load would
+              undo that for a change no one can see. */}
+          {src && (
+            <img
+              className="tv-spot-thumbimg"
+              data-src={src}
+              loading="lazy"
+              decoding="async"
+              alt=""
+              onLoad={(e) => { const t = e.currentTarget.parentElement; if (t) t.style.background = 'none'; }}
+            />
+          )}
           {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}
         </button>
       );
@@ -509,6 +541,68 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     return [...copy(0), endCard, ...copy(1)];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [list, onSelect, hasEnd, dup, canSeeAll, cat, onSeeAll, onMore, moreBusy, endLabel, endIcon, heading, t, resumeOf]);
+
+  /* ---- ONLY THE TILES THE WALK CAN REACH GET A BITMAP -------------------------------------
+   * A row holds 21 tiles and shows six. The other fifteen sit past the right edge of a strip
+   * that is `overflow: hidden` — and they were being downloaded and decoded anyway. Measured on
+   * a settled home screen: 56 posters fully decoded entirely off the right edge, 37.5 MB of
+   * bitmap for pictures nobody could see.
+   *
+   * `loading="lazy"` DOES NOT COVER THIS, which is the whole reason this exists. Lazy loading is
+   * about the VIEWPORT, and these tiles are inside it — they are only clipped horizontally by an
+   * ancestor's overflow, which the browser does not treat as off-screen. The attribute stays on
+   * anyway; it still earns its keep for rows below the fold.
+   *
+   * DONE ON THE NODES, NOT THROUGH RENDER, and that is the constraint that shaped it. The strip
+   * is memoised precisely so a keypress does not rebuild 24 buttons (see the note on `thumbs`),
+   * so making the tile list depend on `active` would trade one cost for the one it was built to
+   * avoid. Instead every tile renders with `data-src` and this effect promotes the few in range
+   * — a handful of attribute writes per press, no reconciliation at all.
+   *
+   * ONCE SET, NEVER UNSET. Walking back over a tile must not re-download it, and an `img` whose
+   * src is removed drops its decoded frame; the window only ever grows. The ceiling is the row,
+   * and a row is 21 tiles.
+   *
+   * The forward margin is runway: at ~300ms a press, nine tiles is about three seconds of
+   * walking, and a poster is ~30 KB from a CDN that answers in 90ms. A tile that does outrun it
+   * shows its gradient plate for a beat rather than a hole. */
+  const THUMB_AHEAD = 9;
+  const THUMB_BEHIND = 2;
+  useEffect(() => {
+    if (!visible) return;
+    const track = trackRef.current;
+    if (!track) return;
+    const promote = () => {
+      const tiles = track.children;
+      const from = Math.max(0, active - THUMB_BEHIND);
+      const to = Math.min(tiles.length - 1, active + THUMB_AHEAD);
+      for (let i = from; i <= to; i++) {
+        const img = tiles[i]?.querySelector<HTMLImageElement>('img[data-src]');
+        if (!img) continue;                     // the see-all card, or a tile already promoted
+        img.src = img.dataset.src || '';
+        delete img.dataset.src;
+      }
+    };
+    /* ON THE IDLE FRAME, NEVER ON THE KEYPRESS FRAME, and this is the correction that makes the
+     * window worth having at all. Promoting inline looked right and measured WORSE than loading
+     * everything up front — 1.69s of task time across ten presses became 2.20s, with four janky
+     * frames where there had been none. The window had not removed the decodes, it had moved them
+     * out of the quiet moment after load and into the one frame that is animating a cross-fade.
+     *
+     * Deferred, the work lands between presses, where the row is doing nothing anyway. The 600ms
+     * timeout is the floor under that promise: an idle callback with no deadline can be starved
+     * indefinitely, and a tile that never gets a bitmap is a hole on the shelf. `decoding="async"`
+     * keeps the decode itself off the main thread once the bytes are in. */
+    const ric = window.requestIdleCallback;
+    if (typeof ric === 'function') {
+      const id = ric(promote, { timeout: 600 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(promote, 120);
+    return () => window.clearTimeout(id);
+    // `thumbs` is in here because a row whose data changed has brand-new nodes to promote.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, active, thumbs]);
 
   /* Arm the artwork a screenful before the row arrives, so it is decoded by the time it is
    * scrolled to and nothing pops in. Disconnects on the first hit — this is a one-way latch. */
@@ -576,7 +670,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     };
   };
   const tagFor = (it: MediaItem) => (isSeries(it) ? t('nav.series') : t('nav.movies'));
-  const logoOf = (it: MediaItem) => it.titleLogo || it.logo;
+  /* AT THE SIZE IT IS PAINTED, which for a wordmark on the billboard is 201px wide at most (62%
+   * of the card, capped at 84px tall — see tv.css). The URL arrives as w500 and was used as it
+   * came, so every logo on the screen was a 2.5x oversample: fetched, decoded and held at four
+   * times the pixels it can show. w300 is the next step TMDB offers and still leaves headroom on
+   * a HiDPI panel. Non-TMDB URLs pass through imgW untouched. */
+  const logoOf = (it: MediaItem) => imgW(it.titleLogo || it.logo || '', LOGO_RENDITION) || undefined;
 
   const curArt = withArt(cur);
   // [S2:E4 ·] genre · year · rating — the type isn't repeated here, it's the tag on the billboard.
