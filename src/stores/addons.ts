@@ -11,29 +11,33 @@ import { useAuth } from './auth';
  * The server only stores that list; it never fetches an add-on. Guests stay purely
  * local.
  *
- * THE MANIFEST URL EXISTS ONLY ON THE DEVICE. By Stremio convention a configured
+ * THE MANIFEST URL SYNCS TOO, AND THAT IS THE POINT. By Stremio convention a configured
  * community add-on packs its secrets into the path (`https://host/<provider>=<KEY>/
- * manifest.json`), so the server deliberately persists the ORIGIN and never the URL —
- * there is no copy of the user's debrid key on that side to leak. The consequence for
- * this store is that a server record can NEVER be treated as a whole add-on: it is
- * metadata about one, missing the single field that makes it fetchable. Hence two
- * lists. `installed` holds records this device can actually call, and is the only
- * thing addonClient/AddonRows consume. `unlinked` holds ids the account owns
- * but this device has no URL for (a fresh device, or a record synced down after the
- * server stopped storing URLs); they are inert until the user pastes the URL again,
- * which install() treats as a repair rather than a duplicate. Keeping them apart is
- * what stops a sync from overwriting a working record with a URL-less one — the bug
- * that would have wiped every user's credentialed add-on off their own device.
+ * manifest.json`). The server used to store the ORIGIN and never the URL, so no debrid
+ * key existed on that side — structurally safe, and structurally useless: a second
+ * device pulled down a list of NAMES it could not call. Signing in on a TV handed the
+ * user their collection as an inventory and a chore, one credentialed URL to be re-typed
+ * per add-on on a remote control. "Your add-ons sync across your devices" has to mean the
+ * add-ons, not their titles, so the URL is persisted per-account and comes back down on
+ * the pull. See server.js's /api/addons header for what that obliges of the server side.
  *
- * `unlinked` IS NOT AN INTERNAL DETAIL — THE ADD-ONS SCREEN HAS TO RENDER IT. Since the
- * server keeps `origin` and never `url`, EVERY row a second device pulls down arrives
- * URL-less, so on a freshly signed-in TV this list is the user's entire collection and
- * `installed` is empty. Re-pasting the URL is the only exit from it, and nobody pastes a
- * URL for an add-on they were never told is waiting. A non-empty `unlinked` that no view
- * shows is therefore indistinguishable from data loss to the person whose add-ons they
- * are — the storage half of this trade is only half the fix. Consumers want
- * `manifest.name` and `origin` (which is exactly why `origin` is carried through the
- * pull) plus the existing install() field to repair with. */
+ * `unlinked` SURVIVES THAT CHANGE AS A LEGACY PATH, not as the normal one. Rows written
+ * while the server kept origins only have no URL to send, and there is no way to recover
+ * one — so they still arrive URL-less and still need a paste, exactly as before. Hence
+ * two lists. `installed` holds records this device can actually call, and is the only
+ * thing addonClient/AddonRows consume. `unlinked` holds ids the account owns whose URL
+ * nothing anywhere still has; they are inert until the user pastes it again, which
+ * install() treats as a repair — and now also pushes up, so the OTHER devices stop
+ * asking too. That last part is what closes the loop: without it a relink healed one
+ * device and left the account exactly as unlinked as it was.
+ *
+ * Keeping the lists apart is still what stops a sync from overwriting a working record
+ * with a URL-less one — the bug that would have wiped every user's credentialed add-on
+ * off their own device — and `unlinked` must keep being RENDERED (Addons.tsx) for as
+ * long as any legacy row can exist: a non-empty list that no view shows is
+ * indistinguishable from data loss to the person whose add-ons they are. Consumers want
+ * `manifest.name` and `origin` (which is why `origin` is carried through the pull) plus
+ * the existing install() field to repair with. */
 
 /* WHY THE KEY IS NAMESPACED BY ACCOUNT — AND WHY THE OLD KEY IS THE GUEST BUCKET.
  * The collection used to live at one un-namespaced `groloo.addons`, which meant signing
@@ -125,17 +129,15 @@ export interface AddonRecord {
   origin?: string;
 }
 
-/* What GET /api/addons actually returns — deliberately NOT an AddonRecord. The server
- * keeps `origin` in place of `url` and stamps `installedAt` as an ISO string, so typing
- * the response as AddonRecord was a lie that let a URL-less row be spliced straight into
- * the collection with `url: undefined` behind a required `url: string`. Naming the wire
- * shape separately is what forces the merge below to convert rather than assume.
- *
- * Rows written before the server stopped storing URLs still carry one. It is left
- * undeclared, and so unread, on purpose: "the URL lives only on the device that typed
- * it" is worth having as a rule only if it holds without exception, and an exception
- * that depends on how old a row happens to be is the worst kind to reason about. */
-interface ServerAddonRecord { id: string; origin?: string; installedAt?: string; manifest?: Manifest }
+/* What GET /api/addons actually returns — deliberately NOT an AddonRecord. It stamps
+ * `installedAt` as an ISO string, carries `origin` beside the URL, and — the field this
+ * whole type exists for — its `url` is OPTIONAL, because rows written while the server
+ * stored origins only have none and never will. Typing the response as AddonRecord was
+ * a lie that let such a row be spliced straight into the collection with `url:
+ * undefined` behind a required `url: string`, i.e. an add-on that looks installed and
+ * answers nothing. Naming the wire shape separately is what forces the merge below to
+ * convert rather than assume, and to branch on the one field that can be missing. */
+interface ServerAddonRecord { id: string; url?: string; origin?: string; installedAt?: string; manifest?: Manifest }
 
 /* Both lists live in one localStorage array so the stored shape never forks — a record
  * that gets its URL back is the same row it always was, not a migration between keys.
@@ -174,9 +176,9 @@ function split(rows: AddonRecord[]) {
 const authed = () => !!useAuth.getState().user;
 const addonId = (a: { id?: string; manifest?: Manifest }) => a.manifest?.id || a.id || '';
 
-/* Best-effort server writes — local stays the source of truth if these fail. The URL
- * rides along on the POST because the server derives the origin from it; what it keeps,
- * and what comes back down on a GET, is that origin alone.
+/* Best-effort server writes — local stays the source of truth if these fail. The POST
+ * carries the full install URL: the server stores it and hands it back on the next GET,
+ * which is how the add-on reaches the user's other devices ready to use.
  *
  * `owner` is the identity its caller captured before ITS await, re-checked here at the
  * moment of dispatch rather than trusted from the call site. These two fire and forget,
@@ -326,14 +328,21 @@ export const useAddons = create<AddonsState>((set, get) => ({
     const rec: AddonRecord = { id: manifest.id, url, manifest, installedAt: Date.now() };
     /* Pasting the URL of an add-on that is only `unlinked` here is a REPAIR, not a new
      * install: the id leaves that list instead of the paste being swallowed as a
-     * duplicate, and the server is left alone — it already holds this id (that is where
-     * the URL-less row came from) and would answer 409. Without this branch the user
-     * would have no way back: the duplicate check above would return silently forever. */
+     * duplicate. Without this branch the user would have no way back — the duplicate
+     * check above would return silently forever.
+     *
+     * IT IS STILL PUSHED UP, which it deliberately was not before. The old rule was
+     * "the server already holds this id and would answer 409", true when the server kept
+     * no URLs and so had nothing to learn from a relink. Now it does: this paste is the
+     * only copy in existence of a link the account is missing, and swallowing it locally
+     * would leave every OTHER device of this user asking for the same URL forever, one
+     * repair at a time, for a row that has just been healed. POST treats same-id/
+     * different-url as an update rather than a duplicate (server.js), so this is the
+     * relink reaching the account, not a 409 waiting to happen. */
     const unlinked = get().unlinked.filter((a) => addonId(a) !== manifest.id);
-    const repaired = unlinked.length !== get().unlinked.length;
     const next = [...get().installed, rec];
     save(next, unlinked); set({ installed: next, unlinked });
-    if (!repaired) serverInstall(rec, owner);
+    serverInstall(rec, owner);
   },
   // The only write in here with nothing to outlive: no await stands between the click and
   // the save, so the identity read for serverRemove is the one the user clicked under.
@@ -385,29 +394,32 @@ export const useAddons = create<AddonsState>((set, get) => ({
        * necessarily the account signed in now. Nothing below awaits, so this single check
        * covers the save, the set and the reconcile push at the end. */
       if (!stillMine(owner)) return;
-      const installed = get().installed;
+      const local = get().installed;
       // Working records go in LAST so that if an id somehow sits in both lists, the one
       // holding the URL is what the skip below tests — the whole point of this function
       // is that a URL-less copy can never shadow a usable one.
       const known = new Map<string, AddonRecord>();
-      for (const a of [...get().unlinked, ...installed]) { const id = addonId(a); if (id) known.set(id, a); }
-      /* A pull can only ever ADD ids, never rewrite one this device already works with:
-       * an id we hold a URL for is skipped outright, because the server copy carries
-       * nothing we don't already have and dropping our record in favour of it would
-       * destroy the only copy of the credentialed URL — and `save` would persist that
-       * loss. Everything else lands in `unlinked` as metadata awaiting its URL.
+      for (const a of [...get().unlinked, ...local]) { const id = addonId(a); if (id) known.set(id, a); }
+      /* A pull ADDS ids and never rewrites one this device already works with: an id we
+       * hold a URL for is skipped outright, because our copy is at least as good as the
+       * server's and may be better — a link re-pasted here a moment ago has not been
+       * pushed up yet, and letting the older remote row land on top of it would undo a
+       * repair in flight. Everything else is adopted: with a URL it joins `installed`
+       * and is usable on this device immediately, which is the entire cross-device
+       * story; without one (a legacy row, see the header) it lands in `unlinked` as
+       * metadata awaiting a paste.
        *
-       * `origin` RIDES ALONG BUT MUST NEVER BE FETCHED. Dropping it, as this loop used
-       * to, left a repair prompt with nothing to say beyond a manifest name. Keeping it
-       * then makes it tempting to close the gap with no UI at all — try
-       * `<origin>/manifest.json`, promote whatever answers into `installed`, done; the
+       * `origin` RIDES ALONG BUT MUST NEVER BE FETCHED — it matters only for the rows
+       * that still have no URL, and for those the temptation is to close the gap with no
+       * UI at all: try `<origin>/manifest.json`, promote whatever answers, done; the
        * origin holds no secrets, so it reads as free. It is not. By the same Stremio
-       * convention that put the key in the path, the UNCONFIGURED add-on sitting at the
+       * convention that puts the key in the path, the UNCONFIGURED add-on sitting at the
        * bare origin serves a manifest with the SAME id as the user's configured one. The
        * promotion would "succeed", the row would leave this list, and the user would be
-       * left with an add-on that quietly returns no debrid streams and no hint why —
-       * the silent failure this split exists to prevent, reintroduced one layer down. A
-       * row the user is asked to knowingly re-paste is the honest state. */
+       * left with an add-on that quietly returns no debrid streams and no hint why — the
+       * silent failure this split exists to prevent, reintroduced one layer down. A row
+       * the user is asked to knowingly re-paste is the honest state. */
+      const installed = [...local];
       const unlinked: AddonRecord[] = [];
       for (const r of (remote || [])) {
         const id = addonId(r);
@@ -415,12 +427,17 @@ export const useAddons = create<AddonsState>((set, get) => ({
         if (!id || mine?.url) continue;
         const manifest = r.manifest || mine?.manifest;
         if (!manifest) continue;
-        unlinked.push({ id, url: '', origin: r.origin || mine?.origin, manifest, installedAt: mine?.installedAt ?? (Date.parse(r.installedAt || '') || Date.now()) });
+        const installedAt = mine?.installedAt ?? (Date.parse(r.installedAt || '') || Date.now());
+        if (r.url) installed.push({ id, url: r.url, manifest, installedAt });
+        else unlinked.push({ id, url: '', origin: r.origin || mine?.origin, manifest, installedAt });
       }
-      save(installed, unlinked); set({ unlinked });
-      // push any local-only add-ons up so the server matches
+      save(installed, unlinked); set({ installed, unlinked });
+      /* Push any local-only add-ons up so the server matches. Rows the pull just adopted
+       * are by definition already there, so this walks the PRE-merge list — reconciling
+       * `installed` after the splice would POST every row the server just handed us
+       * straight back to it. */
       const remoteIds = new Set((remote || []).map(addonId));
-      for (const a of installed) if (!remoteIds.has(addonId(a))) serverInstall(a, owner);
+      for (const a of local) if (!remoteIds.has(addonId(a))) serverInstall(a, owner);
     } catch { /* offline / not authed — keep local */ }
   },
 }));

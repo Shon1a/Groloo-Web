@@ -95,7 +95,7 @@ const SEED: Record<string, string> = {
    * defect this whole pass exists to close, and it was the worst instance of it, because
    * it is the sentence a regulator reads. Everything before "You can delete your account"
    * is verbatim from EN_BASE; keep it that way, and re-copy it if EN_BASE ever changes. */
-  'legal.privacy_body': 'GROLOO does not log your IP address or keep server-side request logs. The only data stored against your account is what the service needs to run and sync across your devices — your email, an encrypted password (or your Google sign-in identifier), your watchlist, continue-watching positions, and add-on preferences. We show no ads and run no third-party trackers, and we never sell or share your personal data. A single first-party cookie keeps you signed in. To display catalog metadata we send the title or search term you request to our metadata provider (TMDB) — never your identity. Your installed add-ons are contacted directly by your browser, not by our servers, so we never see what you stream. You can delete your account at any time to remove your data, or contact privacy@groloo.com to exercise any privacy right.',
+  'legal.privacy_body': 'GROLOO does not log your IP address or keep server-side request logs. The only data stored against your account is what the service needs to run and sync across your devices — your email, an encrypted password (or your Google sign-in identifier), your watchlist, continue-watching positions, and your installed add-ons — including each one’s install link, which is what lets the same add-ons work on every device you sign in to. We show no ads and run no third-party trackers, and we never sell or share your personal data. A single first-party cookie keeps you signed in. To display catalog metadata we send the title or search term you request to our metadata provider (TMDB) — never your identity. Your installed add-ons are contacted directly by your browser, not by our servers, so we never see what you stream. You can delete your account at any time to remove your data, or contact privacy@groloo.com to exercise any privacy right.',
 
   /* Overrides EN_BASE's "Send takedown notices and legal enquiries to:", which was one
    * line above one address and quietly made the copyright inbox the privacy inbox too.
@@ -289,23 +289,24 @@ const SEED: Record<string, string> = {
   'addons.enable': 'Add',
   'addons.remove': 'Remove',
 
-  // UNLINKED ADD-ONS — the second-device state, and the hardest copy on this screen to
-  // get right. A configured community add-on packs the user's provider key into its URL
-  // (Stremio convention), so the account deliberately remembers WHICH add-ons they run
-  // and never HOW to reach them. The consequence lands entirely on the user: sign in on a
-  // TV and the add-ons they own arrive with no URL, unusable until they paste it again.
+  // UNLINKED ADD-ONS — now a LEGACY state, and no longer what a new device sees. Install
+  // links sync with the account, so signing in on a TV brings the add-ons down ready to
+  // use. The only rows that still land here are ones installed back when the account kept
+  // the source but not the link; nothing anywhere still holds those URLs, so they cannot
+  // be recovered and the user has to paste each one a final time. After that the add-on
+  // syncs like every other.
   //
-  // Everything below is written so that reads as a PROPERTY, not a fault. Two rules the
+  // Everything below is written so that reads as a PROPERTY, not a fault. Three rules the
   // wording follows and translations should keep: (1) never apologise and never use
   // failure words — nothing broke, nothing was lost, the add-ons are still theirs; (2)
   // say plainly WHY the link is missing before asking for it, because "paste it again"
-  // with no reason reads as the app having mislaid something. The one thing the user has
-  // to walk away understanding is that the link only ever existed on the device they
-  // typed it into — that is the whole trade, and it is the reason their key is not
-  // sitting in our database waiting to be breached.
+  // with no reason reads as the app having mislaid something; (3) say that it is ONCE and
+  // that it then travels, because the old copy promised the opposite — that the link
+  // could never follow them — and a user who read that will otherwise assume every future
+  // device asks again.
   'addons.unlinked_head': 'Needs its link on this device',
   'addons.unlinked_count': '{n} waiting',
-  'addons.unlinked_why': 'Your account remembers which add-ons you use — never the links themselves. A configured add-on carries your provider key inside its own URL, so that URL is kept only on the device you typed it into: we never store it, which also means it cannot follow you here. These add-ons are still yours and still on your account. This device just needs each link once, and then it works exactly as it does everywhere else.',
+  'addons.unlinked_why': 'Your add-ons and their install links travel with your account, so a new device picks them up ready to use. These few are older than that: they were saved when your account kept the source but not the link, and the link they were installed with only ever existed on that device. They are still yours and still on your account. Paste each one here once and it syncs from then on, everywhere you sign in.',
   'addons.unlinked_tag': 'Link needed',
   // Shown in place of the origin on rows old enough to predate the server keeping one.
   // Lower case: it sits where a hostname would, and should not read as a heading.
@@ -316,7 +317,7 @@ const SEED: Record<string, string> = {
   // the eye has just been sent. It names the add-on so the field cannot be typed into
   // blind, and repeats where the link is, because "the same link" is useless advice to
   // someone who does not know it still exists on the other device.
-  'addons.relink_prompt': 'Pasting the install link for {name}. Use the same link you installed it with — the copy on your other device is the only one there is.',
+  'addons.relink_prompt': 'Pasting the install link for {name}. Use the same link you installed it with — for this add-on, the copy on your other device is the only one there is. Once it is here it syncs with your account.',
   'addons.relink_cancel': 'Cancel',
   // The dead-rail line in AddonRows' per-row ErrorBoundary fallback. Deliberately blames
   // nothing and offers no action: the user did not break it, cannot fix it, and the row's
