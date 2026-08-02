@@ -38,7 +38,7 @@ export default function EpisodeChooser({ meta, initial, onEpisode }: { meta: Met
   const [activeEp, setActiveEp] = useState<number | null>(initial?.episode ?? null);
 
   const season = activeSeason ?? firstSeason;
-  const { data, isLoading } = useSeason(meta.id, season);
+  const { data, isLoading } = useSeason(meta.id, season, meta.imdb);
 
   if (!seasons.length || !meta.imdb) return null;
 
