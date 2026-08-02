@@ -628,22 +628,42 @@ export function loadCore(): Promise<CoreExports | null> {
       return recordFailure('verify', err);
     }
 
-    coreStatus.verification = await verifyArtifact();
-    if (coreStatus.verification === 'mismatch') {
-      console.error(
-        `[core] PIN MISMATCH — the artifact served from ${CORE_JS} is not the one this build ` +
-        `pins (sha-256 ${CORE_WASM_SHA256}). src/lib/heart.ts and public/assets/groloo-core/ ` +
-        'disagree; one of them was not updated. Using it anyway — see Settings › Core.',
-      );
-    } else if (coreStatus.verification === 'unavailable') {
-      console.warn(`[core] could not verify ${CORE_WASM} against the pinned digest — running it unproven.`);
-    }
-
     coreStatus.state = 'ready';
     coreStatus.stage = null;
     coreStatus.failure = null;
     core = mod;
     publish();
+
+    /* NOT AWAITED, AND THAT IS A BOOT FIX RATHER THAN A STYLE PREFERENCE.
+     *
+     * The comment on verifyArtifact() has always said the check "does not gate readiness" — but
+     * awaiting it here is precisely what gated it, because `core` and 'ready' were set on the far
+     * side of the await and this promise is what every caller of loadCore() is sitting on. So the
+     * first catalog pass (stores/addons.ts) waited on a second fetch of the .wasm plus a SHA-256
+     * of ~435 KB before the home screen could ask the core a single question. On a TV that is a
+     * measurable slice of a cold start spent proving a pin that, by its own reasoning, cannot
+     * change the answer: a mismatch is a bookkeeping error, it is logged and surfaced in
+     * Settings › Core, and the bytes are used either way.
+     *
+     * Detached, the check still runs, still logs, still publishes — a few hundred ms later,
+     * against a shell that is already up. Nothing reads `coreStatus.verification` synchronously;
+     * Settings subscribes, so it repaints when this lands. `.catch` is belt-and-braces — the
+     * function is documented never to reject — because an unhandled rejection on the boot path
+     * would be the one failure mode worse than the wait it replaces. */
+    void verifyArtifact().then((v) => {
+      coreStatus.verification = v;
+      if (v === 'mismatch') {
+        console.error(
+          `[core] PIN MISMATCH — the artifact served from ${CORE_JS} is not the one this build ` +
+          `pins (sha-256 ${CORE_WASM_SHA256}). src/lib/heart.ts and public/assets/groloo-core/ ` +
+          'disagree; one of them was not updated. Using it anyway — see Settings › Core.',
+        );
+      } else if (v === 'unavailable') {
+        console.warn(`[core] could not verify ${CORE_WASM} against the pinned digest — running it unproven.`);
+      }
+      publish();
+    }).catch(() => { /* verifyArtifact never rejects; if it somehow does, it stays unverified */ });
+
     return mod;
   })();
   return loadPromise;

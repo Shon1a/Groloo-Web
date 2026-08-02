@@ -451,6 +451,30 @@
   position: absolute; inset: 0;
   overflow: hidden;
   border-radius: 12px;
+
+  /* OFF-SCREEN ROWS STOP PAINTING THEIR POSTERS. Home stacks ~13 of these and only two or three
+     are ever on screen, but every one of them was styling, laying out and rastering its whole
+     strip on every scroll frame. `content-visibility: auto` lets the browser skip the subtree
+     entirely until it comes near the viewport, which is the cheapest large win available in this
+     file — nothing about the design changes, the work simply is not done until it would be seen.
+
+     IT IS ON THE RAIL AND NOT ON `.tv-spot`, AND THAT IS THE WHOLE CARE IN THIS RULE. Two
+     reasons, both load-bearing:
+
+       · SPATIAL NAV MEASURES GEOMETRY. TvSpatialNav finds the next focus target with
+         getBoundingClientRect and discards anything under 4px, so a skipped subtree would make
+         every row below the fold unreachable with the D-pad — the remote would simply stop
+         moving down the page. Nothing focusable lives in here: the strip's tiles are all
+         tabindex="-1" (they are a preview, not a stop) and `.tv-spot-hero` is the rail's SIBLING,
+         outside the skipped box. So the pool the nav measures is untouched.
+       · NO LAYOUT SHIFT TO GUARD AGAINST. The rail is `position: absolute; inset: 0` inside a
+         stage of fixed `--spot-h`, so its size comes from its containing block and is known
+         whether or not the contents are rendered. That is why there is no `contain-intrinsic-size`
+         here — it would be ignored, and a made-up number in it is a jump waiting to happen.
+
+     Chromium 85, comfortably inside this build's 87 floor; older engines ignore it and paint as
+     they always did. */
+  content-visibility: auto;
 }
 
 /* strip track — translated so [0..active] hide left/behind the billboard, [active+1..] peek */
@@ -573,47 +597,25 @@
   border-radius: inherit;
   pointer-events: none;
 }
-/* IT IS LAID OUT AT DOUBLE SIZE AND PAINTED SMALL, WHICH IS WHAT FIXES THE PICTURE QUALITY.
-   YouTube chooses a rendition from the player's own size, and this player is about 675px wide —
-   so it served a 360p-class stream, which was then MAGNIFIED by the crop below. Soft twice over,
-   and no embed parameter fixes it (the quality ones are all ignored now; size is the only lever
-   the player still listens to). Measured: `medium` before, `hd720` after.
+/* THE EMBED'S RULES ARE GONE FROM HERE, WITH THE EMBED. This slot used to hold a YouTube iframe
+   laid out at 200% and counter-scaled to 0.675, which was the only lever left for making the
+   player serve a 720p stream instead of a 360p one. The whole apparatus went with the engine —
+   see the head of TvSpotlight.tsx — and with it a cross-origin player, its JS, and its decoder,
+   on the hardware least able to afford any of the three. What is left is a <video> we own.
 
-   200% makes the embed's internal viewport ~1350px, which asks YouTube for a 720p stream, and the
-   scale paints it back down into the box. The two numbers are tied: the crop is 1.35 (it hides
-   YouTube's own chrome, which creeps in at the edges even with modestbranding), so the scale is
-   1.35 ÷ 2. Rendering DOWN also means the picture is now sharper than the box it sits in rather
-   than stretched to fill it.
+   THE CROP SURVIVES, and its reason is the one that was always the real one: it hides LETTERBOXING
+   BAKED INTO THE FILE. IMDb encodes every trailer into a 16:9 container, so a 2.39:1 one arrives
+   with black bands top and bottom as picture content, which no object-fit can reach — and a
+   billboard is not the place for a black band above the wordmark. The tie to the embed's own 1.35
+   (a row used to mix the two engines title by title, so the framing had to match) is no longer
+   what pins the number, but the number is unchanged: it is the framing every row already has.
 
-   The cost is real and belongs on the record: a 720p stream is more to decode than a 360p one, on
-   the hardware least able to afford it. That is the trade this makes deliberately — quality on the
-   shelf, paid for in decode — and it is the first thing to reconsider if a set stutters (the
-   Settings switch turns the whole preview off). */
-.tv-spot-trailer-slot iframe {
-  position: absolute; top: 50%; left: 50%;
-  width: 200%; height: 200%;
-  border: 0;
-  transform: translate(-50%, -50%) scale(0.675);
-  transform-origin: center;
-  opacity: 0;
-  transition: opacity .9s cubic-bezier(.4, 0, .2, 1);
-  pointer-events: none;
-}
-.tv-spot-trailer-slot iframe.on { opacity: 1; }
-/* THE PREFERRED PATH NEEDS ALMOST NONE OF THE ABOVE. A trailer played as a video file
-   (useVideoTrailer) is ours: no player chrome creeps in at the edges, and the rendition is chosen
-   by the backend from what the billboard actually paints rather than inferred by YouTube from the
-   element's size. So the double-size layout hack and its counter-scale both go, and the picture is
-   sharper for less decode than the embed it replaces.
-
-   THE ONE THING THAT SURVIVES IS THE CROP, for a different reason than before. It hid YouTube's
-   chrome; here it hides LETTERBOXING BAKED INTO THE FILE. IMDb encodes every trailer into a 16:9
-   container, so a 2.39:1 one arrives with black bands top and bottom as picture content, which no
-   object-fit can reach — and a billboard is not the place for a black band above the wordmark.
-   1.35 is deliberately the number the embed used: a row mixes the two engines title by title, so
-   the framing has to be the same on both or the billboard would visibly re-crop as you walk along
-   it. It costs the edges of a trailer that was already full-frame, which is the same trade the row
-   has always made. */
+   IT IS ALSO NOT WHAT COSTS THE DECODE, WHICH IS WORTH RECORDING SO IT IS NOT "FIXED" LATER. The
+   crop feeds `cropScale` in TvSpotlight, which multiplies the measured box before a rendition is
+   picked — but useVideoTrailer never drops below its 720p floor anyway, and 676px × 1.35 at the
+   DPR 1 every television reports still lands on that same 720p file. On a TV the magnification is
+   a GPU-side scale of a layer that is already being composited, and lowering it would re-frame
+   every preview for no measurable CPU. */
 .tv-spot-trailer-slot video {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
@@ -664,6 +666,44 @@
 }
 .tv-spot-logo { display: block; max-width: 62%; max-height: 84px; object-fit: contain; }
 .tv-spot-cardtitle { display: block; font-size: 34px; font-weight: 800; color: #fff; }
+
+/* ---- THE PREVIEW'S SOUND BADGE ------------------------------------------------------------
+   A speaker, crossed while the preview is muted, in the corner of the billboard. It reports
+   state; the red button on the remote is what changes it (see TvSpotlight).
+
+   TIED TO `has-trailer` RATHER THAN TO FOCUS, because that class is the honest signal: the
+   trailer engine adds it at the reveal and removes it at teardown, so the badge is on screen for
+   precisely as long as there is something to hear and never a frame longer.
+
+   BOTTOM-RIGHT, WHICH IS A CORNER IT HAS TO BE GIVEN rather than one that was free. The title
+   plate's scrim spans the full width of the card and reaches this corner, and the progress bar
+   sits on the very bottom edge at z-index 3 — so this is lifted above both (z-index 4) and its
+   offset clears the bar rather than landing on it. Nothing collides because the plate's CONTENT
+   is left-aligned: the tag and the wordmark start at the far side of a 675px card.
+
+   `pointer-events: none` because it is a readout, not a control — and it sits inside a <button>,
+   where anything that swallowed a click would put a dead patch on the card. */
+.tv-spot-sound {
+  position: absolute; right: 16px; bottom: 16px; z-index: 4;
+  display: grid; place-items: center;
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .58);
+  /* The card behind this is a photograph, so the disc needs an edge of its own to stay legible
+     over a bright frame — the same hairline the discs in the detail overlay carry. */
+  border: 1px solid rgba(255, 255, 255, .14);
+  /* The glyphs are 1em, so this one number sizes them. */
+  font-size: 20px;
+  color: rgba(255, 255, 255, .92);
+  opacity: 0;
+  transition: opacity .4s ease;
+  pointer-events: none;
+}
+.tv-spot-sound svg { display: block; }
+.tv-spot-hero.has-trailer .tv-spot-sound { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .tv-spot-sound { transition: none; }
+}
 
 /* ---- RESUME PROGRESS (Continue Watching) --------------------------------------------------
    The same bar the web rail card carries, at TV scale: 6px rather than 5, because it is read
@@ -1159,10 +1199,10 @@
   transition: background-color .18s ease, color .18s ease, border-color .18s ease,
               transform .2s cubic-bezier(.2, .7, .2, 1);
 }
-/* The drawn glyphs (see PlusIcon / CheckIcon in TvDetail) size themselves off this rule's
-   font-size via `1em`. `display: block` kills the inline baseline gap that would otherwise sit
-   an SVG a few pixels low inside a grid-centred circle — the ⚑ beside it is text and sits on the
-   baseline, so without this the two are visibly off from each other. */
+/* The drawn glyphs (see PlusIcon / CheckIcon / FlagIcon in TvDetail) size themselves off this
+   rule's font-size via `1em`. `display: block` kills the inline baseline gap that would otherwise
+   sit an SVG a few pixels low inside a grid-centred circle — every disc in the row is an SVG now,
+   so without this they would all hang low together rather than centre in their circles. */
 .tv-ep-head .tv-det-disc svg { display: block; }
 .tv-ep-head .tv-det-disc:hover { background: rgba(24, 24, 24, .95); color: #fff; }
 /* `.on` is "this title is in your list" — the same job `.tv-chipmenu-opt.on` does in the menu,

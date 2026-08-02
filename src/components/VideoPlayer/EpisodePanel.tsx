@@ -36,7 +36,7 @@ export default function EpisodePanel({ open, series, onClose }: { open: boolean;
   // episode highlighted at all. A manual tab choice is preserved: this only fires when the
   // PLAYING season actually changes.
   useEffect(() => { setPanelSeason(series.season); }, [series.season]);
-  const { data, isLoading } = useSeason(series.metaId, panelSeason);
+  const { data, isLoading } = useSeason(series.metaId, panelSeason, series.imdb);
   const episodes: Episode[] = data?.episodes ?? [];
 
   return (

@@ -268,7 +268,7 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
   const firstSeason = useMemo(() => (seasons.find((s) => s.season >= 1) || seasons[0])?.season, [seasons]);
   const [openSeason, setOpenSeason] = useState<number | undefined>(picked?.season ?? firstSeason);
   const season = openSeason ?? firstSeason;
-  const { data, isLoading } = useSeason(meta.id, season);
+  const { data, isLoading } = useSeason(meta.id, season, meta.imdb);
   const episodes: Episode[] = useMemo(() => data?.episodes ?? [], [data]);
 
   const [active, setActive] = useState(0);

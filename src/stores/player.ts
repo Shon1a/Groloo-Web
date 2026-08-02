@@ -46,7 +46,7 @@ export interface PlaySource {
 export interface PlaySeries {
   seasons: SeasonInfo[];
   metaId: string | number;
-  imdb?: string;          // for IntroDB skip-intro/outro markers
+  imdb?: string;          // IntroDB markers, and the episode-numbering key for the panel's season fetch
   season: number;
   ep: number;
   title?: string;
