@@ -160,11 +160,17 @@ export function useGenres() {
   });
 }
 
-export function useSeason(id: string | number | undefined, season: number | undefined) {
+/* `imdb` is not decoration. The episode numbers this returns are the numbers the
+ * client will ask add-ons for streams under (`tt…:season:episode`), and TMDB's
+ * numbering is not always the add-ons' — a split-cour anime is one long TMDB
+ * season and two add-on seasons. Passing the IMDb id lets the server hand back the
+ * numbering the streams actually use; without it the list is TMDB's, and episodes
+ * past the fold resolve to ids no add-on has. See server.js `episodeMap`. */
+export function useSeason(id: string | number | undefined, season: number | undefined, imdb?: string) {
   const { lang } = useLang();
   return useQuery({
-    queryKey: ['season', id, season, lang],
+    queryKey: ['season', id, season, lang, imdb ?? ''],
     enabled: id != null && id !== '' && season != null,
-    queryFn: () => api<SeasonEpisodes>(`/api/tv/${id}/season/${season}?lang=${encodeURIComponent(lang)}`),
+    queryFn: () => api<SeasonEpisodes>(`/api/tv/${id}/season/${season}?lang=${encodeURIComponent(lang)}${imdb ? `&imdb=${encodeURIComponent(imdb)}` : ''}`),
   });
 }

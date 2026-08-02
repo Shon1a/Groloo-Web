@@ -156,6 +156,35 @@ export function isBackKey(e: KeyboardEvent): boolean {
   return BACK_KEYS.has(e.key) || BACK_CODES.has(e.keyCode);
 }
 
+/* ---- RED, AND WHY IT IS RED --------------------------------------------------------------
+ * The shelf preview plays muted, and the obvious control for that is the remote's volume pair.
+ * It cannot be: Android routes VOLUME_UP/DOWN to the system audio service and the WebView never
+ * sees a keydown, webOS handles volume in firmware, and Tizen will only deliver them to a
+ * `tizen.tvinputdevice.registerKey` — which STEALS them, so the set's own volume stops working
+ * while we are foreground. That fails Samsung certification and, more to the point, is the wrong
+ * answer: someone pressing volume-down wants the room quieter, not our trailer muted.
+ *
+ * The colour buttons are the keys TV platforms actually hand over, and red is the one every
+ * remote has. webOS and Tizen both send 403 for it, and neither sets a `key` name — hence the
+ * keyCode, the same bargain BACK_CODES makes above.
+ *
+ * The mute key rides along because development happens on a desktop keyboard, which has one and
+ * has no red button. It is matched by NAME only: Firefox reports keyCode 173 for mute AND for
+ * the minus key on several layouts, so a code match here would mute the preview every time
+ * someone typed a hyphen into the search box.
+ *
+ * NOTE THE PRESS IS NOT SWALLOWED by any of this — see the listener in TvSpotlight. Red means
+ * nothing to a TV outside an app that claims it, and letting mute keep reaching the platform is
+ * the point: the viewer's mute button must still mute the television. */
+const SOUND_KEYS = new Set(['ColorF0Red', 'Red', 'AudioVolumeMute', 'VolumeMute']);
+const RED_CODE = 403;
+
+/** True for the remote key that owns preview sound: the red colour button, or a keyboard's mute. */
+export function isPreviewSoundKey(e: KeyboardEvent): boolean {
+  if (e.altKey || e.ctrlKey || e.metaKey) return false;
+  return SOUND_KEYS.has(e.key) || e.keyCode === RED_CODE;
+}
+
 /**
  * Attach the key carriers. Returns the cleanup.
  *
@@ -167,6 +196,20 @@ export function isBackKey(e: KeyboardEvent): boolean {
  * changes to those components at all.
  */
 export function installTvKeys(): () => void {
+  /* TIZEN HANDS OVER NOTHING IT WAS NOT ASKED FOR. Samsung's remote keys beyond the D-pad are
+   * opt-in: unregistered, the red button is consumed by the platform and no keydown is fired at
+   * all, which is why `isPreviewSoundKey` alone would look correct in a browser and be dead on a
+   * TV. webOS and the Android shell need no equivalent — they deliver 403 as an ordinary key.
+   *
+   * Registration is per-app and lasts the session, so this is a one-shot at install time rather
+   * than something the row does when it mounts. Wrapped because the API is absent everywhere
+   * else and throws on a set that does not know the key name. */
+  try {
+    const tv = (window as unknown as { tizen?: { tvinputdevice?: { registerKey?: (k: string) => void } } })
+      .tizen?.tvinputdevice;
+    tv?.registerKey?.('ColorF0Red');
+  } catch { /* not a Samsung set, or a model without the key — the browser path still works */ }
+
   const onKey = (e: KeyboardEvent) => {
     if (!isBackKey(e) || e.altKey || e.ctrlKey || e.metaKey) return;
     if (handleBack()) {

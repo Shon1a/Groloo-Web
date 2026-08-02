@@ -172,10 +172,30 @@ export default function VideoPlayer() {
       loadHls().then((Hls) => {
         if (cancelled || !v) return;
         if (Hls && Hls.isSupported()) {
-          // Buffer well ahead (and keep a long back-buffer) so rewinds / short
-          // forward-seeks land in already-loaded video instead of stalling and
-          // snapping back; generous manifest/level timeouts for slow add-on hosts.
-          const hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 600, backBufferLength: 180, manifestLoadingTimeOut: 20000, levelLoadingTimeOut: 20000 });
+          /* Buffer ahead (and keep a back-buffer) so rewinds / short forward-seeks land in
+           * already-loaded video instead of stalling and snapping back; generous manifest/level
+           * timeouts for slow add-on hosts.
+           *
+           * THE BUFFER NUMBERS ARE A TV BUDGET NOW, NOT A DESKTOP ONE. They were 600s forward and
+           * 180s back, which on a set with a few hundred MB of headroom is not a buffer, it is an
+           * out-of-memory report waiting to be filed: at a 6 Mbps stream 600s is ~450 MB of
+           * demuxed fMP4 held live, and the pressure lands as decode stutter long before it lands
+           * as a crash. 120/60 still covers every seek the remote can actually make — the bar
+           * skips in tens of seconds — and is what the browser is asked to hold at once.
+           *
+           * capLevelToPlayerSize IS THE OTHER HALF, and the more important one. Without it ABR
+           * climbs the ladder on bandwidth alone: a 4K rendition would be fetched, demuxed and
+           * DECODED to be painted into a 1080p panel, which is the single most expensive thing
+           * this player can be asked to do and buys nothing anyone can see. With it the ladder is
+           * capped by the element's real painted size, so a 1080p set decodes 1080p. */
+          const hls = new Hls({
+            maxBufferLength: 30,
+            maxMaxBufferLength: 120,
+            backBufferLength: 60,
+            capLevelToPlayerSize: true,
+            manifestLoadingTimeOut: 20000,
+            levelLoadingTimeOut: 20000,
+          });
           hlsRef.current = hls;
           // Recover from fatal-but-recoverable errors instead of stalling forever on
           // the loading spinner — the #1 reason some add-on streams never started.
