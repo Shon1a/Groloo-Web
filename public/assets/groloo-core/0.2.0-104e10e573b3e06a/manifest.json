@@ -1,22 +1,22 @@
 {
   "schema": 1,
   "name": "groloo-core",
-  "build": "0.2.0-072ba5db63c5645b",
+  "build": "0.2.0-104e10e573b3e06a",
   "version": "0.2.0",
-  "coreVersion": "0.2.0+gbc57db6",
-  "gitSha": "bc57db6",
+  "coreVersion": "0.2.0+g044a67c",
+  "gitSha": "044a67c",
   "entry": "groloo_core.js",
   "files": {
     "groloo_core_bg.wasm": {
-      "bytes": 434642,
-      "sha256": "072ba5db63c5645b3a1bc6aeb6cc95c1d78af8d10b8c3a4c64325117a779bbf0"
+      "bytes": 434880,
+      "sha256": "104e10e573b3e06a7f8dac71ecf74f065a833923a53bc6b68d4d421617bd40b8"
     },
     "groloo_core.js": {
       "bytes": 30380,
       "sha256": "79ceccebbb8995e76bc165c145952b554f2b0885ae42566762485c2697900945"
     }
   },
-  "builtAt": "2026-07-21T18:09:06.499Z",
+  "builtAt": "2026-08-03T19:03:07.818Z",
   "toolchain": {
     "rustc": "1.96.1",
     "wasmBindgen": "0.2.126"
