@@ -1,0 +1,28 @@
+# The vendored cores are content-addressed deliverables, not text.
+#
+# Every file under these folders is pinned by sha-256: `manifest.json` records
+# the hash of each file beside it, `src/lib/heart.ts` pins CORE_WASM_SHA256, and
+# the differential harness in Groloo-core refuses to evaluate a single fixture
+# unless the bytes on disk hash to what the manifest claims.
+#
+# Git's autocrlf breaks all of that on Windows. The glue is stored correctly as
+# LF in the repository, but a Windows checkout rewrites every line ending on the
+# way out, and the file grows by one byte per line:
+#
+#     heart/0.1.0-5ecaa78/stredio_heart.js       31,733 in git -> 32,585 on disk
+#     groloo-core/<build>/groloo_core.js         30,380 in git -> 31,222 on disk
+#
+# The hash then fails and the failure reads as "the vendored artifact is stale"
+# or "corrupt", which is what it was mistaken for. Nothing was ever stale: strip
+# the carriage returns and both files hash to their manifest entry exactly.
+#
+# `-text` disables eol translation in both directions, so what is checked out is
+# what was committed, on every platform. The .wasm files survive today only by
+# git's NUL-byte heuristic; a file the app verifies by hash should not depend on
+# a heuristic, so they are marked explicitly.
+public/assets/heart/** -text
+public/assets/groloo-core/** -text
+*.wasm binary
+
+# Third-party bundle, shipped byte-for-byte and never edited here.
+public/assets/hls.min.js -text
