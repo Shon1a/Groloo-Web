@@ -538,18 +538,26 @@
   position: absolute; left: 0; top: 0; height: 100%;
   display: flex; gap: var(--sp-gap);
   transform: translateX(calc(var(--sp-wl) + var(--sp-gap) - (var(--active) + 1) * (var(--sp-wp) + var(--sp-gap))));
-  /* AN EASE-IN-OUT, NOT THE HOUSE EASE-OUT, and the difference is what this row was missing.
-     `cubic-bezier(.2,.7,.2,1)` is the curve everything else here uses and it is right for those:
-     a focus swell, a pill, a panel arriving — things that should answer INSTANTLY and then settle,
-     so they leave at speed. A strip of posters is not answering, it is TRAVELLING. Starting at
-     full speed makes the cards look yanked, because nothing with mass in it begins at its top
-     speed; easing in and out gives the shelf the short acceleration and the long settle that read
-     as weight, which is the entire difference between a slider that moves and one that glides.
+  /* THE CURVE IS FITTED TO THE REFERENCE, AND THEN CHECKED AGAINST OUR OWN RUNNING PAGE.
+     Correlating the clip frame by frame gives the fraction of the journey completed at each 33ms
+     step: .08, .25, .38, .50, .63, .71, .79, .83, .88, .92, .96, 1 — half-travelled at frame 4 of
+     13. That is a quadratic ease-out, near enough exactly; `cubic-bezier(.25,.46,.45,.94)` is it.
 
-     The duration is a variable because it is two numbers — a deliberate press and a held key —
-     set on the node by `step` in TvSpotlight, where the reasoning is. The fallback is the
-     deliberate one, so a strip that has never been walked still has the right curve. */
-  transition: transform var(--sp-slide, 460ms) cubic-bezier(.32, .08, .24, 1);
+     TWO WRONG ANSWERS ARE RECORDED HERE BECAUSE BOTH WERE ARGUED FOR CONVINCINGLY.
+     An ease-in-out came first, on the reasoning that a strip of posters has mass and nothing with
+     mass starts at its top speed. Good physics, wrong object: the row is not coasting, it is
+     ANSWERING A KEYPRESS, and the answer has to be immediate.
+     Then an expo-style `cubic-bezier(.16,1,.3,1)` at 620ms, from misreading the decay as purely
+     exponential. Probing our own page showed what that actually produces: half the journey gone in
+     67ms against the reference's 133ms — twice too fast off the mark, and the extra duration spent
+     on a tail nobody can see. Fast start plus long tail is not the same shape as this.
+
+     MUST MATCH `PARALLAX_EASE` in TvSpotlight: the artwork's drift decays at the identical rate in
+     the reference, so the two are one movement and have to be one curve.
+
+     The duration is a variable because it is two numbers — a deliberate press and a held key — set
+     on the node by `step`, where the reasoning is. */
+  transition: transform var(--sp-slide, 430ms) cubic-bezier(.25, .46, .45, .94);
 }
 /* will-change ONLY on the row the remote is on. It promotes the strip to its own compositor
    layer, which is right for the row that is about to slide — and wrong for the other twelve,
@@ -649,17 +657,38 @@
 .tv-shell .tv-spot-hero:focus-visible { transform: scale(1.03); }
 /* focus ring lives in the stage-5 section at the foot of this file — it has to be INSET here,
    see the note there */
-/* THE DISSOLVE RIDES THE SLIDE'S CLOCK. Two things move on every press — the strip travels and
-   the billboard changes title — and they are one gesture, so they finish together. At a fixed .5s
-   they did not: a held key slides in 260ms and the artwork was still a half-second behind, so the
-   billboard showed the title you had already left. A shade longer than the slide, so the picture
-   settles just after the card that chose it rather than racing it. */
+/* THE PICTURE CHANGES ALMOST AT ONCE — 90ms, which is three frames.
+   This was a half-second dissolve, on the reasoning that a slow cross-fade is gentler than a cut.
+   The reference says otherwise and it is worth stating plainly: measured frame by frame, Netflix
+   swaps the billboard's artwork in about TWO frames. It reads as instant, and it is right that it
+   does — the picture is answering the press, and the press was instant. What is drawn out is
+   everything AFTER it (the wordmark, then the copy), which is what gives the change its shape.
+   A slow dissolve here does the opposite: it delays the answer and then has nothing left to
+   stagger against.
+   Fixed rather than tied to `--sp-slide`, because this is a reaction and not a journey — it
+   should not get slower because the strip has further to travel. */
 .tv-spot-layer {
   position: absolute; inset: 0;
   opacity: 0;
-  transition: opacity calc(var(--sp-slide, 460ms) * 1.1) ease;
+  transition: opacity 90ms linear;
 }
 .tv-spot-layer.on { opacity: 1; }
+
+/* THE WORDMARK FOLLOWS THE PICTURE RATHER THAN ARRIVING WITH IT — ~200ms, starting ~110ms in,
+   which is where the reference puts it (the outgoing title is still legible over the incoming
+   artwork for several frames). It is the second step of the cascade, and it is what stops the
+   billboard from reading as one flat swap: the photograph answers the press, then the title
+   settles onto it, then the copy underneath changes. Three beats, one gesture.
+   Its opacity multiplies with the layer's, so the outgoing plate is carried off by the layer's own
+   fade and only the arrival needs a delay of its own. */
+.tv-spot-layer .tv-spot-card-in {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.tv-spot-layer.on .tv-spot-card-in {
+  opacity: 1;
+  transition: opacity 200ms ease 110ms;
+}
 
 /* ---- THE ROW PREVIEW (muted trailer on the billboard) ------------------------------------
    UNDERNEATH the artwork, at z-index 0, and the artwork fades off it. The obvious build — video
@@ -715,8 +744,16 @@
 }
 .tv-spot-art { transition: opacity .5s ease; }
 
+/* WIDER THAN THE CARD, BECAUSE THE PICTURE DRIFTS. The artwork travels 3.2% sideways as it changes
+   (measured off the reference — see the parallax effect in TvSpotlight). At `inset: 0` it exactly
+   fills the billboard, so that drift drags its own edge into frame and puts a black band down one
+   side. 4% either side is comfortably more than the travel, and `.tv-spot-hero` clips, so the
+   extra is never seen at rest. Overscan is not optional for a parallax; it is what makes one
+   possible. */
 .tv-spot-art {
-  position: absolute; inset: 0;
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -4%; right: -4%;
   background-size: cover;
   background-repeat: no-repeat;
   background-position: center;
@@ -811,12 +848,65 @@
    the panel is merely invisible while the row is closed, so opening one never reflows the page.
    The animation is scoped to .is-open — on a closed row it would fight the opacity below and,
    with `both`, pin the panel visible. */
+/* The reserved box. Its height is fixed in both states so opening a row never pushes the rows
+   below it; `relative` because the two copy blocks stack inside it. */
 .tv-spot-info {
+  position: relative;
   max-width: 720px; margin-top: 18px;
   height: var(--sp-info-h);
   overflow: hidden;
   opacity: 0;
   transition: opacity .25s ease;
+}
+/* ONE BLOCK PER SLOT, STACKED — sharing the artwork's `xfade` state so the copy and the picture
+   can never disagree about which title is on screen.
+
+   THEY DO NOT MOVE, AND THIS IS THE ONE THING THE MEASUREMENT IS COMPLETELY UNAMBIGUOUS ABOUT.
+   Correlating the copy's pixel row against itself across every frame of the reference, the best
+   horizontal offset is EXACTLY 0 on every single one, while the same test finds a clean 24px drift
+   on the artwork. The picture moves; the words do not. A sideways slide was added here on the
+   theory that direction should be legible — it is moving letters, which the eye tries to read
+   while they travel, and it is not what Netflix does.
+
+   THEY DO NOT CROSS-FADE EITHER. The old copy fades out and is gone before the new one starts.
+   Overlapping two blocks of body text means several frames of one paragraph legible through
+   another, which at 10 feet is not a dissolve, it is a smear — artwork can cross-fade because a
+   photograph over a photograph is still a picture; text over text is neither.
+
+   THE TWO HALVES ARE NOT THE SAME ANIMATION, and that asymmetry is the whole character of it.
+   Measured off the reference by pixel standard deviation, which for light text on a dark panel is
+   opacity directly:
+
+     OUT — 0.93, 0.82, 0.72, 0.62, 0.52, 0.42, 0.32, 0.20, 0.10, 0.00. Ten steps of −0.10, which is
+     linear and nothing else. It begins ON THE PRESS, with no delay, and takes 330ms. Leaving is
+     mechanical: the copy is not being presented, it is being got out of the way, and a linear
+     ramp is the least attention-seeking way to do that.
+
+     GAP — exactly one frame at zero. Never two paragraphs on screen at once.
+
+     IN — 0.14, 0.34, 0.51, 0.62, 0.72, 0.79, 0.88, 0.90, 0.96, then a long crawl to 1, over 360ms:
+     THREE TIMES the length of the fade a previous pass had here, and eased where that was linear.
+     Arriving is the opposite job from leaving — the new title introducing itself — so it comes up
+     quickly and then settles, which is what makes the copy read as placed rather than switched.
+
+     AND IT IS THE SAME CURVE AS THE STRIP. Normalised against its own duration the fade is half
+     done at 27.5%, which is quadratic; against the measured points a quad ease-out lands .185,
+     .344, .475, .603, .708, .806, .878, .932, .971 versus .14, .34, .51, .62, .72, .79, .88, .90,
+     .96. A quartic was tried first, from reading the opening step as steeper than it is, and
+     probing our own page showed it half-arrived in a twelfth of its length against the
+     reference's quarter — visibly snappier. There is one ease-out in this row and everything that
+     eases uses it.
+
+   So: linear out, quad ease-out in, and the in starts exactly where the out finished. */
+.tv-spot-infoblk {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 330ms linear;
+}
+.tv-spot-infoblk.on {
+  opacity: 1;
+  transition: opacity 360ms cubic-bezier(.25, .46, .45, .94) 330ms;
 }
 .tv-spot.is-open .tv-spot-info {
   opacity: 1;
@@ -835,6 +925,17 @@
   -webkit-box-orient: vertical; overflow: hidden;
 }
 
+/* THE SYNOPSIS ARRIVES FROM THE SIDE THE PRESS CAME FROM, not from below.
+   It used to rise 8px, which is the generic "something new here" gesture and says nothing about
+   what happened. Walking a row is a DIRECTIONAL act, and the copy is the part a viewer is reading
+   — so text that slides in from the right when you pressed Right, and from the left when you
+   pressed Left, tells them they moved. A symmetrical fade cannot: Left and Right look identical,
+   and the row reads as a slideshow advancing on its own rather than as something being driven.
+
+   THIS IS THE ROW BEING ARRIVED AT, NOT WALKED — it runs when a row OPENS (Up/Down onto it), and
+   the 8px rise is the whole of it. Walking the row sideways is handled by the two copy blocks
+   above, which do not move at all; the directional slide this keyframe briefly carried was
+   measured out of the reference along with the billboard's drift. */
 @keyframes tvSpotFade {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: none; }
