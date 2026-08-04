@@ -205,13 +205,62 @@ interface CardProps {
   pct: number;
   leftSec: number;
   onPick: () => void;
+  /** which phase of the deal the deck is in; null once it is over (and for every card that mounts
+   *  afterwards, which is every card the remote walks onto) */
+  intro: IntroPhase;
 }
 
-function EpisodeCard({ ep, offset, on, lifted, pct, leftSec, onPick }: CardProps) {
+/* ---- THE DEAL'S NUMBERS. The mechanism is documented on `intro` in the deck below. ------------ */
+type IntroPhase = 'pre' | 'run' | null;
+/** Cards past this share the last step. Beyond it the delay outruns the movement and the tail of
+ *  the deck arrives on its own, after everything else has settled — a queue, not a deal. */
+const INTRO_STEP_CAP = 5;
+/** Gap between one card starting and the next. Short enough to read as one gesture. */
+const INTRO_STEP_MS = 55;
+/** MUST TRACK `.tv-ep-card`'s transition in tv.css — it is that transition doing the movement. */
+const CARD_IN_MS = 340;
+/** How far below its place a card starts, as a share of its own height. A percentage rather than
+ *  pixels so it holds on a 720p package and on a 4K panel, where the cards are different sizes and
+ *  the same 80px would read as a lurch on one and a twitch on the other. */
+const INTRO_RISE = '34%';
+
+function EpisodeCard({ ep, offset, on, lifted, pct, leftSec, onPick, intro }: CardProps) {
   const t = useT();
   const [broken, setBroken] = useState(false);
+  /* THE STILL FADES IN WHEN IT ARRIVES, and this is most of what "the deck appears heavily" was.
+   * Eight <img> elements decode at eight different moments and each one used to SNAP from the
+   * placeholder to a full-brightness photograph — so a deck that is otherwise gliding into place
+   * finishes as a burst of hard pops, in no particular order, over the second after it lands.
+   *
+   * `complete` is checked as well as `load`, and it is not belt-and-braces: a still already in the
+   * cache can finish decoding before React has attached the handler, in which case `load` never
+   * fires for it and the card would sit at opacity 0 permanently — an invisible episode. Walking
+   * back to a card you have already seen is exactly that case. */
+  const [shown, setShown] = useState(false);
+  /* LATCHED AT MOUNT AND NEVER RECOMPUTED. It is the stagger's step, and it has to be frozen:
+   * `offset` changes on every press, and a CSS `animation-delay` that GROWS after its animation
+   * has finished can drop the element back inside the delay window — where `backwards` fill would
+   * snap it to opacity 0. Cards would blink as the remote walked past them. Frozen, each element
+   * keeps the step it entered on for as long as it exists. */
+  const introStep = useRef(Math.min(Math.abs(offset), INTRO_STEP_CAP));
   const name = ep.name || t('modal.episode_n', { n: ep.episode });
   const { transform, opacity, zIndex } = place(offset, lifted);
+
+  /* The offset is PREPENDED to the placement rather than replacing it, so a card rises into the
+   * exact spot `place` computed for it — including its scale and its share of the fan — instead of
+   * flying to a position this code would have to duplicate. Percentages in a transform resolve
+   * against the element's own box, and the outer translate is applied in the parent's space, so
+   * the rise is a clean 34% of card height whatever scale the card is wearing.
+   *
+   * The delay is carried through 'run' as well as 'pre': it has to be on the element in the commit
+   * that CHANGES the values, or the transition it is meant to stagger starts immediately. */
+  const rising = intro === 'pre';
+  const style: CSSProperties = {
+    transform: rising ? `translateY(${INTRO_RISE}) ${transform}` : transform,
+    opacity: rising ? 0 : opacity,
+    zIndex,
+    transitionDelay: intro ? `${introStep.current * INTRO_STEP_MS}ms` : undefined,
+  };
 
   /* One line under the title, and it answers the only question the card is asked: how much of
    * this is left? Failing that, how long is it? A card with neither says nothing extra rather
@@ -226,7 +275,7 @@ function EpisodeCard({ ep, offset, on, lifted, pct, leftSec, onPick }: CardProps
     <button
       type="button"
       className={`tv-ep-card${on ? ' on' : ''}${on && lifted ? ' is-lifted' : ''}`}
-      style={{ transform, opacity, zIndex } as CSSProperties}
+      style={style}
       tabIndex={on ? 0 : -1}
       aria-hidden={on ? undefined : true}
       aria-label={`E${ep.episode} ${name}`}
@@ -234,7 +283,18 @@ function EpisodeCard({ ep, offset, on, lifted, pct, leftSec, onPick }: CardProps
     >
       <span className="tv-ep-art" aria-hidden="true">
         {ep.still && !broken
-          ? <img src={imgW(ep.still, STILL_RENDITION)} alt="" decoding="async" loading="lazy" onError={() => setBroken(true)} />
+          ? (
+            <img
+              className={shown ? 'rdy' : undefined}
+              src={imgW(ep.still, STILL_RENDITION)}
+              alt=""
+              decoding="async"
+              loading="lazy"
+              ref={(el) => { if (el?.complete && !shown) setShown(true); }}
+              onLoad={() => setShown(true)}
+              onError={() => setBroken(true)}
+            />
+          )
           : <span className="tv-ep-nostill" data-n={`E${ep.episode}`} />}
       </span>
       <span className="tv-ep-scrim" aria-hidden="true" />
@@ -279,6 +339,54 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
    * moved to a sibling card" (still ours) from "focus left entirely". */
   const [lifted, setLifted] = useState(false);
   const deckRef = useRef<HTMLDivElement>(null);
+
+  /* ---- THE DEAL: the deck arrives one card at a time -----------------------------------------
+   *
+   * Three phases, like every staged animation in this build: 'pre' is the offset committed and
+   * not yet moving, 'run' is the movement, null is the deck at rest with nothing left on it.
+   *
+   * DRIVEN FROM HERE RATHER THAN FROM A KEYFRAME, AND THAT IS FORCED. Every card's position is an
+   * inline `transform` written by `place` on each render. A keyframe that also animated transform
+   * would own the property for its whole duration and then hand it back — a jump on the last frame
+   * of every entrance, on eight cards. So the deal uses the card's OWN transition, the .34s
+   * transform/opacity it already carries for walking the deck: render every card pushed down and
+   * transparent, then one frame later render it where it belongs, and the transition it already
+   * had does the movement. Nothing new animates; the existing animation is simply given a
+   * different starting point.
+   *
+   * THE STAGGER IS A PER-CARD `transition-delay` THAT EXISTS ONLY WHILE `intro` DOES. That is the
+   * whole reason for the third phase: left in place, the same delay would sit on every subsequent
+   * press, so walking the deck would answer the remote up to 200ms late. It is removed on a commit
+   * that changes nothing else, so removing it starts no transition of its own.
+   *
+   * STARTED WHEN THE CARDS ARRIVE, NOT WHEN THE DECK MOUNTS. The deck renders before its episodes
+   * do (a season is a fetch), so a phase clock hung off mount would have run itself out against an
+   * empty container and the cards would have appeared, fully placed, into a finished animation.
+   * Re-armed per season for the same reason: a new season is a new set of cards and should be
+   * dealt like one. */
+  // Read the same way TvHero and TvSpotlight read it — once, plainly, no listener: an OS setting
+  // changed mid-session is not worth one, and the value is only consulted when a deck is dealt.
+  const reduceMotion = typeof window !== 'undefined'
+    && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const [intro, setIntro] = useState<IntroPhase>(reduceMotion ? null : 'pre');
+  useEffect(() => { setIntro(reduceMotion ? null : 'pre'); }, [season, reduceMotion]);
+
+  /* Two frames between placing and moving. The first is the frame the offset state is painted in;
+   * flipping inside it can be coalesced into one style recalculation, which produces no transition
+   * at all — the cards just appear where they belong. The second guarantees the browser has seen
+   * the two states separately. (Same two-frame rule as the trailer's flight in TvDetail.) */
+  useEffect(() => {
+    if (intro !== 'pre' || !episodes.length) return;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setIntro('run')); });
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+  }, [intro, episodes.length]);
+
+  useEffect(() => {
+    if (intro !== 'run') return;
+    const id = window.setTimeout(() => setIntro(null), CARD_IN_MS + INTRO_STEP_MS * INTRO_STEP_CAP + 80);
+    return () => window.clearTimeout(id);
+  }, [intro]);
   /* Focus is only ever MOVED by this component when this component moved the selection. Without
    * the flag the effect below would also fire when the deck first renders — snatching the remote
    * away from whatever TvSpatialNav had just seeded (WATCH) the moment a season loaded. */
@@ -432,6 +540,7 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
                 offset={idx - active}
                 on={idx === active}
                 lifted={lifted}
+                intro={intro}
                 pct={r.pct}
                 leftSec={r.leftSec}
                 /* A card that is not the selection becomes it; the selection itself commits.

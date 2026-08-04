@@ -294,6 +294,15 @@ export default function TvSpatialNav() {
       }
       if (!layerNow) return;
 
+      /* THE PLAYER SEEDS ITS OWN FOCUS, so this must not seed it for them.
+       *
+       * A film opens with the chrome up and the remote NOT on it — the arrows are seeking, not
+       * moving a selection — and the recovery below would put focus on the first candidate in
+       * the overlay, which is the ✕ in the corner. OK then closed the film. It also fights the
+       * player every time it hands focus back to the overlay on leaving the control bar, which
+       * is a deliberate "nothing is selected" state, not focus that has escaped. */
+      if (layerNow.classList.contains('vp-overlay')) return;
+
       /* FOCUS CAN FALL OUT OF A LAYER WITHOUT THE LAYER CHANGING, and `seeded` used to hide it.
        *
        * The detail overlay swaps what its panel contains: pick an episode and the episode deck
@@ -323,15 +332,34 @@ export default function TvSpatialNav() {
          *
          * Ordered lookups rather than one comma-selector, because `querySelector` returns the
          * first match in DOCUMENT order, not in list order — with a list the ✕ would win, being
-         * first in the markup, and the bug would look fixed while doing nothing. */
-        const fallback = ['#mWatch', '.tv-ep-card.on', '.tv-chipmenu-btn', '.tv-det-row']
+         * first in the markup, and the bug would look fixed while doing nothing.
+         *
+         * A ROW OUTRANKS THE CHIP ABOVE IT, matching the seed in TvDetail: recovery should hand
+         * the remote back to the thing the panel is FOR, not to the dropdown that chooses which
+         * list it is. The deck is unaffected — it has no `.tv-det-row`, so a deck with no selected
+         * card still falls through to its season chip. */
+        const fallback = ['#mWatch', '.tv-ep-card.on', '.tv-det-row', '.tv-chipmenu-btn']
           .map((sel) => layerNow!.querySelector<HTMLElement>(sel))
           .find(Boolean);
         if (fallback) { fallback.focus({ preventScroll: true }); seeded = true; return; }
-        /* Nothing real to hold yet. An overlay opens on its loading veil, so this branch runs
-         * first with only the ✕ to offer. `seeded` deliberately stays false: parking on the ✕ is
-         * holding the remote somewhere valid, not seeding, and claiming otherwise leaves every
-         * title focused on its close button forever — which is exactly what marking it did. */
+        /* Nothing real to hold yet — take whatever the layer has.
+         *
+         * ON THE DETAIL OVERLAY THAT IS NOW NOTHING AT ALL, and deliberately. It opens on its
+         * loading veil, so this branch runs first; the veil used to render a ✕ in the corner and
+         * this line focused it, because it was the only candidate. The veil renders the spinner
+         * alone now (see the note on `closeBtn` in TvDetail.tsx), so `candidates` comes back empty
+         * and the optional call is a no-op: focus stays where it is, out of a layer that has
+         * nothing to point at, and the observer runs this again the moment the content mounts and
+         * the ordered fallback above can answer properly. Arrows are inert for those few hundred
+         * milliseconds, which is correct — a layer with no controls has nowhere to move to, and
+         * `candidates` is scoped to the layer, so they cannot reach the rows behind it either.
+         *
+         * `seeded` deliberately stays false whatever happens here: parking is holding the remote
+         * somewhere valid, not seeding, and claiming otherwise left every title focused on its
+         * close button forever — which is exactly what marking it did.
+         *
+         * The line stays for the other layers, where it is still the right answer: the auth and
+         * report sheets have real controls from their first frame. */
         candidates(layerNow)[0]?.focus({ preventScroll: true });
         return;
       }
@@ -369,12 +397,23 @@ export default function TvSpatialNav() {
       const ae = document.activeElement as HTMLElement | null;
       // Never hijack while the user is typing (e.g. the search box).
       if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return true;
-      /* THE PLAYER OWNS ITS OWN ARROWS. VideoPlayer binds Left/Right to seek and Up/Down to its
-       * own handling; running spatial focus movement on top of that meant one press both sought
-       * the video AND moved the selection. During playback seeking is what a remote is for, so
-       * stand down entirely while it is the top layer. Reaching the control bar with a D-pad is
-       * the player's own job and is tracked with the rest of the playback work. */
-      return !!topLayer()?.classList.contains('vp-overlay');
+      /* THE PLAYER OWNS ITS OWN ARROWS — BUT ONLY WHILE IT IS PLAYING.
+       *
+       * VideoPlayer binds Left/Right to seek, so running spatial focus movement on top of that
+       * meant one press both sought the video AND moved the selection, and this stood down for
+       * the whole overlay. The cost was that the control bar could not be reached at all: on a
+       * TV the gear menu, the subtitle list, the quality list and the episode panel were simply
+       * unreachable, because there is no pointer and nothing else moves focus.
+       *
+       * So the player now says which of its two modes it is in, by class. Playing with the
+       * chrome down (no `tv-nav`) the arrows are transport and are none of our business.
+       * Once the viewer summons the controls the player adds `tv-nav`, hands the D-pad over,
+       * and everything in the bar becomes an ordinary focus target. The player still takes
+       * Left/Right back for the scrubber, which it does from a capture-phase listener that runs
+       * before this one. */
+      const player = topLayer();
+      if (!player?.classList.contains('vp-overlay')) return false;
+      return !player.classList.contains('tv-nav');
     };
 
     /** One step of focus movement in `dir`. Returns whether it consumed the input. */
@@ -392,8 +431,27 @@ export default function TvSpatialNav() {
       if (layer) {
         const curBox = scrollParent(cur, layer);
         const reachable = cands.filter((c) => c !== cur && !unreachable(c, curBox, layer));
-        const next = pick(dir, cur.getBoundingClientRect(), reachable);
+        let next = pick(dir, cur.getBoundingClientRect(), reachable);
         if (!next) return false;
+        /* ARRIVING IN A ROW OF PILLS LANDS ON THE ONE YOU ARE ON — the same rule as the top bar
+         * below, for the same reason, on the other kind of tab strip.
+         *
+         * The language pills sit between the source list and the panel's head, so Up out of the
+         * list enters them. Geometry cannot choose well there: a source row is the full width of
+         * the panel, so every pill overlaps it, every pill scores zero drift and the same vertical
+         * travel, and the winner is decided by document order — the leftmost pill, every time,
+         * whatever language the list is actually filtered to. That is the worst of the three to
+         * land on, because each of these presses re-filters the list you just came out of, so a
+         * viewer walking Up and pressing OK by reflex changes the thing they were looking at.
+         * Entering on the ACTIVE pill makes that reflex a no-op.
+         *
+         * Vertical only, and only from OUTSIDE the group: Left/Right within the pills is the
+         * viewer walking the languages deliberately, which must go where they pointed. */
+        if (dir === 'up' || dir === 'down') {
+          const group = next.closest('.tv-det-pills');
+          const on = group && !group.contains(cur) && group.querySelector<HTMLElement>('.tv-det-pill.on');
+          if (on) next = on;
+        }
         next.focus({ preventScroll: true });
         if (dir === 'left' || dir === 'right') {
           // horizontally-scrolled strips (season tabs, language chips) are the browser's job

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
@@ -72,6 +72,37 @@ export default function TvTopNav() {
   const openAuth = useAuth((s) => s.openAuth);
   const [itemsFocused, setItemsFocused] = useState(false);
 
+  /* THE WHITE PILL IS ONE ELEMENT THAT SLIDES, not a background that switches item — the same
+   * decision, and the same implementation, as the season chip menu's travelling bar (see
+   * TvChipMenu / "THE TRAVELLING HIGHLIGHT" in tv.css). A per-item `:focus-visible { background:
+   * #fff }` is what this used to be, and a per-item fill can only ever CUT: there is nothing
+   * moving between Home and Series for the eye to follow, so walking the bar with a remote read
+   * as five separate things blinking rather than as one selection being carried across.
+   *
+   * It costs a transform and a width on one element that nothing else's layout depends on, which
+   * is the only kind of animation the TV effect budget spends frames on.
+   *
+   * `null` until focus first lands, so the pill does not fly in from the left edge of the group
+   * on the first press; `armed` turns the transition on one frame after it is first placed, and
+   * both reset when focus leaves the bar so the next arrival is a fresh placement rather than a
+   * slide from wherever the remote left it. */
+  const [mark, setMark] = useState<{ left: number; width: number; height: number } | null>(null);
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!mark || armed) return;
+    const id = requestAnimationFrame(() => setArmed(true));
+    return () => cancelAnimationFrame(id);
+  }, [mark, armed]);
+
+  /* offsetLeft/offsetWidth are measured against the group (it is position:relative, so it is the
+     offsetParent) and are LAYOUT values — unaffected by the `scale(1.08)` the group is wearing at
+     the moment focus arrives, which is exactly what we want: the pill is placed in the group's
+     own untransformed coordinates and then scales with it, rather than being measured through the
+     transform and landing 8% wrong. */
+  const place = (el: HTMLElement) =>
+    setMark({ left: el.offsetLeft, width: el.offsetWidth, height: el.offsetHeight });
+
   // Same sign-in gate the rail uses: My space (and the other gated routes) bounce to the
   // auth modal until there's a session, then land on the page.
   const go = (to: string) => {
@@ -101,10 +132,31 @@ export default function TvTopNav() {
           Tracked on the group rather than the whole bar so landing on the profile avatar — which
           is not part of this group — does not swell the menu it is not in. */}
       <div
-        className={`tv-nav-items${itemsFocused ? ' is-focused' : ''}`}
-        onFocus={() => setItemsFocused(true)}
-        onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setItemsFocused(false); }}
+        className={`tv-nav-items${itemsFocused ? ' is-focused' : ''}${armed ? ' is-armed' : ''}`}
+        onFocus={(e) => {
+          setItemsFocused(true);
+          // Fires for the item that took focus (focus bubbles as React's onFocus), whichever way
+          // it arrived — remote, Tab or a pointer click. The guard is for anything focusable that
+          // is not one of the pills; today there is nothing, and the pill should not chase it if
+          // there ever is.
+          if ((e.target as HTMLElement).classList?.contains('tv-nav-item')) place(e.target as HTMLElement);
+        }}
+        onBlur={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setItemsFocused(false);
+          setMark(null);
+          setArmed(false);
+        }}
       >
+        {/* The travelling pill. Sized and placed from whichever item has focus, so it IS the focus
+            indicator — which is why the items themselves draw no ring and no fill of their own. */}
+        <span
+          className="tv-nav-mark"
+          aria-hidden="true"
+          style={mark
+            ? { transform: `translateX(${mark.left}px)`, width: `${mark.width}px`, height: `${mark.height}px`, opacity: 1 }
+            : undefined}
+        />
         <button
           type="button"
           className="tv-nav-item tv-nav-search"

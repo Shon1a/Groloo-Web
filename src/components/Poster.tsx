@@ -72,7 +72,17 @@ export default function Poster({ item, seed, onSelect, progress, onRemove }: Pos
             className={loaded ? 'cov rdy' : 'cov'}
             src={img}
             loading="lazy"
+            decoding="async"
             alt={`${item.title} poster`}
+            /* `complete` AS WELL AS `onLoad`, and it is a real case rather than defensive noise: a
+             * poster already in the cache can finish before React attaches the handler, so `load`
+             * never fires for it and the tile stays at opacity 0 — a permanently blank card, and
+             * only ever on the SECOND visit to a row, which is the hardest kind of bug to catch.
+             * `decoding="async"` alongside, so the fade reveals a decoded bitmap rather than one
+             * still painting in bands. (These tiles keep their lazy `load` rather than moving to
+             * useImageReady: a browse grid holds a lot of them and the hook would fetch every one
+             * eagerly, which is the memory work the rails do deliberately.) */
+            ref={(el) => { if (el?.complete && el.naturalWidth > 0 && !loaded) setLoaded(true); }}
             onLoad={() => setLoaded(true)}
             onError={() => setBroken(true)}
           />
