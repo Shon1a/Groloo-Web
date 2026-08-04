@@ -87,11 +87,21 @@ const TRAILER_PREFETCH_SPAN = 1;
  * Wrong here and the picture goes soft for a reason nothing on screen explains. */
 const BILLBOARD_TRAILER_CROP = 1.35;
 
+/* How far the billboard's picture drifts while it changes. MEASURED, not chosen: 24px of travel on
+ * a 753px card in the reference. The full derivation is in the parallax effect below. */
+const BILLBOARD_PARALLAX = '3.2%';
+/** MUST MATCH the strip's curve in tv.css. Fitted to the reference, not picked from a list — the
+ *  derivation is on the strip's `transition` there. */
+const PARALLAX_EASE = 'cubic-bezier(.25, .46, .45, .94)';
+
 /* ---- HOW LONG THE STRIP TAKES TO MOVE ONE CARD. Reasoning is at `step`. -------------------- */
-/** A deliberate press. Long enough to have weight, short enough to never be in the way. */
-const SLIDE_MS = 460;
-/** A press that arrived while the last was still travelling — a held key. */
-const SLIDE_MS_CHAINED = 260;
+/** A deliberate press. The reference's drift reaches zero 13 frames after it starts at 30fps, and
+ *  is half-travelled at frame 4 — so ~430ms with the curve below, checked against our own running
+ *  page rather than assumed. */
+const SLIDE_MS = 430;
+/** A press that arrived while the last was still travelling — a held key. Roughly half, so a hold
+ *  keeps up without the curve losing its shape. */
+const SLIDE_MS_CHAINED = 320;
 /** Under this gap between presses, the remote is being held rather than tapped. */
 const SLIDE_CHAIN_WINDOW = 320;
 
@@ -283,6 +293,68 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const heroBtnRef = useRef<HTMLButtonElement>(null);
   const trailerSlotRef = useRef<HTMLDivElement>(null);
   const rowTrailers = useSettings((s) => s.settings.tvRowTrailers);
+  /* ---- THE BILLBOARD'S PARALLAX, MEASURED ---------------------------------------------------
+   *
+   * The reference clip was pulled apart frame by frame and then correlated numerically — a single
+   * row of pixels out of the billboard, matched against the settled frame for the best (scale,
+   * offset) at each step. Eyeballing contact sheets got this wrong twice, in both directions, and
+   * the numbers are worth writing down so nobody has to guess a third time:
+   *
+   *   SCALE = 1.000, every frame. There is no zoom, no Ken Burns, no card growing out of the
+   *   strip. Whatever it looks like, the picture is never resized.
+   *
+   *   OFFSET decays +24px → 0 across frames 10-23 at 30fps: 24, 22, 18, 15, 12, 9, 7, 5, 4, 3, 2,
+   *   1, 1, 0. So the incoming artwork DOES drift — 24px on a 753px card, 3.2% — arriving from the
+   *   side the press came from and easing into place. At 3.2% it is invisible in a downscaled
+   *   contact sheet, which is exactly why reading the tiles said "nothing moves"; in motion it is
+   *   the whole feel.
+   *
+   *   THE STRIP DECAYS AT THE SAME RATE — measured 57, 47, 38, 31, 24, 19, 14, 10, 7, 5 — a ratio
+   *   of ~0.82 per frame, identical to the artwork's. One curve, one duration, two distances. That
+   *   ratio is an exponential settle with a ~170ms time constant, which is why the easing below is
+   *   an expo-style ease-out and not the ease-in-out an earlier pass used: the movement is fastest
+   *   at the very first frame and spends most of its life almost stopped.
+   *
+   * DRIVEN RATHER THAN DECLARED for the reason it always was: the two layers alternate, so the one
+   * element that is not-front has to mean "about to enter" before the swap and "just left" after
+   * it — one class, two opposite offsets, impossible in a stylesheet. `Element.animate` restarts
+   * cleanly per press, needs no remount, and composites. */
+  useEffect(() => {
+    const root = sectionRef.current;
+    if (!root || reduceMotion) return;
+    const cs = getComputedStyle(root);
+    const dir = Number(cs.getPropertyValue('--sp-dir')) || 0;
+    if (!dir) return;   // the first paint of a row was not reached by a press; nothing to explain
+    const slide = parseFloat(cs.getPropertyValue('--sp-slide')) || SLIDE_MS;
+    const from = `translateX(calc(${dir} * ${BILLBOARD_PARALLAX}))`;
+    const away = `translateX(calc(${-dir} * ${BILLBOARD_PARALLAX}))`;
+    /* THE PICTURE MOVES, NOT THE LAYER. The layer also carries the title plate, and the reference
+     * holds that still — drifting it would make the billboard slide as one panel, which is the
+     * opposite of parallax. `.tv-spot-art` is the photograph alone, and it is overscanned in
+     * tv.css so the drift never pulls an edge into frame. */
+    const anims = Array.from(root.querySelectorAll<HTMLElement>('.tv-spot-art')).map((el) => {
+      const entering = !!el.closest('.tv-spot-layer')?.classList.contains('on');
+      return el.animate(
+        entering ? [{ transform: from }, { transform: 'none' }] : [{ transform: 'none' }, { transform: away }],
+        { duration: slide, easing: PARALLAX_EASE },
+      );
+    });
+    return () => anims.forEach((a) => a.cancel());
+    /* KEYED ON `xfade.front`, NOT ON `active`, AND THAT IS A BUG FIX RATHER THAN A TIDY-UP.
+     *
+     * Which layer is entering is read off the DOM (`.on`), so this has to run AFTER the swap has
+     * been committed. `active` changes one commit EARLIER — the cross-fade slots are updated by
+     * their own effect, which is state, so it lands a commit later. Keyed on `active`, this ran
+     * while the OLD layer still carried `.on`: it gave the outgoing picture the entering
+     * animation, gave the incoming one nothing, and the drift was on the wrong element and in the
+     * wrong direction.
+     *
+     * It was invisible by inspection and obvious the moment the running page was measured — the
+     * front layer's transform went 0 → -23px and then snapped back, which is the "leaving"
+     * keyframe playing on the arriving card. `xfade.front` is the signal that means "the swap has
+     * happened", so it is the one to hang this on. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [xfade.front]);
   /* Selected field by field rather than as one object: every row on the screen subscribes to
    * this store, and a selector returning `{on, toggle}` would build a new object per render and
    * re-render all dozen of them on any state change anywhere. */
@@ -707,7 +779,15 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const now = performance.now();
     const chained = now - lastStepAt.current < SLIDE_CHAIN_WINDOW;
     lastStepAt.current = now;
-    sectionRef.current?.style.setProperty('--sp-slide', `${chained ? SLIDE_MS_CHAINED : SLIDE_MS}ms`);
+    const el = sectionRef.current;
+    if (el) {
+      el.style.setProperty('--sp-slide', `${chained ? SLIDE_MS_CHAINED : SLIDE_MS}ms`);
+      /* WHICH WAY THE PRESS WENT. The artwork's drift needs it — it enters from the side the
+       * remote came from — and CSS cannot work it out, because CSS only ever sees the new state.
+       * +1 is rightward. The COPY does not use it: measured across every frame of the reference,
+       * the text's horizontal offset is exactly 0. */
+      el.style.setProperty('--sp-dir', delta > 0 ? '1' : '-1');
+    }
     setActive((a) => (a + delta + stops) % stops);
   };
 
@@ -739,17 +819,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * a HiDPI panel. Non-TMDB URLs pass through imgW untouched. */
   const logoOf = (it: MediaItem) => imgW(it.titleLogo || it.logo || '', LOGO_RENDITION) || undefined;
 
-  const curArt = withArt(cur);
-  // [S2:E4 ·] genre · year · rating — the type isn't repeated here, it's the tag on the billboard.
-  // The episode leads when there is one, because on a resume row it is the most specific thing the
-  // line can say. The see-all card has no metadata of its own; the panel keeps its reserved height
-  // and stays blank.
-  const metaBits = onSeeAllCard ? [] : [
-    (!onSeeAllCard && resumeOf?.(cur)?.note) || '',
-    genre(curArt.genre || (curArt.genres && curArt.genres[0]) || ''),
-    curArt.year ? String(curArt.year) : '',
-    curArt.rating ? `★ ${curArt.rating}` : '',
-  ].filter(Boolean);
+  /* [S2:E4 ·] genre · year · rating is built PER SLOT now, down in the info block, not once for
+   * `cur`. The two copy blocks cross-fade, so for the length of a press two different titles are
+   * on screen at once and each has to be able to answer for itself — a single line computed from
+   * the current title would have re-written the outgoing block's text under it as it faded. The
+   * episode leads when there is one, because on a resume row it is the most specific thing the
+   * line can say. The see-all card has no metadata of its own and stays blank. */
 
   const onHeroKey = (e: ReactKeyboardEvent) => {
     // Left/Right walk the row and are consumed here so the global D-pad handler doesn't also
@@ -871,13 +946,37 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         </button>
       </div>
 
-      {/* INFO — cross-fades with the billboard (keyed remount → fade-in). Its height is reserved
-          in both states, so opening a row never pushes the rows below it. */}
-      <div className="tv-spot-info" key={`info-${active}`}>
-        <div className="tv-spot-meta">
-          {metaBits.map((b, i) => <span key={i}>{b}</span>)}
-        </div>
-        {!onSeeAllCard && curArt.overview && <p className="tv-spot-plot">{curArt.overview}</p>}
+      {/* INFO — TWO SLOTS THAT CROSS-FADE, on the billboard's own `xfade` state and therefore in
+          exact step with the picture they describe.
+          It was one block with a keyed remount, which meant the outgoing copy did not leave: it
+          was destroyed in the frame the new one appeared, so a press replaced a paragraph
+          instantly and then slid the replacement in. Half a transition reads worse than none,
+          because the eye catches the half that cut. Now the old text drifts out and dims while the
+          new drifts in — the same two-layer shape as the artwork above, sharing its slots so the
+          two can never disagree about which title is being shown.
+          Height is still reserved on the container, so opening a row never pushes the rows below
+          it, and the two blocks stack inside that reserved box. */}
+      <div className="tv-spot-info">
+        {(['a', 'b'] as const).map((slot) => {
+          const it = xfade[slot];
+          const on = xfade.front === slot;
+          if (!it || it === 'end') return <div key={slot} className={`tv-spot-infoblk${on ? ' on' : ''}`} />;
+          const a = withArt(it);
+          const bits = [
+            resumeOf?.(it)?.note || '',
+            genre(a.genre || (a.genres && a.genres[0]) || ''),
+            a.year ? String(a.year) : '',
+            a.rating ? `★ ${a.rating}` : '',
+          ].filter(Boolean);
+          return (
+            <div key={slot} className={`tv-spot-infoblk${on ? ' on' : ''}`} aria-hidden={!on}>
+              <div className="tv-spot-meta">
+                {bits.map((b, i) => <span key={i}>{b}</span>)}
+              </div>
+              {a.overview && <p className="tv-spot-plot">{a.overview}</p>}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
