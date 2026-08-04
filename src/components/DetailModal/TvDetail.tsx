@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
 import { imgW } from '../../lib/img';
 import { langName, type AddonStream } from '../../lib/addonClient';
@@ -60,8 +60,36 @@ import type { ModalTarget } from '../../stores/modal';
  * ==========================================================================*/
 
 const BACKDROP_RENDITION = 'w1280';
+/** Longest the loading veil waits on the backdrop's decode before opening without it. */
+const ART_WAIT_MAX = 2500;
 /** Cast names shown on the one-line credits row. Past this it is a wall of text, not a cue. */
 const CAST_LINE = 6;
+
+/* NO TRAILER PLAYS ON THIS SCREEN, and the note at the head of this file — "the trailer embed…
+ * never ran here anyway" — is load-bearing rather than historical.
+ *
+ * IT WAS BUILT AND REMOVED, so here is what it was and why it went. Pressing OK on a row billboard
+ * that was previewing handed the SAME playing <video> to this screen (a module-level baton, since
+ * the row and this overlay are siblings with nothing to thread a prop through), which re-parented
+ * it and grew it out of the billboard's box to fill the screen — no cut to black, the picture you
+ * pressed OK on simply became the background.
+ *
+ * It worked, and it cost more than it was worth. A full-screen video repaints under the scrim and
+ * the whole right-hand panel at its own frame rate, and unlike the ROW — which only ever previews
+ * after a dwell, so video and navigation are mutually exclusive by construction — this screen has
+ * no such guarantee: the video plays exactly while the remote is walking the deck, opening the
+ * season menu and switching sources. On real hardware that was a UI that visibly answered late.
+ *
+ * Everything cheap was tried first and none of it was enough: dropping the 1.35 crop, removing
+ * every transform and clip while it played, a rendition upgrade (removed — bigger decode, slower
+ * remote), holding the screen's own render until the zoom landed (removed — 440ms of nothing after
+ * a keypress reads as the app being slow), a six-second cap, ending on the first keypress, and
+ * finally restricting it to films, where there is no deck to navigate.
+ *
+ * Films were the last thing standing and they went too, on the plain ground that a screen does not
+ * get to be built twice: one title screen, one behaviour, no class of title that opens differently
+ * from another. What is left in its place is the arrival animation on `.tv-det` in tv.css, which
+ * gives the screen a way in that costs nothing to run. */
 
 export interface TvDetailProps {
   target: ModalTarget;
@@ -166,7 +194,52 @@ export default function TvDetail(p: TvDetailProps) {
     lang, setLang, playStream, streamTitle, pickedEp, setPickedEp,
   } = p;
 
-  const backdrop = meta?.backdrop || target.poster;
+  /* ---- ONE PICTURE, SHOWN ONCE, AND NOT BEFORE IT IS READY ----------------------------------
+   *
+   * THERE IS NO LONGER ANYTHING TO CROSS-FADE, AND THAT IS THE FIX. This screen used to open on
+   * `target.poster` — a PORTRAIT poster cropped to fill a 1920x1080 panel, which for most titles
+   * is a hard magnification of some corner of the same photograph the backdrop shows properly —
+   * and then swap to `meta.backdrop` when it arrived. A dissolve was tried, and it worked: the
+   * swap became smooth. It was still a swap, and a swap the viewer can see is a swap that should
+   * not have happened. The poster was never information; it was a placeholder standing in for a
+   * picture that was 300ms away, and the honest answer to "how do I hide the change" is to not
+   * change anything.
+   *
+   * SO THE BACKDROP IS NOT CHOSEN UNTIL /api/meta HAS LANDED. Before that the art layer is empty
+   * and the loading veil is over it, which is exactly what the veil is for. The poster survives
+   * only as the fallback for a title whose meta genuinely has no backdrop — a real absence rather
+   * than a temporary one, and in that case it is the first and only picture, so there is still
+   * nothing to see changing.
+   *
+   * AND THE VEIL WAITS FOR THE DECODE, NOT JUST THE FETCH. Knowing the URL is not the same as
+   * having the picture: revealing on `meta` alone would raise the veil on a screen whose backdrop
+   * was still arriving, so the copy would land on black and the artwork would appear underneath it
+   * a beat later. That is the same defect one layer further down. The image is decoded into a
+   * detached Image() behind the veil, and only then does the screen open — complete, with its
+   * backdrop already on it. */
+  const backdrop = ready ? (meta?.backdrop || target.poster) : '';
+  const backdropUrl = backdrop ? imgW(backdrop, BACKDROP_RENDITION) : '';
+  const [artReady, setArtReady] = useState(false);
+  useEffect(() => {
+    if (!backdropUrl) return;
+    let cancelled = false;
+    const done = () => { if (!cancelled) setArtReady(true); };
+    const pre = new Image();
+    pre.decoding = 'async';
+    pre.src = backdropUrl;
+    // `complete` covers the cached case, where `load` may never fire at all.
+    if (pre.complete) done();
+    else { pre.onload = done; pre.onerror = done; }
+    /* A slow CDN must never hold the screen shut. Past this the title opens on whatever it has —
+     * a late backdrop then fades in on its own, which is the old behaviour and an acceptable worst
+     * case, where a spinner that never ends is not. */
+    const cap = window.setTimeout(done, ART_WAIT_MAX);
+    return () => { cancelled = true; window.clearTimeout(cap); };
+  }, [backdropUrl]);
+  /** The screen is ready to be seen: the data has landed AND its picture is decoded. */
+  const shown = ready && (artReady || !backdropUrl);
+
+  const [logoShown, setLogoShown] = useState(false);
 
   /* One line of credits, director first. The web modal gives this a whole sticky column with a
    * photo each; the names are the part that survives the trip across the room. */
@@ -233,6 +306,19 @@ export default function TvDetail(p: TvDetailProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const prevDeck = useRef(deck);
   const panelSeeded = useRef(false);
+  /* THE CHIP TAKEN ONLY BECAUSE THERE WAS NO LIST YET, held so it can be handed back.
+   *
+   * The panel almost never arrives with its sources already in it — /api/meta lands, the panel
+   * renders its "loading" note, and the addon streams turn up a beat later. So the seed below
+   * runs first against a panel whose only control is the chip, parks there, sets `panelSeeded`,
+   * and the run that fires when the rows finally exist bails on that flag. The remote would have
+   * sat on the dropdown for exactly the reason the seed was changed to avoid.
+   *
+   * Recording WHAT was seeded is what separates "we parked here for want of anything better" from
+   * "the viewer chose this". A provisional chip is still parked focus; a chip the viewer walked
+   * back up to is not, and the check below can tell them apart because in the second case focus
+   * has moved at least once in between. */
+  const provisional = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const cameFromDeck = prevDeck.current && !deck;
     prevDeck.current = deck;
@@ -248,12 +334,62 @@ export default function TvDetail(p: TvDetailProps) {
      * arrives. Either way it only ever takes focus that nobody chose — the ✕ or nothing at
      * all — so a viewer who has already moved is left alone. */
     const ae = document.activeElement as HTMLElement | null;
-    const parked = !ae || ae === document.body || ae.id === 'closeModal';
-    if (!cameFromDeck && (panelSeeded.current || !parked)) { panelSeeded.current = true; return; }
+    // Focus on the chip we parked on ourselves counts as nobody having chosen anything yet.
+    const onProvisional = !!provisional.current && ae === provisional.current;
+    const parked = !ae || ae === document.body || ae.id === 'closeModal' || onProvisional;
+    if (!cameFromDeck && !parked) { panelSeeded.current = true; provisional.current = null; return; }
+    if (!cameFromDeck && panelSeeded.current && !onProvisional) return;
 
-    const first = panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn, .tv-det-row, .tv-det-pill');
-    if (first) { first.focus({ preventScroll: true }); panelSeeded.current = true; }
-  }, [deck, ready, srcTab, shownStreams.length, services.length]);
+    /* THE FIRST SOURCE, NOT THE DROPDOWN ABOVE IT — this is the difference between one press and
+     * three. The panel arrives with its head row on top (the chip, +, flag, ✕), then the language
+     * pills, then the list, so seeding the chip put the remote two Downs away from the only thing
+     * anybody opened this screen to do. Playing the first source cost Down, Down, OK; it now costs
+     * OK. The chip is a control for the rare case where the list is the wrong list, and a control
+     * that is used occasionally should not sit in front of the one used every time.
+     *
+     * ORDERED LOOKUPS, NOT ONE COMMA-SELECTOR, and here that is load-bearing rather than
+     * pedantry: `querySelector` returns the first match in DOCUMENT order, and the chip is first
+     * in the markup — so a comma list would go on picking the chip and this change would look
+     * applied while doing nothing. (The same trap is called out on TvSpatialNav's recovery list.)
+     *
+     * The fallbacks are the cases where there is no row to take: a list still loading, an empty
+     * one where the chip is genuinely all there is, and the signed-out addons panel, whose SIGN
+     * IN is a pill. The first of those is the common one, which is what `provisional` is for. */
+    const row = panelRef.current?.querySelector<HTMLElement>('.tv-det-row');
+    const first = row
+      || panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn')
+      || panelRef.current?.querySelector<HTMLElement>('.tv-det-pill');
+    if (!first) return;
+    // Re-focusing what already has focus would be a no-op that still fires a focus event; skip it.
+    if (first !== ae) first.focus({ preventScroll: true });
+    panelSeeded.current = true;
+    provisional.current = row ? null : first;
+    /* `shown`, NOT `ready` — the panel does not exist until the veil lifts. The two used to be the
+     * same instant; now the veil also waits for the backdrop to decode, so a seed keyed to `ready`
+     * would run against an empty overlay, find nothing, and never re-run (the deps would not have
+     * changed by the time the panel actually mounted). The remote would land on a title screen with
+     * no selection on it. */
+  }, [deck, shown, srcTab, shownStreams.length, services.length]);
+
+  /* THE MOMENT THE REMOTE MOVES, THE CHIP IS NO LONGER PROVISIONAL — and this listener is what
+   * stops the upgrade above from becoming a yank.
+   *
+   * Without it the flag is positional rather than historical: a viewer who walks Down to a
+   * language pill and back Up to the chip is sitting on the same element the seed parked on, so
+   * `onProvisional` reads true and the next arriving list would pull focus off a control they
+   * deliberately returned to. Clearing on the first focus change anywhere makes the flag mean
+   * what it is supposed to mean — "focus has not moved since we parked it" — rather than "focus
+   * happens to be here now".
+   *
+   * `focusin` rather than `blur` because it bubbles, so one document-level listener covers every
+   * control in the panel without any of them knowing about this. */
+  useEffect(() => {
+    const onFocusIn = () => {
+      if (provisional.current && document.activeElement !== provisional.current) provisional.current = null;
+    };
+    document.addEventListener('focusin', onFocusIn);
+    return () => document.removeEventListener('focusin', onFocusIn);
+  }, []);
 
   /* BACK IS THE WAY BACK TO THE EPISODES — there is no button for it any more.
    *
@@ -271,12 +407,26 @@ export default function TvDetail(p: TvDetailProps) {
     return registerBackHandler(() => { setPickedEp(null); return true; });
   }, [isSeries, pickedEp, setPickedEp]);
 
-  /* ONE close button, placed in two different places depending on whether there is a row to put
-   * it in yet. While /api/meta is still in flight the screen is a loading veil with no chip row,
-   * and a title you cannot back out of visually is not acceptable just because Back happens to
-   * work — so it keeps its corner there. The id is what TvSpatialNav looks for when deciding
-   * whether focus is merely parked, so the two must never both render (they cannot: `ready`
-   * chooses exactly one). */
+  /* ONE close button, and it lives in the chip row — so it does not exist at all until /api/meta
+   * lands, because the row does not.
+   *
+   * IT USED TO ALSO RENDER IN THE TOP-RIGHT CORNER OF THE LOADING VEIL, on the argument that a
+   * title you cannot visually back out of is not acceptable just because Back happens to work.
+   * That was wrong on this build for two reasons.
+   *
+   * It is the only rendered control on the veil, which means it is the only CANDIDATE on the
+   * layer — so TvSpatialNav's recovery, having nothing real to offer the remote, parked focus on
+   * it and drew a ring around it. The first thing a viewer saw after pressing OK on a title was a
+   * spinner and a highlighted ✕: an interface whose one visible, one selected affordance is
+   * "undo that". The veil is a few hundred milliseconds of nothing; it should look like nothing.
+   *
+   * And the affordance was never the only way out. Back closes the modal from step 3 of
+   * `handleBack` — a store-backed overlay, closed by reading `useModal`, with no dependence on
+   * anything being rendered — so the remote's Back, webOS's, Tizen's, Android's bridge call and
+   * the desktop Escape all worked during the veil and still do. Nothing about the way out changed
+   * here; what changed is that the veil no longer renders a control to say so.
+   *
+   * The id is what TvSpatialNav looks for when deciding whether focus is merely parked. */
   const closeBtn = (
     <button className="tv-det-disc tv-det-close" id="closeModal" type="button"
             aria-label={t('modal.close_aria')} onClick={close}>
@@ -313,6 +463,40 @@ export default function TvDetail(p: TvDetailProps) {
       {closeBtn}
     </>
   );
+
+  /* LEFT LEAVES THE LIST, because otherwise it is a key that does nothing and the way out is
+   * twenty presses of Up.
+   *
+   * The source rows are the full width of a single-column panel, so there is never a neighbour
+   * beside one: TvSpatialNav's `pick` finds no candidate to the left or the right of a row, and
+   * both keys are inert for as long as the remote is in the list. Meanwhile the only route back
+   * to the head row — change the language, switch to Streaming, close the title — is Up, once per
+   * row, and a well-seeded addon can be thirty of them. Sitting on row 24 with two dead keys and
+   * a two-dozen-press exit is the discomfort; this is one press.
+   *
+   * LEFT RATHER THAN RIGHT, because the panel is the right-hand column of the screen and left is
+   * where the rest of it is — the direction a viewer already presses to get out of a list on
+   * every other TV app. Right stays dead, deliberately: one escape is a gesture, two is a
+   * coin toss about which one you meant.
+   *
+   * IT AIMS AT THE CHIP, not at the language pills that may sit between. The pills are a filter
+   * on the list you are leaving, so landing there means the escape hatch dropped you inside the
+   * same region at a different altitude; the chip is the head of the panel and the row the other
+   * three controls live on. From there Down re-enters the list — and `unreachable` in
+   * TvSpatialNav means it re-enters on a row that is actually on screen, so leaving and coming
+   * back keeps your place rather than snapping to the top. */
+  const leaveList = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' || e.altKey || e.ctrlKey || e.metaKey) return;
+    const chip = panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn');
+    if (!chip) return;   // no head to go back to; leave the key alone rather than swallow it
+    e.preventDefault();
+    /* Stopped here so it never reaches TvSpatialNav's window listener. `move('left')` would find
+     * nothing and return false, so this is belt-and-braces rather than a fix — but it keeps the
+     * press from being scored against every candidate in the layer for an answer we have already
+     * given. */
+    e.stopPropagation();
+    chip.focus({ preventScroll: true });
+  };
 
   /* THE PANEL IS ONE THING AT A TIME. A series shows its episodes until one is chosen, then the
    * sources FOR that episode — with a way back. Showing both at once is what makes the web
@@ -364,7 +548,7 @@ export default function TvDetail(p: TvDetailProps) {
         </div>
       )}
 
-      <div className="tv-det-list">
+      <div className="tv-det-list" onKeyDown={leaveList}>
         {srcTab === 'services' ? (
           services.length ? services.map((s) => (
             <a className="tv-det-row" key={s.key} href={s.link} target="_blank" rel="noopener noreferrer"
@@ -412,21 +596,51 @@ export default function TvDetail(p: TvDetailProps) {
       aria-hidden="false"
     >
       <div className="tv-det-art" aria-hidden="true">
-        {backdrop && <img src={imgW(backdrop, BACKDROP_RENDITION)} alt="" decoding="async" />}
+        {/* Mounted invisible behind the veil and revealed with it, so its arrival is the screen's
+            arrival rather than an event of its own. `rdy` is a class change on an element that
+            already exists — set it in the same commit that creates the <img> and the browser has
+            no previous value to transition from, and it would simply appear. */}
+        {backdropUrl && (
+          <img className={artReady ? 'rdy' : undefined} src={backdropUrl} alt="" decoding="async" />
+        )}
       </div>
       <div className="tv-det-scrim" aria-hidden="true" />
 
-      {!ready ? (
+      {/* RENDERED IMMEDIATELY. This was briefly gated on the flight being over — the argument
+          being that React mounting the grid, the episode deck and a dozen stills during the same
+          380ms the transform was animating is real work landing on the frames that could least
+          afford it, which is true.
+          It was reverted because it bought smoothness with the one thing a remote is least
+          forgiving about: 440ms in which pressing OK produced a picture and no screen. That reads
+          as the app being slow, and it was reported as exactly that. A few dropped frames in an
+          animation nobody is interacting with is the cheaper of the two — the flight is decoration
+          and the response to a keypress is not. */}
+      {!shown ? (
+        // The spinner and nothing else — no ✕ in the corner. Back gets out; see the note on
+        // `closeBtn`.
         <div className="m-load-veil" role="status" aria-busy="true" aria-label={t('modal.loading_synopsis')}>
           <span className="cat-loader" aria-hidden="true" />
-          {/* The corner placement, for the one state that has no chip row to put it in. */}
-          <div className="tv-det-close-corner">{closeBtn}</div>
         </div>
       ) : (
         <div className="tv-det-grid">
           <div className="tv-det-info">
             <h2 id="mTitle" className={titleLogo ? 'tv-det-title has-logo' : 'tv-det-title'}>
-              {titleLogo ? <img className="title-logo" src={titleLogo} alt={title} /> : title}
+              {/* The wordmark arrives with /api/meta and used to appear in the frame it decoded,
+                  which on this screen is the same frame the backdrop was swapping in — two pops
+                  at once. It fades like every other picture here now; `complete` is checked for
+                  the cached case, see the same pattern on the episode stills. */}
+              {titleLogo
+                ? (
+                  <img
+                    className={logoShown ? 'title-logo rdy' : 'title-logo'}
+                    src={titleLogo}
+                    alt={title}
+                    decoding="async"
+                    ref={(el) => { if (el?.complete && !logoShown) setLogoShown(true); }}
+                    onLoad={() => setLogoShown(true)}
+                  />
+                )
+                : title}
             </h2>
 
             {metaBits.length > 0 && <div className="tv-det-meta">{metaBits.join('  ·  ')}</div>}

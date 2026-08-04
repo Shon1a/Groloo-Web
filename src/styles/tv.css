@@ -155,6 +155,10 @@
    there is no handover to see. */
 .tv-nav-items {
   justify-self: center;
+  /* `relative` so the travelling pill below is placed in THIS box's coordinates — it is also what
+     makes the group the items' offsetParent, which is where TvTopNav reads offsetLeft/offsetWidth
+     from. Without it both the pill and the measurements would fall through to the page. */
+  position: relative;
   display: flex; align-items: center; gap: 8px;
   transform-origin: 50% 50%;
   transform: scale(1);
@@ -162,6 +166,37 @@
   transition: transform .34s cubic-bezier(.2, .7, .2, 1);
 }
 .tv-nav-items.is-focused { transform: scale(1.08); }
+
+/* THE TRAVELLING PILL. One white pill behind the items, moved and resized to whichever one has
+   focus (positions come from TvTopNav). It replaces the per-item `:focus-visible` fill this bar
+   used to carry, for the same reason the season menu's bar replaced its own: a fill that lives on
+   each item can only CUT from one to the next, because there is nothing between Home and Series
+   for the eye to follow. A pill that slides says "the remote moved this".
+
+   Transform and width only — both composite or repaint one small element, and nothing else's
+   layout depends on it, so a step never reflows the bar. `top: 0` + an explicit height rather
+   than `inset-block: 0`: the height is measured from the focused item so the pill matches an item
+   that is a different height (the search button's padding differs from the text items'). */
+.tv-nav-mark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  border-radius: 999px;
+  background: #fff;
+  pointer-events: none;
+  z-index: 0;
+}
+/* Armed one frame after the pill is first placed — see the note in TvTopNav. Without the gate,
+   arriving on the bar would animate the pill in from the group's left edge. */
+.tv-nav-items.is-armed .tv-nav-mark {
+  transition:
+    transform .28s cubic-bezier(.2, .7, .2, 1),
+    width .28s cubic-bezier(.2, .7, .2, 1),
+    height .28s cubic-bezier(.2, .7, .2, 1);
+}
 
 /* Profile avatar (opens My space). Focus is shown the same way the nav items show it — the pill
    fills in — rather than with a ring around a circle. */
@@ -182,6 +217,11 @@
 /* Nav items — text pills; the active page gets a filled pill, the rest are dimmed until
    hovered/focused. Sized for across-the-room reading. */
 .tv-nav-item {
+  /* Positioned so the items paint ABOVE the travelling pill. Left unpositioned they are ordinary
+     flex items, which the browser paints in an earlier phase than ANY positioned element — the
+     pill would cover its own labels. (Same fix, same reason, as .tv-chipmenu-opt.) */
+  position: relative;
+  z-index: 1;
   font: inherit;
   font-size: 21px;
   font-weight: 600;
@@ -204,16 +244,28 @@
      · the item the remote is on   → solid white, dark text. The brightest thing in the bar.
      · the page you are currently on → a faint white wash, white text.
      · everything else              → no fill, dimmed text.
-   Nothing changes shape between them: same pill, same radius, only the fill and the ink. */
+   Nothing changes shape between them: same pill, same radius, only the fill and the ink.
+
+   The top level's fill is no longer drawn HERE — it is `.tv-nav-mark`, the one element that slides
+   between items. The other two levels are unchanged and still per-item, and they have to be: the
+   current page's wash must be visible at the same time as the focused pill, somewhere else on the
+   bar, which one travelling element cannot do. */
 .tv-nav-item.active {
   color: #fff;
   background: rgba(255,255,255,0.14);
 }
-.tv-shell .tv-nav-item:focus-visible {
+/* The ink flips against the pill, and the ring goes.
+   `:focus`, NOT `:focus-visible`, and the difference is the same bug the chip menu's options hit.
+   The pill is positioned from the item's `focus` event, which fires however focus arrived; keyed
+   to `:focus-visible` the ink would not flip for a mouse click, so the white pill would slide
+   under text that stayed pale grey and the label would vanish. `:focus` is the superset, so both
+   halves of one indicator agree by construction. (Only visible with a pointer — `npm run dev:tv`
+   is a browser, which is where it shows.) */
+.tv-shell .tv-nav-item:focus {
   outline: none;
   color: #0b0b0b;
-  background: #fff;
 }
+.tv-shell .tv-nav-item:focus-visible { outline: none; }
 
 .tv-nav-search { padding: 9px 12px; color: rgba(255,255,255,0.72); }
 .tv-nav-search:hover { color: #fff; }
@@ -298,7 +350,31 @@
   max-width: 100%; max-height: 132px;
   object-fit: contain;
   margin-bottom: 18px;
+  opacity: 0;
+  transition: opacity .4s ease;
 }
+.tv-hero-logo.rdy { opacity: 1; }
+
+/* ---- THE PHOTOGRAPH LAYER (FadeArt's FadeBg) ----------------------------------------------
+   Every `background-image` picture in this UI is drawn as one of these, sitting on top of the
+   gradient that holds its frame. It exists because a background has no load event: the only way
+   to know a 676px billboard or a full-width hero is ready to paint is to decode it separately
+   first (see lib/useImageReady), and the only way to reveal it without a swap is to put it OVER
+   the fallback rather than in place of it.
+
+   That is what removes the band-by-band paint — a large JPEG dropped straight into the document
+   fills in top to bottom over several frames, which on a 10-foot screen is the most visible thing
+   in the app. Nothing here is drawn until there is a whole picture to draw. */
+.art-photo {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+  opacity: 0;
+  transition: opacity .45s ease;
+}
+.art-photo.rdy { opacity: 1; }
 .tv-hero-title {
   margin: 0 0 18px;
   font-size: clamp(34px, 3.4vw, 58px); font-weight: 800; line-height: 1.05; color: #fff;
@@ -308,17 +384,20 @@
   font-size: 17px; font-weight: 700; color: #fff;
 }
 .tv-hero-meta span + span::before { content: "•"; margin: 0 10px; opacity: 0.55; font-weight: 400; }
-/* THE UNFOLD. The synopsis and the buttons live together in this block, which has no height at
-   rest and grows to fit when the card takes focus. Because .tv-hero-copy is anchored to the
-   BOTTOM of the card, growing it is what lifts the tag, logo and meta line — one movement that
-   carries the whole block, rather than four things animating independently.
+/* THE UNFOLD. The synopsis lives in this block, which has no height at rest and grows to fit when
+   the card takes focus. Because .tv-hero-copy is anchored to the BOTTOM of the card, growing it is
+   what lifts the tag, logo and meta line — one movement that carries the whole block, rather than
+   four things animating independently.
 
    max-height rather than height: the synopsis clamps to three lines but may be one or two, so
    there is no single correct height to animate to. The cap is set just above the tallest real
    case so the easing still reads as the content settling, not as a value racing past the end.
+   It was 220px while the action pills unfolded from here too; with them gone the tallest real
+   case is three clamped lines plus their top margin, so the cap comes down to match — left at
+   220 the growth would spend most of its 440ms travelling past content that had already stopped.
 
-   The opacity lags the growth slightly and the buttons lag the text again — a short stagger is
-   most of the difference between "a panel appeared" and "this was assembled for you". */
+   The opacity lags the growth slightly — a short stagger is most of the difference between "a
+   panel appeared" and "this was assembled for you". */
 .tv-hero-reveal {
   max-height: 0;
   opacity: 0;
@@ -328,7 +407,7 @@
     opacity .3s ease;
 }
 .tv-hero.is-focused .tv-hero-reveal {
-  max-height: 220px;
+  max-height: 130px;
   opacity: 1;
   transition:
     max-height .44s cubic-bezier(.2, .7, .2, 1),
@@ -343,33 +422,10 @@
   -webkit-box-orient: vertical; overflow: hidden;
 }
 
-.tv-hero-actions {
-  display: flex; gap: 14px; margin-top: 26px;
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity .26s ease, transform .3s cubic-bezier(.2, .7, .2, 1);
-}
-.tv-hero.is-focused .tv-hero-actions {
-  opacity: 1;
-  transform: none;
-  transition: opacity .3s ease .16s, transform .38s cubic-bezier(.2, .7, .2, 1) .16s;
-}
-.tv-hero-btn {
-  display: inline-flex; align-items: center; gap: 10px;
-  height: 54px; padding: 0 30px;
-  border: 0; border-radius: 999px;
-  font: inherit; font-size: 18px; font-weight: 700; line-height: 1;
-  cursor: pointer;
-  transition: background-color .15s ease, color .15s ease;
-}
-.tv-hero-btn .ic { font-size: 15px; }
-.tv-hero-btn.primary { background: #fff; color: #000; }
-.tv-hero-btn.primary:hover { background: rgba(255,255,255,0.82); }
-.tv-hero-btn.ghost { background: rgba(255,255,255,0.26); color: #fff; }
-.tv-hero-btn.ghost:hover { background: rgba(255,255,255,0.38); }
-/* The global stage-5 ring is a white outline, which vanishes on the white primary pill unless
-   it is held off the button — the offset puts it on the artwork behind, where it reads. */
-.tv-shell .tv-hero-btn:focus-visible { outline: 3px solid var(--tv-ring); outline-offset: 5px; }
+/* `.tv-hero-actions` / `.tv-hero-btn` USED TO BE HERE — the MORE and My List pills, their
+   staggered rise-in, and a ring held 5px off the white primary so it did not vanish against it.
+   All of it went with the buttons themselves; the billboard is now one focus stop where OK opens
+   the title. See the header of TvHero.tsx for why. */
 
 @keyframes tvHeroRise {
   from { opacity: 0; transform: translateY(12px); }
@@ -482,7 +538,18 @@
   position: absolute; left: 0; top: 0; height: 100%;
   display: flex; gap: var(--sp-gap);
   transform: translateX(calc(var(--sp-wl) + var(--sp-gap) - (var(--active) + 1) * (var(--sp-wp) + var(--sp-gap))));
-  transition: transform .34s cubic-bezier(.2, .7, .2, 1);
+  /* AN EASE-IN-OUT, NOT THE HOUSE EASE-OUT, and the difference is what this row was missing.
+     `cubic-bezier(.2,.7,.2,1)` is the curve everything else here uses and it is right for those:
+     a focus swell, a pill, a panel arriving — things that should answer INSTANTLY and then settle,
+     so they leave at speed. A strip of posters is not answering, it is TRAVELLING. Starting at
+     full speed makes the cards look yanked, because nothing with mass in it begins at its top
+     speed; easing in and out gives the shelf the short acceleration and the long settle that read
+     as weight, which is the entire difference between a slider that moves and one that glides.
+
+     The duration is a variable because it is two numbers — a deliberate press and a held key —
+     set on the node by `step` in TvSpotlight, where the reasoning is. The fallback is the
+     deliberate one, so a strip that has never been walked still has the right curve. */
+  transition: transform var(--sp-slide, 460ms) cubic-bezier(.32, .08, .24, 1);
 }
 /* will-change ONLY on the row the remote is on. It promotes the strip to its own compositor
    layer, which is right for the row that is about to slide — and wrong for the other twelve,
@@ -506,7 +573,12 @@
   width: 100%; height: 100%;
   object-fit: cover;
   display: block;
+  /* Arrives rather than pops. `.rdy` is added by the same onLoad that clears the plate behind it
+     — see TvSpotlight for why these use `load` and not the decode gate the big artwork uses. */
+  opacity: 0;
+  transition: opacity .35s ease;
 }
+.tv-spot-thumbimg.rdy { opacity: 1; }
 
 /* THE SEE-ALL CARD — the row's own page, sitting at the end of its strip (see TvSpotlight).
    Deliberately the ONLY thing in a row with no picture on it: an empty framed panel is what makes
@@ -577,10 +649,15 @@
 .tv-shell .tv-spot-hero:focus-visible { transform: scale(1.03); }
 /* focus ring lives in the stage-5 section at the foot of this file — it has to be INSET here,
    see the note there */
+/* THE DISSOLVE RIDES THE SLIDE'S CLOCK. Two things move on every press — the strip travels and
+   the billboard changes title — and they are one gesture, so they finish together. At a fixed .5s
+   they did not: a held key slides in 260ms and the artwork was still a half-second behind, so the
+   billboard showed the title you had already left. A shade longer than the slide, so the picture
+   settles just after the card that chose it rather than racing it. */
 .tv-spot-layer {
   position: absolute; inset: 0;
   opacity: 0;
-  transition: opacity .5s ease;
+  transition: opacity calc(var(--sp-slide, 460ms) * 1.1) ease;
 }
 .tv-spot-layer.on { opacity: 1; }
 
@@ -664,7 +741,12 @@
   text-transform: uppercase; color: rgba(255,255,255,0.82);
   margin-bottom: 8px;
 }
-.tv-spot-logo { display: block; max-width: 62%; max-height: 84px; object-fit: contain; }
+.tv-spot-logo {
+  display: block; max-width: 62%; max-height: 84px; object-fit: contain;
+  opacity: 0;
+  transition: opacity .35s ease;
+}
+.tv-spot-logo.rdy { opacity: 1; }
 .tv-spot-cardtitle { display: block; font-size: 34px; font-weight: 800; color: #fff; }
 
 /* ---- THE PREVIEW'S SOUND BADGE ------------------------------------------------------------
@@ -860,12 +942,20 @@
   z-index: 0;
   background: #000;
 }
+/* ONE LAYER. This was briefly two, cross-fading a poster into the backdrop that replaced it — a
+   smooth swap, and a swap all the same. The poster is not shown at all now (see the note in
+   TvDetail), so there is one picture on this screen from first paint to last and nothing to
+   dissolve between. `.rdy` is its arrival, not a transition between two states.
+
+   .9 is the resting opacity the scrim's contrast is balanced against. */
 .tv-det-art img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: .9;
+  opacity: 0;
+  transition: opacity .5s ease;
 }
+.tv-det-art img.rdy { opacity: .9; }
 .tv-det-scrim {
   position: absolute;
   inset: 0;
@@ -874,6 +964,61 @@
   background:
     linear-gradient(90deg, rgba(0, 0, 0, .94) 0%, rgba(0, 0, 0, .84) 28%, rgba(0, 0, 0, .42) 58%, rgba(0, 0, 0, .28) 100%),
     linear-gradient(0deg, rgba(0, 0, 0, .8) 0%, rgba(0, 0, 0, .25) 34%, transparent 62%);
+}
+
+/* ---- OPENING THE TITLE SCREEN --------------------------------------------------------------
+   Every title arrives here the same way — and that used to be a hard cut: black, then the whole
+   screen at once.
+
+   A CUT IS THE ONE THING A 10-FOOT UI CANNOT AFFORD, because the screen it cuts to is the entire
+   display. On a phone a modal is a card over a page you can still see, so an instant swap still
+   reads as "that opened". Here the previous screen is gone completely, and with nothing carried
+   across, the eye has no way to connect the two — it reads as a channel change rather than as a
+   title opening.
+
+   THIS IS WHAT IS LEFT OF A MUCH LARGER ANSWER TO THE SAME PROBLEM. A billboard's playing trailer
+   used to fly in and grow to fill the screen, which solved it beautifully for the titles it
+   applied to and cost more per frame than this screen could afford (the account is at the head of
+   TvDetail.tsx). This does the same job for every title, and it does it with two composited
+   properties on two elements.
+
+   WHAT MOVES, AND WHY SO LITTLE. The overlay fades; the artwork settles out of a 1.05 scale over
+   half a second. That scale is the whole trick — a still that comes to rest reads as the screen
+   arriving, where the same fade without it reads as a slow cut. Nothing else moves: the copy and
+   the panel only fade, deliberately, because on a series this element contains the episode deck,
+   and translating a subtree with eight overlapping cards in it is the exact shape of the cost this
+   screen has spent so long getting rid of. The deck deals itself in on its own clock — see
+   `intro` in TvEpisodeDeck — which is where per-card movement belongs. */
+.tv-det { animation: tvDetIn .26s ease both; }
+.tv-det .tv-det-art img {
+  animation: tvDetArtIn .56s cubic-bezier(.2, .7, .2, 1) both;
+}
+@keyframes tvDetIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+/* TRANSFORM ONLY — the opacity belongs to the cross-fade now, and the two must not both own it.
+   This started as `opacity: 0 → .9` plus the scale, which was right when the backdrop was a single
+   <img>. With two layers trading places it is actively wrong: `both` holds the last frame, so the
+   animation would pin BOTH layers at .9 and the dissolve would have nothing to dissolve between —
+   two fully opaque pictures, the later one simply winning. The opening fade is not lost; the whole
+   overlay fades in above, and the artwork comes with it. */
+@keyframes tvDetArtIn {
+  from { transform: scale(1.05); }
+  to   { transform: scale(1); }
+}
+
+/* THE SECOND ARRIVAL: the veil giving way to the screen when /api/meta lands. That was a cut too,
+   and a more jarring one than the first — the spinner is replaced by a full screen of copy in a
+   single frame. Both ends of the swap fade, so it reads as one settling into the other.
+   Scoped `.tv-det …` (0,2,0) so it outranks `.m-load-veil`'s own `mVeilIn` from app.css, which is
+   a bare class and would otherwise win or lose on stylesheet order alone. */
+.tv-det :is(.tv-det-grid, .m-load-veil) {
+  animation: tvDetSettle .3s cubic-bezier(.2, .7, .2, 1) both;
+}
+@keyframes tvDetSettle {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* ---- The two columns.
@@ -910,6 +1055,11 @@
      which forces the whole heading onto its own composited layer for a colour effect that is
      invisible at this size against a photograph. Plain white reads better and costs nothing. */
 }
+/* The wordmark FADES IN, for the same reason the backdrop dissolves rather than cutting: it
+   arrives with /api/meta, and it used to appear in whatever frame it finished decoding — which is
+   the same frame the backdrop was swapping in, so the screen produced two pops at once. Its box is
+   reserved either way (the heading has a height whether the picture is in it or not), so nothing
+   moves when it lands; only the ink arrives. */
 .tv-det-title .title-logo {
   display: block;
   width: auto;
@@ -917,7 +1067,10 @@
   max-width: min(100%, 560px);
   object-fit: contain;
   object-position: left center;
+  opacity: 0;
+  transition: opacity .45s ease;
 }
+.tv-det-title .title-logo.rdy { opacity: 1; }
 .tv-det-meta {
   font-family: var(--font-mono);
   font-size: clamp(17px, 1.15vw, 23px);
@@ -1504,8 +1657,15 @@
   from { opacity: 0; transform: translateY(14px) scale(.985); }
   to   { opacity: 1; transform: none; }
 }
-.tv-src,
-.tv-ep-deck { animation: tvPanelIn .34s cubic-bezier(.2, .7, .2, 1) both; }
+.tv-src { animation: tvPanelIn .34s cubic-bezier(.2, .7, .2, 1) both; }
+
+/* THE DECK ITSELF NO LONGER ANIMATES, AND NEITHER DOES A KEYFRAME ON ITS CARDS.
+   Both were tried on the way here. The container slid as one block, which is cheap and reads as a
+   panel arriving rather than as a deck being dealt; a keyframe per card could stagger the fade but
+   never the MOVEMENT, because every card's position is an inline `transform` from `place` and a
+   keyframe touching transform hands the property back at its last frame — a jump, on eight cards.
+   The deal is driven from TvEpisodeDeck instead, through the cards' own transition below. See the
+   note on `intro` there; there is nothing left to do here. */
 
 /* `.tv-det-back` was styled here, as a chip mirroring the season one. The TV build no longer
    renders it — Back is a key, not a button — so its rules are gone rather than left to rot. The
@@ -1554,14 +1714,19 @@
 }
 /* THE ROW LIFTS, matching the chip above it and the cards it replaced. Only 1.03: a source row is
    the full width of the column, so the same 1.07 the chip uses would throw it 20px out each side
-   and read as a lurch rather than a lift. */
+   and read as a lurch rather than a lift.
+
+   NO DROP SHADOW UNDER IT, unlike the cards this borrowed the lift from. A shadow sells depth when
+   the thing casting it is a small bright object on a dark field; a full-width WHITE slab is the
+   brightest thing on the screen already, and the shadow only drew a hard grey band along its lower
+   edge — a second, dirtier rectangle trailing the row rather than lifting it. The white fill and
+   the scale carry the focus state on their own, which is the whole job. */
 .tv-det .tv-det-panel:not(.is-deck) .tv-det-row:focus-visible {
   outline: none;
   border-radius: 12px;
   background: #fff;
   border-color: #fff;
   transform: scale(1.03);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, .45);
 }
 
 /* ROOM TO GROW INTO, WITHOUT CHANGING HOW WIDE ANYTHING LOOKS.
@@ -1667,7 +1832,20 @@
    short, the elements are small, and a TV composites this without help. */
 
 .tv-ep-art { position: absolute; inset: 0; }
-.tv-ep-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* THE STILL FADES UP OUT OF THE CARD'S OWN BACKGROUND rather than replacing it in one frame.
+   Eight of these decode at eight different moments, so without it the deck finishes its glide as
+   a burst of hard-edged photographs appearing in no particular order — which is what read as the
+   whole thing arriving heavily. `.rdy` is added by TvEpisodeDeck on load; see the note there for
+   why `complete` is checked too. Slower than the deck's own entrance on purpose: the picture
+   settling in after the card has landed is the order that looks deliberate. */
+.tv-ep-art img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity .45s ease;
+}
+.tv-ep-art img.rdy { opacity: 1; }
 /* A still that never arrived. The episode number at low contrast, so the card still reads as
    that episode rather than as a hole in the deck. */
 .tv-ep-nostill {
@@ -1754,6 +1932,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .tv-ep-card { transition: none; }
+  /* The deal is skipped in TvEpisodeDeck itself — it starts at its finished phase under this
+     query, so there is no entrance to switch off here. The still's fade STAYS, and is deliberately
+     not listed above with the card transition: it is a picture replacing a placeholder, which is a
+     change of content, and this query is not meant to make those more abrupt. */
   /* The chip's zoom is switched off, but the zoom is now half of how it says the remote is on
      it — and the other half is a colour, which is not motion and stays. Reduced motion must not
      cost a viewer the ability to see where focus is. */
@@ -1851,12 +2033,10 @@
 /* The corner placement survives for one state only: the loading veil, which has no chip row to
    put the button in. Positioned by this wrapper rather than by the button, so the button itself
    stays a plain disc in both places and nothing has to be un-styled in the common case. */
-.tv-det-close-corner {
-  position: absolute;
-  top: clamp(24px, 3vh, 40px);
-  right: clamp(28px, 2.4vw, 48px);
-  z-index: 4;
-}
+/* `.tv-det-close-corner` USED TO BE HERE — the absolute top-right slot the ✕ sat in while
+   /api/meta was in flight. The veil renders the spinner alone now, so there is nothing to place;
+   see the note on `closeBtn` in TvDetail.tsx for why it went. The ✕ itself is unchanged, in the
+   chip row, once the screen has content. */
 
 /* THE FOCUS RING HAS TO BE RESTATED HERE. The `.tv-shell …:focus-visible` block below styles
    the shell; this overlay is a SIBLING of the shell, so none of it applies inside — see the
@@ -1915,8 +2095,7 @@
  * had" — `revert` rolls back to the browser's own stylesheet, not to another author rule — so
  * the list has to be explicit. Anything given a radius AND made focusable belongs here. */
 .tv-shell .tv-nav-item:focus-visible,
-.tv-shell .tv-nav-profile:focus-visible,
-.tv-shell .tv-hero-btn:focus-visible { border-radius: 999px; }
+.tv-shell .tv-nav-profile:focus-visible { border-radius: 999px; }
 .tv-shell .tv-hero-scrim:focus-visible,
 .tv-shell .tv-spot-hero:focus-visible { border-radius: 12px; }
 .tv-shell .pcard .poster:focus-visible { border-radius: 10px; }
@@ -1961,14 +2140,27 @@
   .tv-spot-trailer-slot video,
   .tv-spot-art,
   .tv-spot-hero.has-trailer .tv-spot-art { transition: none; }
+  /* The adopted trailer keeps PLAYING under reduced motion — it is the content the viewer opened,
+     and the modal treats a preview the same way — but it arrives full screen instead of growing
+     into it. TvDetail skips the flight entirely under this query, so these only cover the fades
+     that would otherwise ride the same clock. */
+  /* The title screen still ARRIVES under reduced motion — it just does not settle into place.
+     Instant is the correct answer here rather than a slower fade: the whole effect is a
+     movement, and half of it is not a compromise, it is the same movement done worse. */
+  .tv-det,
+  .tv-det .tv-det-art img,
+  .tv-det :is(.tv-det-grid, .m-load-veil) { animation: none; }
   .tv-spot-rowtitle, .tv-spot-info { transition: none; }
   .tv-spot.is-open .tv-spot-info { animation: none; }
   .tv-spot-hero { transition: none; }
   .tv-shell .tv-spot-hero:focus-visible { transform: scale(1); }
   .tv-hero-layer { transition: none; }
   .tv-hero-copy { animation: none; }
-  .tv-hero-reveal, .tv-hero-actions, .tv-nav-items, .tv-nav-item.active { transition: none; }
+  .tv-hero-reveal, .tv-nav-items, .tv-nav-item.active { transition: none; }
   .tv-nav-items.is-focused { transform: none; }
+  /* The pill still MOVES — it is the focus indicator and must be wherever the remote is — it just
+     stops sliding there, exactly as the chip menu's bar does under this query. */
+  .tv-nav-items.is-armed .tv-nav-mark { transition: none; }
 }
 
 /* ============================================================================
@@ -2482,3 +2674,181 @@
 
 /* Keep whatever the remote is on clear of the card's own scrolling edges. */
 .tv-rep :is(a, button, [tabindex]) { scroll-margin: 32px; }
+
+/* ============================================================================
+   THE PLAYER — a 10-foot control bar. ADDITIVE, like the TV UI section above and
+   unlike the effect budget at the head of this file.
+
+   THE OVERLAY IS NOT INSIDE .tv-shell. It is rendered at the root of the app, as a sibling of
+   the shell, exactly like the detail overlay (.tv-det) — so none of the shell's focus-ring or
+   sizing rules reach in here, and all of it has to be restated. That is what `.vp-overlay.tv`
+   is: a scope the component sets on itself (see IS_TV in VideoPlayer.tsx) rather than one
+   inherited from an ancestor.
+
+   WHY IT NEEDS RESTYLING AT ALL. app.css sizes this bar for a mouse: 34px hit targets, 17px
+   icons, a hover-reveal volume slider, a 4px progress bar with a thumb that only appears under
+   the cursor. Every one of those is correct at 60cm and wrong at 3m — and two of them are worse
+   than wrong once a D-pad is the only input, because a control that gives no focus feedback is
+   a control the viewer cannot find. Sizes are clamp()ed on viewport height so 720p and 1080p
+   sets both land somewhere sensible without a second breakpoint.
+   ============================================================================ */
+
+/* ---- Overscan. A set that still overscans cuts roughly 5% off each edge, and the control bar
+   is the one piece of chrome that lives ON those edges. Same margins as the TV title screen. */
+.vp-overlay.tv .vp-top { padding: clamp(28px, 4.5vh, 52px) clamp(48px, 4.5vw, 92px); }
+.vp-overlay.tv .vp-bottom { padding: clamp(14px, 2vh, 24px) clamp(48px, 4.5vw, 92px) clamp(32px, 5vh, 58px); }
+
+.vp-overlay.tv .vp-title { font-size: clamp(20px, 2.8vh, 30px); }
+.vp-overlay.tv .vp-subtitle { font-size: clamp(14px, 1.9vh, 20px); }
+.vp-overlay.tv .vp-status { font-size: clamp(14px, 1.8vh, 19px); }
+
+/* ---- The scrubber. Thick enough to read across a room, and its thumb is ALWAYS drawn — on the
+   web it appears on hover, a state a television does not have, so the playhead was invisible
+   unless you were mid-drag. */
+.vp-overlay.tv .vp-progress { padding: clamp(12px, 1.8vh, 20px) 0; }
+.vp-overlay.tv .vp-bar { height: 8px; border-radius: 4px; }
+.vp-overlay.tv .vp-thumb { width: 20px; height: 20px; transform: translate(-50%, -50%) scale(1); }
+
+/* THE TIMELINE IS THE ONE THING THAT KEEPS A RING. Everything else in the bar fills white when
+   the remote lands on it (see below) — but this element is full-width and its content is a
+   coloured bar that IS the information. Filling it white would erase the played/buffered split
+   the viewer is reading, so it takes the outline instead, and the bar itself grows and lights up
+   underneath. The two together are the focus state and the "you are scrubbing" state.
+
+   Restated here rather than left to the shared rule below, because that rule now excludes this
+   element by name — without this it would have no focus state at all. */
+.vp-overlay.tv .vp-progress:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, .72);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+.vp-overlay.tv .vp-progress:focus-visible .vp-bar {
+  height: 12px;
+  background: rgba(255, 255, 255, .3);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, .5);
+}
+.vp-overlay.tv .vp-progress:focus-visible .vp-thumb { width: 26px; height: 26px; }
+.vp-overlay.tv .vp-progress.seeking .vp-thumb { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), .5), 0 0 14px rgba(255, 255, 255, .8); }
+
+/* ---- The button row. 34px is a mouse target; these are sized to be seen, not clicked. */
+.vp-overlay.tv .vp-controls { gap: clamp(6px, .8vw, 14px); margin-top: clamp(4px, .8vh, 10px); }
+.vp-overlay.tv .vp-icon {
+  min-width: clamp(46px, 6vh, 62px);
+  height: clamp(46px, 6vh, 62px);
+  border-radius: 10px;
+}
+.vp-overlay.tv .vp-icon svg { width: clamp(24px, 3vh, 32px); height: clamp(24px, 3vh, 32px); }
+.vp-overlay.tv .vp-icon.cc {
+  font-size: clamp(16px, 2vh, 22px);
+  height: clamp(38px, 4.6vh, 48px);
+  min-width: auto;
+  padding: 0 clamp(9px, 1vw, 14px);
+  border-width: 2px;
+}
+.vp-overlay.tv .vp-time { font-size: clamp(16px, 2.1vh, 22px); padding: 0 clamp(10px, 1vw, 18px); }
+/* The scrub offset sits beside the clock, in the accent so it reads as the thing that is
+   changing rather than as part of the running time. */
+.vp-overlay.tv .vp-seekdelta { margin-left: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+/* ---- FOCUS IS A FILL, NOT A RING ----------------------------------------------------------
+ * A 3px white outline is what the rest of the TV build uses, and in the control bar it is the
+ * wrong instrument: these controls sit in a row a few pixels apart over a MOVING PICTURE, and a
+ * thin line around a thin glyph competes with whatever is playing behind it. Six outlined boxes
+ * side by side also read as a group of boxes rather than as one selected thing.
+ *
+ * Inverting the control solves both — a solid white block with a dark glyph is the highest
+ * contrast available against any frame, and there is never a question about which one is lit.
+ * The same inversion the report card already uses (`.tv-rep-toggle:focus-visible`), so this is
+ * the app's existing answer applied to the player rather than a new idea.
+ *
+ * `:not(.vp-progress)` is the whole exception: the timeline keeps its ring, for the reason
+ * given up at the scrubber. */
+.vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):focus-visible {
+  outline: none;
+  background: #fff;
+  color: #0b0b0b;
+  border-color: #fff;
+}
+/* Anything that carried its own muted colour has to come back with it — a grey sub-label or a
+   red tick set against white is either invisible or shouting, and neither is the point. */
+.vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):focus-visible :is(.vp-acc-val, .sub, .ck, .ep-name, .ep-num, .vp-acc-ic) {
+  color: #0b0b0b;
+}
+.vp-overlay.tv .vp-skip:focus-visible { background: #fff; color: #0b0b0b; border-color: #fff; }
+
+/* SHAPES MUST NOT CHANGE WHEN SOMETHING TAKES FOCUS, and app.css's base ring makes them: its
+   `a, button, [tabindex]:focus-visible { border-radius: 4px }` outranks each of these elements'
+   own radius, so a 20px season pill and a 9px Skip button both squared off the instant the
+   remote landed on them. The same trap the top bar documents further up this file; the same fix,
+   which is to restate each shape. Anything here that has a radius AND takes focus belongs. */
+.vp-overlay.tv .vp-icon:focus-visible { border-radius: 10px; }
+/* CC draws its own outline from `currentColor`, which the inversion has just turned dark — so it
+   must NOT take the white border the rule above hands everything else, or the pill loses its
+   edge and the two letters float on a white block. */
+.vp-overlay.tv .vp-icon.cc:focus-visible { border-color: currentColor; }
+.vp-overlay.tv .vp-skip:focus-visible { border-radius: 9px; }
+.vp-overlay.tv .vp-speed:focus-visible { border-radius: 8px; }
+.vp-overlay.tv .vp-season-tab:focus-visible { border-radius: 999px; }
+
+/* ---- Skip Intro / Next Episode. It has to clear a control bar that is now much taller, and it
+   is the most-pressed button in the player — so on a TV it is sized like a primary action. */
+.vp-overlay.tv .vp-skip {
+  --vp-skip-bottom: clamp(120px, 16vh, 190px);
+  right: clamp(48px, 4.5vw, 92px);
+  font-size: clamp(16px, 2.1vh, 23px);
+  padding: clamp(12px, 1.6vh, 18px) clamp(20px, 1.8vw, 32px);
+  border-width: 2px;
+}
+
+/* ---- The gear menu. Wider, with taller rows, because every row is now a D-pad stop that has to
+   be legible from a sofa. Capped at 60vh so a long subtitle list scrolls rather than running off
+   the top of the screen — TvSpatialNav scrolls it as focus walks down. */
+.vp-overlay.tv .vp-menu {
+  width: clamp(340px, 30vw, 520px);
+  max-height: 60vh;
+  padding: 10px;
+  border-radius: 16px;
+}
+.vp-overlay.tv .vp-acc-head { padding: clamp(12px, 1.6vh, 18px) 14px; font-size: clamp(15px, 1.9vh, 21px); }
+.vp-overlay.tv .vp-acc-ic { width: clamp(17px, 2vh, 22px); height: clamp(17px, 2vh, 22px); }
+.vp-overlay.tv .vp-acc-val { font-size: clamp(13px, 1.6vh, 18px); max-width: 46%; }
+.vp-overlay.tv .vp-opt {
+  padding: clamp(10px, 1.5vh, 16px) 12px clamp(10px, 1.5vh, 16px) 18px;
+  font-size: clamp(15px, 1.9vh, 21px);
+  gap: 12px;
+}
+.vp-overlay.tv .vp-opt .ck { width: 18px; font-size: clamp(14px, 1.7vh, 19px); }
+/* The menu rows are `[tabindex]` divs and `<button>`s, so the inversion above already reaches
+   them; these two only restate the radius. Without it app.css's `…:focus-visible{border-radius:4px}`
+   squares the row off inside a 16px-rounded panel the moment focus lands — a shape change where
+   none was intended, which is the same trap documented for the top bar further up this file. */
+.vp-overlay.tv .vp-menu .vp-opt:focus-visible,
+.vp-overlay.tv .vp-menu .vp-acc-head:focus-visible { border-radius: 8px; }
+.vp-overlay.tv .vp-speeds { gap: 8px; padding: 4px 14px 8px; }
+.vp-overlay.tv .vp-speed { font-size: clamp(14px, 1.7vh, 19px); padding: clamp(9px, 1.2vh, 14px) 0; }
+/* Keep the row the remote is on clear of the menu's own scrolling edges. */
+.vp-overlay.tv .vp-menu :is(button, [tabindex]) { scroll-margin: 20px; }
+
+/* ---- The episode panel. Wider, larger stills, rows that can hold a focus ring. */
+.vp-overlay.tv .vp-eppanel { width: min(46vw, 620px); padding: clamp(24px, 3.5vh, 40px) clamp(20px, 1.6vw, 30px); }
+.vp-overlay.tv .vp-eppanel-head .ttl { font-size: clamp(17px, 2.1vh, 23px); }
+.vp-overlay.tv .vp-eppanel-head .lbl { font-size: clamp(12px, 1.5vh, 16px); }
+.vp-overlay.tv .vp-season-tab { font-size: clamp(14px, 1.7vh, 19px); padding: clamp(7px, 1vh, 11px) clamp(14px, 1.2vw, 22px); }
+.vp-overlay.tv .vp-eppanel-seasons { max-height: none; gap: 10px; }
+.vp-overlay.tv .vp-eppanel-list .ep-still { flex: 0 0 clamp(140px, 12vw, 200px); }
+.vp-overlay.tv .vp-eppanel-list .ep-name { font-size: clamp(15px, 1.9vh, 21px); }
+.vp-overlay.tv .vp-eppanel-list .ep-num { font-size: clamp(12px, 1.5vh, 16px); }
+/* The episode row inverts like everything else; it only needs its corners kept and its still
+   left alone — the thumbnail is the picture, not a background to be painted over. */
+.vp-overlay.tv .vp-eppanel-list .ep-row:focus-visible { border-radius: 8px; }
+.vp-overlay.tv .vp-eppanel-list .ep-row:focus-visible .ep-still { background: var(--bg-3); }
+.vp-overlay.tv .vp-eppanel-list .ep-row:focus-visible .ep-num { background: #0b0b0b; color: #fff; border-color: #0b0b0b; }
+.vp-overlay.tv .vp-eppanel :is(button, [tabindex]) { scroll-margin: 28px; }
+
+/* ---- The centre disc is a badge here rather than a button (VideoPlayer renders a <div> on the
+   TV), so its hover growth has nothing to respond to and its cursor means nothing. The overlay
+   hides the cursor outright: a set with no pointer still paints one if the WebView was ever
+   given a mouse position, and it sits on the picture forever. */
+.vp-overlay.tv .vp-center { cursor: default; width: clamp(90px, 11vh, 120px); height: clamp(90px, 11vh, 120px); }
+.vp-overlay.tv .vp-center svg { width: 40%; height: 40%; }
+.vp-overlay.tv { cursor: none; }

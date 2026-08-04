@@ -185,6 +185,53 @@ export function isPreviewSoundKey(e: KeyboardEvent): boolean {
   return SOUND_KEYS.has(e.key) || e.keyCode === RED_CODE;
 }
 
+/* ---- THE TRANSPORT KEYS ------------------------------------------------------------------
+ * Every TV remote made in the last fifteen years has a play/pause pair and most have a rewind
+ * and a fast-forward beside it, and until now the player answered NONE of them: pressing ▶ on
+ * the remote while a film was open did nothing at all, because the player only ever listened
+ * for a desktop keyboard's space bar.
+ *
+ * They arrive the same way Back does — by name on some platforms, by number on others, and the
+ * numbers are the CEA-2014 / OpenTV set that webOS and Tizen both emit with no `key` name at
+ * all. Samsung additionally has its own combined play/pause at 10252, which is the one a modern
+ * Samsung remote actually sends (its ▶⏸ is a single button).
+ *
+ * keyCode 19 is Pause/Break on a desktop keyboard, which is harmless: it means pause there too.
+ *
+ * Unlike the colour button this list is NOT a bargain with the platform — these keys mean
+ * nothing outside a media app, so claiming them takes nothing away from the viewer. */
+export type MediaAction = 'playpause' | 'play' | 'pause' | 'stop' | 'rew' | 'ff' | 'next' | 'prev';
+
+const MEDIA_KEYS: Record<string, MediaAction> = {
+  MediaPlayPause: 'playpause',
+  MediaPlay: 'play', Play: 'play',
+  MediaPause: 'pause', Pause: 'pause',
+  MediaStop: 'stop', Stop: 'stop',
+  MediaRewind: 'rew', Rewind: 'rew',
+  MediaFastForward: 'ff', FastFwd: 'ff',
+  MediaTrackNext: 'next',
+  MediaTrackPrevious: 'prev',
+};
+const MEDIA_CODES: Record<number, MediaAction> = {
+  10252: 'playpause',  // Tizen's combined ▶⏸
+  415: 'play', 19: 'pause', 413: 'stop',
+  412: 'rew', 417: 'ff',
+  425: 'next', 424: 'prev',
+};
+
+/** Which transport button was pressed, or null if this was not one. */
+export function mediaAction(e: KeyboardEvent): MediaAction | null {
+  if (e.altKey || e.ctrlKey || e.metaKey) return null;
+  return MEDIA_KEYS[e.key] ?? MEDIA_CODES[e.keyCode] ?? null;
+}
+
+/* Samsung hands over nothing it was not asked for — the same rule that governs the red button
+ * above, and it applies to the whole transport row. Registered by NAME because that is the API;
+ * one call each and each wrapped, because a model without a given key throws rather than
+ * returning false, and one missing button must not cost us the other seven. */
+const TIZEN_KEYS = ['ColorF0Red', 'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop',
+  'MediaRewind', 'MediaFastForward', 'MediaTrackPrevious', 'MediaTrackNext'];
+
 /**
  * Attach the key carriers. Returns the cleanup.
  *
@@ -204,11 +251,12 @@ export function installTvKeys(): () => void {
    * Registration is per-app and lasts the session, so this is a one-shot at install time rather
    * than something the row does when it mounts. Wrapped because the API is absent everywhere
    * else and throws on a set that does not know the key name. */
-  try {
-    const tv = (window as unknown as { tizen?: { tvinputdevice?: { registerKey?: (k: string) => void } } })
-      .tizen?.tvinputdevice;
-    tv?.registerKey?.('ColorF0Red');
-  } catch { /* not a Samsung set, or a model without the key — the browser path still works */ }
+  const tv = (window as unknown as { tizen?: { tvinputdevice?: { registerKey?: (k: string) => void } } })
+    .tizen?.tvinputdevice;
+  for (const k of TIZEN_KEYS) {
+    try { tv?.registerKey?.(k); }
+    catch { /* not a Samsung set, or a model without THIS key — the others still register */ }
+  }
 
   const onKey = (e: KeyboardEvent) => {
     if (!isBackKey(e) || e.altKey || e.ctrlKey || e.metaKey) return;
