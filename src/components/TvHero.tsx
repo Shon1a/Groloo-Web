@@ -3,28 +3,36 @@ import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
+import { FadeBg, FadeImg } from './FadeArt';
 
 /* THE TV FEATURED BILLBOARD — the top of the TV home, and only the top.
  *
  * One title filling a rounded, full-width card under the nav, its copy pinned bottom-left over a
- * left-to-right scrim. It has THREE states and they are the whole interaction:
+ * left-to-right scrim. It has TWO states and they are the whole interaction:
  *
  *   RESTING (the remote is elsewhere) — tag, title logo and the type · genre · year · ★ line.
- *   Nothing else. No synopsis, no buttons.
+ *   Nothing else. No synopsis.
  *
- *   FOCUSED (the remote is on the card) — the synopsis and the action buttons unfold beneath the
- *   logo, which rises to make room. The card itself is the focus stop; the buttons are NOT
- *   reachable yet, deliberately (see below).
+ *   FOCUSED (the remote is on the card) — the synopsis unfolds beneath the logo, which rises to
+ *   make room. OK opens the title.
  *
- *   ARMED (OK pressed on the focused card) — focus moves into the buttons, Left/Right walks
- *   them, Up or Back returns to the card.
+ * WHY THE CARD IS THE FOCUS STOP AND WHY THERE ARE NO BUTTONS ON IT.
  *
- * WHY THE CARD IS THE FOCUS STOP AND THE BUTTONS ARE NOT. The buttons are two 54px targets at
- * the bottom of a 670px card. Making them the stop meant the remote's idea of "the hero" was a
- * pair of pills in one corner: arriving from below parked the page on them with the picture
- * mostly off-screen, and Left/Right — which on every other row means "show me another title" —
- * meant "swap between two buttons" here. Focusing the card keeps the whole billboard the thing
- * you are on, and keeps OK meaning what it means everywhere else: commit to this title.
+ * There used to be two: MORE and My List, two 54px targets at the bottom of a 670px card, reached
+ * by a THIRD state — OK on the focused card "armed" it, moving focus into the pills, where
+ * Left/Right walked them and Up or Back came back out. Making the pills the focus stop directly
+ * was worse still: arriving from below parked the page on a pair of buttons in one corner with
+ * the picture mostly off-screen, and Left/Right — which on every other row means "show me another
+ * title" — meant "swap between two buttons" here.
+ *
+ * Both are the same mistake at different depths, which is that the billboard is ONE thing. It
+ * shows one title, it fills the screen, and there is one thing a viewer wants from it. Arming
+ * spent an OK press to reach a MORE button whose entire job was to be pressed with a second OK —
+ * two presses, one destination — and it put the remote somewhere Up/Back had to be taught to
+ * escape from. So OK on the card opens the title directly, which is what OK means on every poster
+ * in every row below it, and My List moves to where it also lives for those: inside the title.
+ *
+ * The card is still the focus stop, so the whole billboard is the thing you are on.
  *
  * The auto-rotation stops while the card is focused. Reading a synopsis that changes under you,
  * or aiming at a Play button for a title that is about to become a different title, is the kind
@@ -44,11 +52,12 @@ function isSeries(it: MediaItem) {
 
 export interface TvHeroProps {
   items: MediaItem[];
+  /** OK / click on the focused card — opens the title. Named `onPlay` because the web Hero's
+   *  primary button is, and Home hands both the same handler. */
   onPlay?: (m: MediaItem) => void;
-  onAdd?: (m: MediaItem) => void;
 }
 
-export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
+export default function TvHero({ items, onPlay }: TvHeroProps) {
   const t = useT();
   const genre = useGenre();
   const list = items.slice(0, HERO_MAX);
@@ -56,7 +65,6 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
 
   const [active, setActive] = useState(0);
   const [focused, setFocused] = useState(false);
-  const [armed, setArmed] = useState(false);
   const [logoFail, setLogoFail] = useState<Record<string, boolean>>({});
   // Two layers that swap which is in front, so a change dissolves rather than cuts. `b` starts
   // null — there is nothing to dissolve from on first paint.
@@ -64,8 +72,6 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
     () => ({ a: list[0], b: null, front: 'a' }),
   );
   const firstRun = useRef(true);
-  const scrimRef = useRef<HTMLDivElement>(null);
-  const playRef = useRef<HTMLButtonElement>(null);
 
   const reduceMotion = typeof window !== 'undefined'
     && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -85,23 +91,17 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
     return () => window.clearTimeout(id);
   }, [active, focused, reduceMotion, n]);
 
-  /* Hand focus to Play in an effect, not inside the key handler: the buttons are tabIndex -1
-   * until `armed` renders, and focusing an element the same tick it is still un-focusable is a
-   * silent no-op. An effect runs after the commit, so the target is real by then. */
-  useEffect(() => {
-    if (armed) playRef.current?.focus({ preventScroll: true });
-  }, [armed]);
-
   if (!n) return null;
   const cur = list[active] || list[0];
 
-  const art = (it: MediaItem) => {
-    const bg = imgW(it.backdrop || it.poster || '', BACKDROP_RENDITION);
-    return {
-      backgroundImage: bg ? `url('${bg}')` : heroFallbackGradient(it),
-      backgroundPosition: heroBgPosition(it),
-    };
-  };
+  /* The gradient holds the frame UNDERNEATH the photograph rather than instead of it — see FadeBg.
+   * This is the biggest bitmap in the app (a full-width 16:9 card at the top of the home screen),
+   * so it is the one where a JPEG decoding straight into the document paints in visible bands. */
+  const art = (it: MediaItem) => ({
+    url: imgW(it.backdrop || it.poster || '', BACKDROP_RENDITION) || undefined,
+    fallback: heroFallbackGradient(it),
+    backgroundPosition: heroBgPosition(it),
+  });
 
   const logo = cur.titleLogo || cur.logo;
   const showLogo = !!logo && !logoFail[String(cur.id)];
@@ -113,11 +113,7 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
     cur.rating ? `★ ${cur.rating}` : '',
   ].filter(Boolean);
 
-  const arm = () => setArmed(true);
-  const disarm = () => {
-    setArmed(false);
-    scrimRef.current?.focus({ preventScroll: true });
-  };
+  const open = () => onPlay?.(cur);
 
   /* LEFT/RIGHT ON THE FOCUSED CARD WALKS THE BILLBOARD, it does not move focus. The card spans
    * the whole screen, so there is nothing beside it to move to — and Left/Right everywhere else
@@ -126,17 +122,12 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
   const step = (d: number) => setActive((a) => (a + d + n) % n);
 
   const onCardKey = (e: ReactKeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); arm(); return; }
+    // OK opens the title. It used to arm the buttons; the buttons are gone, so the press now goes
+    // straight to the destination the MORE button was only ever a waypoint to.
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); open(); return; }
     if (n < 2) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); step(1); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); step(-1); }
-  };
-  /* Up and Back both leave the buttons for the card. They are stopped here so the global D-pad
-   * handler does not ALSO act on the same press and carry focus off to the nav bar. */
-  const onActionKey = (e: ReactKeyboardEvent) => {
-    if (e.key === 'ArrowUp' || e.key === 'Escape' || e.key === 'Backspace') {
-      e.preventDefault(); e.stopPropagation(); disarm();
-    }
   };
 
   return (
@@ -147,7 +138,6 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
       onBlur={(e) => {
         if (e.currentTarget.contains(e.relatedTarget as Node)) return;
         setFocused(false);
-        setArmed(false);
       }}
     >
       <div className="tv-hero-stage">
@@ -157,7 +147,7 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
           if (!it) return <div key={slot} className="tv-hero-layer" aria-hidden="true" />;
           return (
             <div key={slot} className={`tv-hero-layer${on ? ' on' : ''}`} aria-hidden="true">
-              <div className="tv-hero-art" style={art(it)} />
+              <FadeBg className="tv-hero-art" {...art(it)} />
             </div>
           );
         })}
@@ -165,57 +155,39 @@ export default function TvHero({ items, onPlay, onAdd }: TvHeroProps) {
         {/* THE SCRIM IS THE FOCUS TARGET — it already spans the whole card, so the thing the
             remote lands on is the billboard itself rather than a control inside it. It sits
             ABOVE both art layers (a scrim baked into each would re-darken the overlap for the
-            500ms a dissolve is half-and-half) and BELOW the copy, so the buttons stay clickable
-            through it. */}
+            500ms a dissolve is half-and-half) and BELOW the copy. */}
         <div
-          ref={scrimRef}
           className="tv-hero-scrim"
           tabIndex={0}
           role="button"
           aria-label={cur.title}
           onKeyDown={onCardKey}
-          onClick={arm}
+          onClick={open}
         />
 
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
         <div className="tv-hero-copy" key={`copy-${active}`}>
           <span className="tv-hero-tag">{isSeries(cur) ? t('nav.series') : t('nav.movies')}</span>
-          {showLogo
-            ? <img className="tv-hero-logo" src={logo} alt={cur.title} onError={() => setLogoFail((s) => ({ ...s, [String(cur.id)]: true }))} />
-            : <h2 className="tv-hero-title">{cur.title}</h2>}
+          {/* The wordmark waits for its own bitmap; the plain title is the fallback for a title
+              that HAS no logo, not a placeholder shown while one loads. Showing both in turn is
+              the swap this pass exists to remove. */}
+          <FadeImg
+            className="tv-hero-logo"
+            src={showLogo ? logo : undefined}
+            alt={cur.title}
+            fallback={<h2 className="tv-hero-title">{cur.title}</h2>}
+            onError={() => setLogoFail((s) => ({ ...s, [String(cur.id)]: true }))}
+          />
           <div className="tv-hero-meta">
             {metaBits.map((b, i) => <span key={i}>{b}</span>)}
           </div>
 
           {/* Unfolds only while the card is focused. The copy is anchored to the BOTTOM of the
               card, so this growing is what lifts the logo and meta line into place — one motion,
-              not two. */}
+              not two. It is the synopsis alone now; the action pills that used to sit under it
+              are gone, and with them the only focusable descendant this card ever had. */}
           <div className="tv-hero-reveal">
             {cur.overview && <p className="tv-hero-plot">{cur.overview}</p>}
-            <div className="tv-hero-actions">
-              {/* tabIndex -1 until armed: the buttons must not be D-pad candidates while the
-                  card itself is the stop, or Down from the card would land on Play instead of
-                  leaving for the first row. */}
-              <button
-                ref={playRef}
-                type="button"
-                className="tv-hero-btn primary"
-                tabIndex={armed ? 0 : -1}
-                onKeyDown={onActionKey}
-                onClick={() => onPlay?.(cur)}
-              >
-                <span className="ic" aria-hidden="true">▶</span> {t('hero.play')}
-              </button>
-              <button
-                type="button"
-                className="tv-hero-btn ghost"
-                tabIndex={armed ? 0 : -1}
-                onKeyDown={onActionKey}
-                onClick={() => onAdd?.(cur)}
-              >
-                <span className="ic" aria-hidden="true">+</span> {t('nav.my_list')}
-              </button>
-            </div>
           </div>
         </div>
       </div>

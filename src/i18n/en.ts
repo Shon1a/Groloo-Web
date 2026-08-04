@@ -187,6 +187,14 @@ const SEED: Record<string, string> = {
   'ctl.fs_a': 'Toggle fullscreen',
   'ctl.grain': 'Grain',
   'ctl.clarity': 'Clarity',
+  // The scrubber becomes a real control on the TV build (the remote lands on it and Left/Right
+  // move the playhead), so it needs a name a screen reader can announce.
+  'player.seek': 'Seek',
+  // Preset strengths for the picture-enhance controls, which are sliders on the web and four
+  // fixed steps on the TV — a D-pad cannot leave a range input once it is on one.
+  'menu.low': 'Low',
+  'menu.medium': 'Medium',
+  'menu.high': 'High',
 
   // discover / search / grid
   'search.ph': 'Search titles, people, genres…',

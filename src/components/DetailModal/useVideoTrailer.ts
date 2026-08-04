@@ -73,6 +73,28 @@ export function trailerStartOffset(runtime?: number | null): number {
   return Math.max(MIN_START, Math.round(runtime * START_FRACTION));
 }
 
+/* THE OFFSET THE SHELF ACTUALLY USES, AND WHY IT IS A SMALL FIXED ONE.
+ *
+ * Everything above is about the best-chosen second of a trailer; this is about the cheapest
+ * second that is still past the intro. The two are different problems because the cost of a seek
+ * is not flat — it is a function of how far into the file the byte range sits. A third of the way
+ * into a 60 MB MP4 is a range the browser has not begun fetching and will not have for seconds
+ * (measured ~2.5s on the row); ten seconds in is a range that is usually ALREADY ARRIVING by the
+ * time metadata has parsed, because it is a few hundred KB from the start of the same sequential
+ * download. So the deep seek is bought at a price nobody wants to pay and this one is close to
+ * free — the same mechanism, on the flat part of its curve.
+ *
+ * What ten seconds buys: distributor logos and the certification card, which is what opens
+ * essentially every trailer and was the complaint that started this. What it does NOT buy is the
+ * franchise recap described above — fifty seconds of it on Spider-Man: Brand New Day — and that
+ * is the honest limit of the compromise. Skipping those means the deep seek, and the deep seek
+ * means a preview that arrives after the viewer has moved on. */
+export const INTRO_SKIP = 10;
+/* Below this, `preload: 'auto'` is the right call — the seek target is inside the bytes an eager
+ * preload was fetching anyway, so eagerness pays for the seek instead of being thrown away by it.
+ * Above it, 'auto' would download a run of file we are about to abandon (see `preload` below). */
+const CHEAP_SEEK_MAX = 15;
+
 /* ---- CHOOSING A RENDITION, FROM THE SIZE IT IS ACTUALLY PAINTED AT ------------------------
  *
  * The backend picks a sensible default (720p) knowing nothing about the screen. That is right
@@ -160,6 +182,13 @@ export interface VideoTrailerOptions {
   sound?: boolean;
 }
 
+/* THE ROW OWNS ITS PREVIEW OUTRIGHT. There was briefly a `detach` here — an escape hatch that
+ * released the playing element to another owner, so the TV title screen could adopt the billboard's
+ * trailer and grow it to full screen. That feature was removed; the account of it is at the head of
+ * TvDetail.tsx. What matters here is that nothing takes an element away from this engine any more,
+ * so "created on `src`, torn down on `src`" is the whole of its lifetime again, with no second
+ * owner and no guard against one. */
+
 export function useVideoTrailer(
   slotRef: RefObject<HTMLDivElement | null>,
   heroRef: RefObject<HTMLElement | null>,
@@ -224,11 +253,17 @@ export function useVideoTrailer(
       v.muted = true; v.defaultMuted = true; v.setAttribute('muted', '');
       v.playsInline = true; v.setAttribute('playsinline', '');
       v.autoplay = true;
-      /* 'metadata', NOT 'auto', BECAUSE OF THE SEEK. `auto` starts pulling the file from byte one
-       * the moment the src is set — and when we are about to jump a third of the way in, all of
-       * that is thrown away. Fetching the index first and letting the seek issue the range request
-       * it actually needs is both faster to first frame and less of a TV's bandwidth. */
-      v.preload = startAt > 0 ? 'metadata' : 'auto';
+      /* 'metadata' ONLY FOR A SEEK DEEP ENOUGH TO WASTE IT. `auto` starts pulling the file from
+       * byte one the moment the src is set; when we are about to jump a third of the way in, all
+       * of that is thrown away, so fetching the index first and letting the seek issue the range
+       * request it actually needs is both faster to first frame and less of a TV's bandwidth.
+       *
+       * A SHORT SKIP IS THE OPPOSITE CASE and wants `auto` exactly as much as starting at zero
+       * does: ten seconds in is a few hundred KB into the same sequential download, so the eager
+       * fetch is not wasted — it is what makes the seek land in already-buffered bytes rather than
+       * in a fresh range request. Gating on `startAt > 0` here would have quietly handed the cheap
+       * offset the expensive offset's bandwidth profile. */
+      v.preload = startAt > CHEAP_SEEK_MAX ? 'metadata' : 'auto';
       v.controls = false;
       v.setAttribute('disablepictureinpicture', '');
       v.setAttribute('disableremoteplayback', '');
@@ -358,6 +393,7 @@ export function useVideoTrailer(
       v.addEventListener('ended', teardown);
       v.addEventListener('error', fail);
       v.addEventListener('pause', onPause);
+
 
       const start = () => {
         if (done) return;   // torn down while we waited on metadata

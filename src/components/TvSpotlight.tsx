@@ -3,11 +3,12 @@ import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
-import { useVideoTrailer } from './DetailModal/useVideoTrailer';
+import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
 import { useSettings } from '../stores/settings';
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
+import { FadeBg, FadeImg } from './FadeArt';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
  * whenever MODE === 'tv', so home rows, Upcoming and add-on catalogues all get it).
@@ -85,6 +86,14 @@ const TRAILER_PREFETCH_SPAN = 1;
  * billboard's width — so the rendition has to be chosen against the magnified size, not the box.
  * Wrong here and the picture goes soft for a reason nothing on screen explains. */
 const BILLBOARD_TRAILER_CROP = 1.35;
+
+/* ---- HOW LONG THE STRIP TAKES TO MOVE ONE CARD. Reasoning is at `step`. -------------------- */
+/** A deliberate press. Long enough to have weight, short enough to never be in the way. */
+const SLIDE_MS = 460;
+/** A press that arrived while the last was still travelling — a held key. */
+const SLIDE_MS_CHAINED = 260;
+/** Under this gap between presses, the remote is being held rather than tapped. */
+const SLIDE_CHAIN_WINDOW = 320;
 
 /* Renditions sized to what is painted, not to the source. The billboard is 16:9 of a <=380px
  * row (~675px wide) and thumbs paint at ~228px — see the note in lib/hero.ts for why reaching
@@ -215,6 +224,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   );
   const firstRun = useRef(true);
   const trackRef = useRef<HTMLDivElement>(null);
+  /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
+   *  Up here with the other refs because `step` is defined past an early return. */
+  const lastStepAt = useRef(0);
   const railRef = useRef<HTMLDivElement>(null);
   const prevActiveRef = useRef(0);
 
@@ -359,21 +371,23 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     {
       // The dwell above has already served as the "don't mount for a passing title" delay.
       mountDelay: 0,
-      /* FROM THE TOP, AND THE SEEK IS WHAT THIS IS BUYING BACK.
+      /* PAST THE INTRO, BUT ONLY JUST — AND THE "ONLY JUST" IS THE WHOLE DESIGN.
        *
-       * The preview used to start a third of the way in (trailerStartOffset, still there and
-       * still right about what it says) to skip the logos, the rating card and the franchise
-       * recap. It cost far more than it looked: seeking into a 60 MB progressive MP4 means the
-       * decoder cannot present a frame until it has the byte range at that offset AND enough
-       * after it to decode, and measured on this row that was ~2.5s — against ~0.4s to start at
-       * byte zero, where the file is already arriving. The whole reveal went from 3.4s to ~1.2s
-       * by deleting one line.
+       * This row has had both extremes. It used to start a third of the way in
+       * (trailerStartOffset, still there and still right about WHICH second of a trailer is worth
+       * showing), which skipped the logos, the rating card and the franchise recap — and cost far
+       * more than it looked, because seeking into a 60 MB progressive MP4 means the decoder cannot
+       * present a frame until it has the byte range at that offset AND enough after it to decode.
+       * Measured on this row: ~2.5s, against ~0.4s at byte zero. So it was deleted, and the shelf
+       * opened on whatever the trailer opened on — which is a distributor logo, every time.
        *
-       * So the shelf preview now opens on whatever the trailer opens on, logos included. That is
-       * a real cost and it is the one that was chosen: a preview that appears while you are still
-       * looking at the card beats a better-chosen three seconds later, because three seconds is
-       * longer than most people rest on a title at all. Put `startAt` back if the logos ever
-       * matter more than the wait. */
+       * INTRO_SKIP is neither. A seek's cost tracks how far into the file it lands, and ten
+       * seconds is on the flat part of that curve: it is a few hundred KB into a download that is
+       * already running (the engine keeps `preload: 'auto'` for an offset this small, precisely so
+       * the seek lands in bytes we already have), so it costs a fraction of the deep seek while
+       * still clearing the thing anyone actually notices. The recap survives; see INTRO_SKIP for
+       * why that is the accepted half of the trade rather than an oversight. */
+      startAt: INTRO_SKIP,
       /* Let the engine measure the billboard and take the rendition that suits it, rather than
        * playing the one the backend guessed at. The crop is the magnification in tv.css, and it
        * belongs in this number: a video blown up 1.35x is sampled at 1.35x its box. */
@@ -499,7 +513,20 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
               loading="lazy"
               decoding="async"
               alt=""
-              onLoad={(e) => { const t = e.currentTarget.parentElement; if (t) t.style.background = 'none'; }}
+              /* NOT `useImageReady` HERE, and that is deliberate rather than an oversight. These
+                 carry `data-src` because a home screen holds ~147 of them and they are fetched
+                 lazily; a hook would preload every one on mount and undo the memory work the
+                 comment above describes. `load` is the weaker guarantee (bytes, not bitmap) but a
+                 228px portrait has no visible band to hide — the fade is here so a tile arrives
+                 rather than pops, which is all this size of picture needs.
+                 Both writes go straight to the nodes for the same reason the background clear
+                 does: this lives inside a useMemo that must not rebuild on a poster load. */
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                const t = img.parentElement;
+                if (t) t.style.background = 'none';
+                img.classList.add('rdy');
+              }}
             />
           )}
           {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}
@@ -650,9 +677,39 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const onSeeAllCard = hasEnd && active >= n;
   const cur = list[Math.min(active, n - 1)] || list[0];
 
-  // One stop longer than the list when the row has a page of its own; still wraps, so the card
-  // is also one press LEFT from the first title.
-  const step = (delta: number) => setActive((a) => (a + delta + stops) % stops);
+  /* ---- THE SLIDE, AND WHY IT IS NOT ONE DURATION -------------------------------------------
+   *
+   * A row is walked two ways and they want opposite things. A DELIBERATE press is one card, and
+   * it should take its time — a long ease-in-out reads as a shelf with weight on it, which is the
+   * whole feel this row is after. A HELD key is a burst of presses ~120ms apart, and against a
+   * 460ms slide that means every press interrupts a transition three-quarters unfinished: the
+   * strip re-aims from wherever it is toward a target two cards further on, and does it again
+   * before it arrives. The result is a strip that never travels at the speed of the pressing and
+   * lands somewhere behind it — which is exactly what "the scroll feels off" turns out to be.
+   *
+   * So a chained press gets a shorter slide. It is not a different animation: the same curve, run
+   * faster, so holding a direction reads as the shelf ACCELERATING under a continuous push rather
+   * than as a queue of little journeys. Let go and the next press is deliberate again.
+   *
+   * This is the same rule, and the same two numbers, that TvSpatialNav's page scroll already uses
+   * (SCROLL_MS / SCROLL_MS_CHAINED) — one idea about how this build answers a held key.
+   *
+   * WRITTEN STRAIGHT TO THE NODE, not through state. A held key is the one moment this component
+   * must not do more work than it has to, and a re-render per press to change a duration nobody
+   * can name would be exactly that.
+   *
+   * SET ON THE SECTION, NOT ON THE STRIP, because two things move on every press and they have to
+   * agree: the strip slides, and the billboard cross-dissolves to the title it lands on. A custom
+   * property inherits, and the section is the nearest element that is an ancestor of BOTH — put it
+   * on the strip and the dissolve could not see it, so a held key would slide at 260ms while the
+   * artwork took 500ms to catch up, which is stale art under a card that has already moved on. */
+  const step = (delta: number) => {
+    const now = performance.now();
+    const chained = now - lastStepAt.current < SLIDE_CHAIN_WINDOW;
+    lastStepAt.current = now;
+    sectionRef.current?.style.setProperty('--sp-slide', `${chained ? SLIDE_MS_CHAINED : SLIDE_MS}ms`);
+    setActive((a) => (a + delta + stops) % stops);
+  };
 
   /* Until the row is near the viewport the layer keeps the branded gradient and requests no
    * bitmap at all — see the memory note in the header. */
@@ -664,8 +721,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * sometimes have a poster and no backdrop, with nothing else coming. */
     const source = enrich ? it.backdrop : (it.backdrop || it.poster);
     const bg = visible ? imgW(source || '', BILLBOARD_RENDITION) : '';
+    /* The gradient is no longer an EITHER/OR with the picture — it is what sits underneath one.
+     * See FadeBg: the billboard is the largest bitmap on the home screen, and a 676px-wide JPEG
+     * decoding straight into the document is the "loads top to bottom" band-by-band paint that
+     * this row was the most obvious victim of. */
     return {
-      backgroundImage: bg ? `url('${bg}')` : heroFallbackGradient(it),
+      url: bg || undefined,
+      fallback: heroFallbackGradient(it),
       backgroundPosition: heroBgPosition(it),
     };
   };
@@ -694,6 +756,19 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     // move focus off the billboard. Up/Down bubble on through to it.
     if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); step(1); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); step(-1); }
+  };
+
+  /* OK opens the title. Plain, and worth a note saying it is plain ON PURPOSE.
+   *
+   * This briefly handed the billboard's PLAYING trailer to the title screen, which grew it out of
+   * this box to fill the screen. It was removed — the full account of what it was and why it went
+   * is at the head of TvDetail.tsx, beside the note about the trailer embed that screen had
+   * already declined once for the same reason. `useVideoTrailer` accordingly has no `detach` any
+   * more: this row owns its preview from the dwell that starts it to the teardown that ends it,
+   * and nothing takes it anywhere. */
+  const openTitle = () => {
+    if (onSeeAllCard) { goEnd(); return; }
+    onSelect?.(cur);
   };
 
   return (
@@ -729,7 +804,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           ref={heroBtnRef}
           className="tv-spot-hero"
           aria-label={onSeeAllCard ? `${heading} — ${endLabel}` : cur.title}
-          onClick={() => (onSeeAllCard ? goEnd() : onSelect?.(cur))}
+          onClick={openTitle}
           onKeyDown={onHeroKey}
         >
           {/* The preview sits UNDER the artwork rather than over it, and `has-trailer` fades the
@@ -761,12 +836,18 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
             const res = resumeOf?.(it);
             return (
               <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
-                <div className="tv-spot-art" style={heroArt(art)} />
+                <FadeBg className="tv-spot-art" {...heroArt(art)} />
                 <div className="tv-spot-card-in">
                   <span className="tv-spot-tag">{tagFor(it)}</span>
-                  {logo
-                    ? <img className="tv-spot-logo" src={logo} alt={it.title} />
-                    : <span className="tv-spot-cardtitle">{it.title}</span>}
+                  {/* The wordmark falls back to the plain title, and it must not do BOTH in turn:
+                      text first and a logo a beat later is the same swap the backdrop had. FadeImg
+                      renders the fallback only when there is no logo to wait for. */}
+                  <FadeImg
+                    className="tv-spot-logo"
+                    src={logo || undefined}
+                    alt={it.title}
+                    fallback={<span className="tv-spot-cardtitle">{it.title}</span>}
+                  />
                 </div>
                 {/* Outside the plate and pinned to the card's own bottom edge, so it survives the
                     trailer taking the artwork away — where you are in a title is not a thing that
