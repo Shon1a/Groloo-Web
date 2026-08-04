@@ -109,7 +109,9 @@ export default function Home() {
     <section className="page active" id="browse" aria-label="Browse catalog">
       <div id="home">
         {heroItems.length > 0 && (IS_TV
-          ? <TvHero items={heroItems} onPlay={onSelect} onAdd={onAdd} />
+          // No onAdd: the TV billboard has no My List button — OK on the focused card opens the
+          // title, and adding to the list happens inside it, the same as for any poster in a row.
+          ? <TvHero items={heroItems} onPlay={onSelect} />
           : <Hero items={heroItems} onPlay={onSelect} onAdd={onAdd} />)}
         {config.upcoming && (IS_TV
           ? (upcomingTvRail.length > 0 && (
