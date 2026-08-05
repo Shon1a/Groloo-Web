@@ -9,6 +9,7 @@
     "build": "node scripts/copy-ffmpeg.mjs && tsc -b && vite build",
     "build:tv": "node scripts/copy-ffmpeg.mjs && tsc -b && vite build --mode tv",
     "lint": "oxlint",
+    "check:lockfile": "node scripts/check-lockfile.mjs",
     "preview": "vite preview",
     "shots:record": "node scripts/tv-shots.mjs --record",
     "shots:baseline": "node scripts/tv-shots.mjs --baseline",
