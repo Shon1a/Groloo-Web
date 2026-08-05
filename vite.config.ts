@@ -86,7 +86,14 @@ export default defineConfig(({ mode }) => ({
         // stored 277 KB (a 244 KB .wasm plus its glue) for a module that will never be
         // instantiated. Ignored rather than deleted so the vendored folder stays available if a
         // rollback ever wants it; it is safe to delete public/assets/heart/ outright.
-        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**'],
+        /* THE LAST ENTRY IS THE DOLBY DECODER, AND THE BUILD FAILS WITHOUT IT.
+         * It is 32 MB — sixteen times workbox's 2 MiB per-asset limit — and unlike the
+         * silent drop described above, an asset that large makes `generateSW` throw and the
+         * whole `vite build` fails. Precaching it would be wrong even if it were allowed:
+         * it exists for AC-3/DTS files only, most visitors never open one, and forcing 32 MB
+         * onto every first visit to serve a minority is the opposite of what lazy-loading
+         * it in `lib/wasmAudio.ts` is for. Excluded here, fetched on demand. */
+        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**', '**/ffmpeg/**'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [
@@ -272,6 +279,30 @@ export default defineConfig(({ mode }) => ({
         target: process.env.API_PROXY || 'https://groloo-server.onrender.com',
         changeOrigin: true,
         secure: true,
+      },
+      /* The LOCAL Stremio streaming server, proxied for one reason: its CORS allowlist.
+       *
+       * It re-serves a downloaded file as HLS with one audio rendition per track — which is
+       * the only way a browser gets audio-track switching, and how Stremio Web does it in the
+       * same Chrome that has no `HTMLMediaElement.audioTracks`. But it answers
+       * `Access-Control-Allow-Origin` only for Stremio's own origins:
+       *
+       *   Origin: https://web.stremio.com  ->  Access-Control-Allow-Origin: *
+       *   Origin: http://localhost:5174    ->  (nothing)
+       *
+       * Measured against the server on this machine, v4.20.17. So the browser cannot talk to
+       * it from this app directly, however local it is. Going through the dev server makes the
+       * request same-origin and CORS never applies — the same trick, and the same reasoning,
+       * as the /api proxy above.
+       *
+       * DEV ONLY, AND THAT IS A REAL LIMIT, not an oversight: in production the page is served
+       * from groloo's host, which cannot reach the viewer's own 127.0.0.1. Shipping this
+       * beyond dev needs a helper on the viewer's machine that sets permissive CORS itself —
+       * see lib/streamingServer.ts. */
+      '/streaming-server': {
+        target: process.env.STREMIO_SERVER || 'http://127.0.0.1:11470',
+        changeOrigin: true,
+        rewrite: (p: string) => p.replace(/^\/streaming-server/, ''),
       },
     },
   },

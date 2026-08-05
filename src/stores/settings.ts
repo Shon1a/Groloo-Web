@@ -51,9 +51,23 @@ const DEFAULTS: Settings = {
   autoQuality: 'best',
   audioLang: 'en',
   externalPlayer: 'disabled',
+  /* PICTURE ENHANCE IS OFF UNTIL ASKED FOR. It is a look, not a correction — grain and a sharpen
+   * pass are things a viewer opts into, and a player that ships with them on is deciding how
+   * somebody else's film should look.
+   *
+   * THE TWO LEVELS BELOW ARE THE "LOW" PRESETS, EXACTLY. They must stay equal to TV_GRAIN[1] and
+   * TV_CLARITY[1] in VideoPlayer, and that is a real constraint rather than a tidy coincidence:
+   * the TV menu offers four fixed levels and ticks the row whose value MATCHES, so a default that
+   * merely sits near one ticks nothing at all. They were 0.10 and 0.40, which are between presets
+   * — so on a television, switching the enhancement on used to light up "Film grain & color
+   * boost" above four grain rows and four clarity rows with no mark against any of them, and the
+   * header read 10%. Now turning it on lands on Low · Low, which is both the gentlest setting and
+   * a visible one.
+   *
+   * The web keeps sliders and does not care where the value sits, so it simply starts gentler. */
   enhance: false,
-  grain: 0.10,
-  clarity: 0.40,
+  grain: 0.08,
+  clarity: 0.25,
 };
 
 function load(): Settings {

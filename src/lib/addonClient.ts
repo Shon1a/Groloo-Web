@@ -54,7 +54,14 @@ export interface AddonStream {
   size: string | null;
   kind: 'hls' | 'url';
   url: string;
+  /** AUDIO languages. See `classifyStreamLangs` — the flags in a release title are very
+   *  often the SUBTITLE list, and counting those here is what put a 🇷🇺 tab on a file
+   *  that has no Russian audio in it. */
   langs: string[];
+  /** SUBTITLE languages the release advertises, when they could be told apart from the
+   *  audio ones. Not playable on their own — these live inside the container — but they
+   *  are the difference between "no Russian here" and "Russian, but as subtitles". */
+  subLangs?: string[];
   subtitles?: Array<{ url: string; lang: string }>;
 }
 
@@ -65,6 +72,11 @@ const LANG_NAME: Record<string, string> = {
   en: 'English', ka: 'ქართული', uk: 'Українська', ru: 'Русский', es: 'Español',
   fr: 'Français', de: 'Deutsch', it: 'Italiano', pt: 'Português', ja: '日本語',
   ko: '한국어', zh: '中文', ar: 'العربية', hi: 'हिन्दी', tr: 'Türkçe', pl: 'Polski', nl: 'Nederlands',
+  id: 'Bahasa', ms: 'Melayu', th: 'ไทย', vi: 'Tiếng Việt', tl: 'Filipino', he: 'עברית',
+  sv: 'Svenska', da: 'Dansk', no: 'Norsk', fi: 'Suomi', cs: 'Čeština', el: 'Ελληνικά',
+  ro: 'Română', hu: 'Magyar', bg: 'Български', sr: 'Српски', hr: 'Hrvatski',
+  // the file's own audio, where the release never said what it is — see classifyStreamLangs
+  und: 'Original',
 };
 export const langName = (c: string): string => LANG_NAME[c] || c.toUpperCase();
 
@@ -221,6 +233,22 @@ function extractSize(t: string): string | null {
   return m ? m[1] + ' ' + m[2].toUpperCase() : null;
 }
 
+/* Flag → audio language. UNMAPPED CODES FALL THROUGH AS THEMSELVES (`cc.toLowerCase()`
+ * below), which is deliberate — an add-on's language is never dropped — but it is also why
+ * the gaps here are visible in the UI: a Torrentio multi-audio release lists 🇮🇩🇲🇾🇸🇦🇹🇭🇹🇼,
+ * all of which miss this table and surface as raw "ID" / "MY" / "SA" / "TH" / "TW" buckets
+ * beside the named ones (🇹🇼 is the costly one — it splits Chinese across two tabs instead
+ * of folding into `zh`).
+ *
+ * FILLING THE GAPS IS NOT A ONE-LINE EDIT, which is why they are still here. This table is
+ * a pinned twin: `tests/parity/twins.mjs` STILL_ON_DISK re-reads this declaration and
+ * refuses to run the corpus unless it is character-identical to the copy at PRE_PORT_REV
+ * (0dd5447c9ba2), because the `stream_parse` family is driven through the QUOTED revision
+ * of `collectAddonStreams`. Adding a row here reds the gate with a message about the Rust.
+ * To do it: add the same rows to `FLAG_LANG` in `Groloo-core/.../stream.rs` (whose doc
+ * comment pins the count — "all 22 entries, same order"), then re-point PRE_PORT_REV in
+ * the SAME commit. The buckets are cosmetic; the audio actually played is not, and that is
+ * fixed in the player. */
 const FLAG_LANG: Record<string, string> = { GB: 'en', US: 'en', AU: 'en', CA: 'en', IE: 'en', NZ: 'en', RU: 'ru', UA: 'uk', GE: 'ka', FR: 'fr', DE: 'de', IT: 'it', ES: 'es', MX: 'es', PT: 'pt', BR: 'pt', JP: 'ja', KR: 'ko', CN: 'zh', TR: 'tr', PL: 'pl', NL: 'nl' };
 function parseStreamLangs(text: string): string[] {
   const out: string[] = [];
@@ -232,6 +260,207 @@ function parseStreamLangs(text: string): string[] {
     if (l && out.indexOf(l) < 0) out.push(l);
   }
   return out;
+}
+
+/* ── flags are not always audio ────────────────────────────────────────────────────
+ *
+ * `parseStreamLangs` above scrapes every flag emoji out of a release title and hands
+ * them all back as the stream's languages, and `mapAddonStream` puts them straight into
+ * `AddonStream.langs`, which the UI presents as AUDIO tabs. For most add-ons that is
+ * right. For the one everybody actually installs it is wrong, and wrong in the way that
+ * wastes the most of a user's time: they pick Русский, the same file plays, and it plays
+ * Japanese.
+ *
+ * Torrentio's caption has a tag line before the flags, and the tags say what the flags
+ * ARE. Recorded from a real response (`/stream/series/tt21209876:2:1.json`, 50 streams):
+ *
+ *   "Multi Subs / 🇬🇧 / 🇨🇳 / 🇮🇩 / 🇲🇾 / 🇹🇭"                      ← 5 SUBTITLE tracks
+ *   "Dubbed / 🇬🇧"                                                ← 1 AUDIO track
+ *   "Dubbed / Multi Subs / Dual Audio / 🇬🇧 / 🇷🇺 / 🇮🇹 / …13 flags" ← 2 audio, 13 subs
+ *   "Dubbed / Dual Audio / 🇬🇧 / 🇷🇺 / 🇮🇹 / …12 flags"             ← 2 audio, 12 subs
+ *
+ * Of those 50 streams, 23 carried a subs tag and NOT ONE mentioned Russian audio — every
+ * 🇷🇺 in the whole response was a subtitle. The old reading turned that single response
+ * into thirteen audio tabs (the "ID"/"MY"/"SA"/"TH"/"TW" ones in the screenshot are the
+ * same list), of which twelve were fiction.
+ *
+ * The two clauses after the subs tag are the ones worth explaining, because both catch
+ * releases whose tag line never says "Subs" and whose flags are subtitles anyway:
+ *
+ *   · "Dual Audio" is a claim about the file — TWO audio tracks — so a dozen flags beside
+ *     it cannot be describing audio. Both DBMS rips above are real and neither says
+ *     "Subs"; the count against the tag is the only thing that gives them away.
+ *   · No audio tag AT ALL and more than three flags. Torrentio emits "Dubbed" / "Dual
+ *     Audio" / "Multi Audio" whenever it believes a release has a non-original audio
+ *     track, so a bare list of eight flags with none of those tags is a subtitle list:
+ *     `"[jaaj] Solo Leveling S02 (BD 1080p AV1 AAC)" … 🇬🇧/🇷🇺/🇵🇹/🇪🇸/🇲🇽/🇨🇳/🇫🇷/🇩🇪`
+ *     is a 348 MB BD rip, and eight dubs is not what that is.
+ *
+ * THREE IS THE THRESHOLD AND NOT TWO, because genuine untagged multi-audio releases do
+ * exist and they are small: `"Solo Leveling S02e01-13 [1080p Ita Eng Spa Jap h265 SubS]
+ * byMe7alh [MIRCrew]" … 🇬🇧/🇮🇹/🇪🇸` really does carry Italian, English and Spanish audio
+ * beside the Japanese — it says so in the release name — and it must keep them. */
+const SUBS_TAG = /multi[\s-]?subs?\b|\bm-?subs?\b|\bsubtitles?\b/i;
+const DUAL_AUDIO_TAG = /dual[\s.-]?audio/i;
+const MULTI_AUDIO_TAG = /(multi|tri|triple)[\s.-]?audio/i;
+const DUB_TAG = /\bdubbed\b|\beng(lish)?[\s.-]?dub\b/i;
+
+/** ISO 639-2 "undetermined": the file's own audio, whatever it is. A release that
+ *  advertises only its subtitle languages has told us nothing about its audio, and this
+ *  is how the UI says that out loud instead of guessing a flag off the subtitle list. */
+export const UNDETERMINED = 'und';
+
+/* Words a release name uses for the language it was DUBBED INTO, and the code each means.
+ * `latino` and `castellano` are both Spanish here; `mandarin` and `cantonese` are both
+ * `zh`, matching what LANG_NAME can render. */
+const DUB_WORDS: Record<string, string> = {
+  english: 'en', eng: 'en', russian: 'ru', rus: 'ru', ukrainian: 'uk', ukr: 'uk',
+  georgian: 'ka', german: 'de', ger: 'de', deutsch: 'de', french: 'fr', fre: 'fr',
+  spanish: 'es', spa: 'es', castellano: 'es', latino: 'es', italian: 'it', ita: 'it',
+  portuguese: 'pt', por: 'pt', brazilian: 'pt', japanese: 'ja', jpn: 'ja',
+  korean: 'ko', kor: 'ko', chinese: 'zh', mandarin: 'zh', cantonese: 'zh',
+  arabic: 'ar', ara: 'ar', hindi: 'hi', turkish: 'tr', thai: 'th', indonesian: 'id',
+  polish: 'pl', dutch: 'nl', hebrew: 'he', vietnamese: 'vi',
+};
+/* Chinese releases mark the dub in the title rather than in words a Latin-alphabet regex
+ * would find: 台配 (Taiwan dub), 國語/国语 (Mandarin), 中文配音/中配 (Chinese dubbing). */
+const CJK_DUB = /台配|國語|国语|中文配音|中配|粵語|粤语/;
+
+/** The language(s) a release NAME says it is dubbed into — not the flags beside it.
+ *
+ *  Read backwards from each "dub"/"dubbed"/"audio" for a language word within 32
+ *  characters, which is what makes "(Mandarin Chinese Dub)" resolve while "Dual Audio"
+ *  and "[Tri Audio]" — quantities, not languages — resolve to nothing. */
+export function namedAudioLangs(label: string): string[] {
+  const t = label || '';
+  const out: string[] = [];
+  if (CJK_DUB.test(t)) out.push('zh');
+  const re = /\b(dub|dubs|dubbed|audio)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t))) {
+    const before = t.slice(Math.max(0, m.index - 32), m.index).toLowerCase();
+    for (const w of Object.keys(DUB_WORDS)) {
+      if (new RegExp(`\\b${w}\\b`).test(before) && out.indexOf(DUB_WORDS[w]) < 0) out.push(DUB_WORDS[w]);
+    }
+  }
+  return out;
+}
+
+/* Markers that a Russian-scene release carries a Russian voice-over: the dub-crew
+ * shorthand (MVO/DVO/AVO = multi-, two- and one-voice; P1/P2 = one- and two-voice), the
+ * Russian words for it, and the big release groups. */
+const RU_VO = /\b(mvo|dvo|avo|p1|p2)\b|дубляж|дублирован|озвуч|многоголос|одноголос|двухголос|лостфильм|кубик\s*в\s*кубе|hdrezka/i;
+const UK_VO = /\bukr\b|українськ|укр\.|дубляж\s*укр/i;
+const CYRILLIC = /[Ѐ-ӿ]/;
+
+/** The language whose track is most likely to be the DEFAULT one — the one that plays if
+ *  nobody selects anything.
+ *
+ *  This is the signal that was missing, and the flags are actively misleading without it.
+ *  A Russian release captions as
+ *
+ *    "Дом Дракона / House of the Dragon [03х01-07 из 08] (2026) WEBRip 1080p | P2 | …"
+ *    🇬🇧 / 🇷🇺
+ *
+ *  and the 🇬🇧 is real — the original English track IS in the file. It is simply not the
+ *  track that plays. Worse, `"… MVO (Syncmer) + Original + Sub (Rus Eng)"` captions with
+ *  🇬🇧 ALONE, which reads as a single English audio track and is a Russian multi-voice-over
+ *  with the original kept beside it.
+ *
+ *  A release NAME written in Cyrillic is a Russian-scene release, and its default audio is
+ *  Russian. That single fact is worth more than the whole flag list. Ukrainian is checked
+ *  first because it is Cyrillic too and would otherwise be swallowed by the Russian rule. */
+export function primaryAudioLang(label: string): string | null {
+  const t = label || '';
+  const named = namedAudioLangs(t);
+  if (named.length === 1) return named[0];
+  if (UK_VO.test(t)) return 'uk';
+  if (RU_VO.test(t) || CYRILLIC.test(t)) return 'ru';
+  return null;
+}
+
+/** Does this release carry exactly ONE audio track?
+ *
+ *  `langs.length === 1` alone is not enough and the difference is the whole point: a
+ *  caption reading `Dubbed / Dual Audio / 🇬🇧` yields one language and TWO tracks, because
+ *  the flag names the dub and the tag says the original is in there beside it. Only a
+ *  release with one language AND no dual/multi tag is one where the language you asked for
+ *  is necessarily the track that plays — which is the only thing a browser that cannot
+ *  switch audio tracks can actually deliver. */
+export function isSingleAudioTrack(s: AddonStream): boolean {
+  return s.langs.length === 1 && !DUAL_AUDIO_TAG.test(s.label) && !MULTI_AUDIO_TAG.test(s.label);
+}
+
+/** Re-read one mapped stream, separating the audio languages from the subtitle ones.
+ *
+ *  Only called where `behaviorHints.lang` was absent — that field is the add-on stating
+ *  the audio language on the wire, and a guess read out of a title never outranks it.
+ *
+ *  A stream whose audio cannot be determined comes back as `['und']` (plus `'en'` when
+ *  the label claims a dub: "Dubbed", "Dual Audio" and "Eng Dub" all mean an English track
+ *  alongside the original, which is the near-universal convention on these trackers).
+ *  That is a smaller claim than the old code's and an honest one — the alternative is
+ *  putting the file in thirteen language buckets and hoping. */
+export function classifyStreamLangs(s: AddonStream): AddonStream {
+  const t = s.label;
+  const flags = parseStreamLangs(t);
+  const named = namedAudioLangs(t);
+  const dual = DUAL_AUDIO_TAG.test(t), multi = MULTI_AUDIO_TAG.test(t), dubbed = DUB_TAG.test(t);
+  const flagsAreSubs = SUBS_TAG.test(t)
+    || (dual && !multi && flags.length > 2)
+    || (!dual && !multi && !dubbed && flags.length > 3);
+
+  /* A RELEASE THAT NAMES ITS DUB OUTRANKS ITS OWN FLAG LIST, and this clause is the whole
+   * reason `namedAudioLangs` exists. Torrentio captions
+   *
+   *   "[Furretar] 台配 - 我独自升级 (Solo Leveling) (Mandarin Chinese Dub) (Matching Soft Subs)"
+   *
+   * as `Dubbed / 🇬🇧 / 🇨🇳`, and reading those two flags as two audio tracks puts a Mandarin
+   * dub in the ENGLISH bucket. Pick English, get Chinese — which is exactly what it did,
+   * and the 🇬🇧 is the "Matching Soft Subs" the title mentions. The name is unambiguous
+   * where the flags are not, so the named languages become the audio and every flag that
+   * is not one of them drops to `subLangs`.
+   *
+   * The `und` is only added when something WAS dropped: a release whose flags say exactly
+   * what its name says ("Eng Dub" + 🇬🇧) has one audio language and should stay a sole-
+   * language source, because that is what `bestFor` looks for when the browser cannot
+   * switch tracks. */
+  if (named.length) {
+    const extra = flagsAreSubs ? flags : flags.filter((f) => named.indexOf(f) < 0);
+    return { ...s, langs: extra.length ? [...named, UNDETERMINED] : named, subLangs: extra };
+  }
+  if (flags.length && !flagsAreSubs) return { ...s, langs: flags, subLangs: [] };
+  /* Nothing in the label speaks to language at all — no flags AND no tags. Leave the
+   * mapper's own default alone rather than replacing one guess with another: that
+   * fallback is `mapAddonStream`'s, it is the twin the parity corpus compares, and a
+   * stream this silent is exactly the case it was written for. */
+  /* NO EARLY RETURN FOR "the label says nothing". There used to be one here, keeping
+   * `mapAddonStream`'s `['en']` fallback on the grounds that the mapper is the pinned twin
+   * and its default was not mine to second-guess. That reasoning was backwards: the mapper
+   * cannot know better, this function exists precisely to correct it, and overriding the
+   * VALUE here never touches the pinned TEXT there. The cost of leaving it was that
+   * `[SubsPlease] Solo Leveling - 13 (1080p)` and `[WAP] … (BD Remux)` — captions with no
+   * tag line, no flags and no dub word anywhere, i.e. raw Japanese with English subs —
+   * were filed as English audio and rendered in the English list.
+   *
+   * "Dubbed", "Dual Audio" and "Multi Audio" say a dub EXISTS. They do not say what it is,
+   * and this is where guessing it was English did the most damage:
+   *
+   *   "Solo.Leveling.S02E01-E06.2160p.WEB-DL.MULTI.AAC2.0.x265.Multi.Subs.AniMeitantei"
+   *   Dubbed / Multi Audio / Multi Subs        ← no flags, no language named anywhere
+   *
+   * is a MULTI-audio Chinese-platform WEB-DL. Assuming English put it in the English
+   * bucket, quality-first ordering put it at the TOP of that bucket because it is 4K, and
+   * clicking the first row played Mandarin. The genuine "Eng Dub - 2160p" release was the
+   * row underneath it.
+   *
+   * So a dub whose language is not stated is `und` — the Original bucket — and the English
+   * bucket holds only releases that actually say English (a 🇬🇧 audio flag, or "Eng Dub" /
+   * "[English Dub]" via `namedAudioLangs`). This costs the genuinely dual-audio JP+EN rips
+   * their English tab, and that is the right trade: their English is a non-default track
+   * inside the container, and no browser this app runs in can switch to it. A bucket that
+   * cannot deliver its language is worse than one row fewer. */
+  return { ...s, langs: [UNDETERMINED], subLangs: flags };
 }
 
 interface RawStream { name?: string; title?: string; description?: string; url?: string; behaviorHints?: { streamType?: string; lang?: string }; subtitles?: Array<{ url?: string; lang?: string }> }
@@ -270,7 +499,13 @@ export async function collectAddonStreams(videoId: string, type: 'movie' | 'seri
   const per = await Promise.all(addons.map(async (a) => {
     try {
       const data = JSON.parse(await fetchAddonText(addonBaseUrl(a.url), path)) as { streams?: RawStream[] };
-      return (data.streams || []).map((s) => mapAddonStream(s, a.manifest?.name || 'Add-on')).filter(Boolean) as AddonStream[];
+      /* `classifyStreamLangs` runs OUTSIDE `mapAddonStream` and only where the wire did
+       * not state the language, so the mapper stays the byte-for-byte twin the parity
+       * corpus pins and the add-on's own `behaviorHints.lang` is never second-guessed. */
+      return (data.streams || []).map((s) => {
+        const m = mapAddonStream(s, a.manifest?.name || 'Add-on');
+        return m && !s.behaviorHints?.lang ? classifyStreamLangs(m) : m;
+      }).filter(Boolean) as AddonStream[];
     } catch { return []; }
   }));
   return per.flat();
