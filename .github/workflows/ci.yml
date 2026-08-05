@@ -45,8 +45,17 @@ jobs:
           # differs from a Windows-authored one only by those three packages plus some
           # "peer" flags — no dependency versions change.
           #
-          # SO: after any `npm install` on Windows, check `git diff package-lock.json`. If
-          # the @emnapi/* entries disappeared, do not commit that — regenerate on Linux.
+          # SO: after any `npm install` on Windows, run `node scripts/check-lockfile.mjs`. It
+          # resolves every dependency edge in the lockfile and names anything that points at a
+          # package the file does not contain, which is what this failure IS.
+          #
+          # That script is also a CI step, below, immediately before `npm ci` — because this
+          # paragraph on its own did not hold. It was read, and the second time the lockfile
+          # was written on Windows anyway (adding ffmpeg.wasm and mediabunny), `@emnapi/runtime`
+          # went missing exactly as described here and took BOTH repositories red: Groloo-Heart
+          # installs this project's dependencies to run the parity gate, so it died at the same
+          # step and never reached the thing it was there to check. A rule worth writing down
+          # twice is worth enforcing.
           # ---------------------------------------------------------------------------
           node-version-file: '.nvmrc'
           # Restores ~/.npm between runs; without it `npm ci` re-downloads the
@@ -276,6 +285,57 @@ jobs:
             exit 1
           fi
           echo "rename migration: $f still carries the pre-rename prefix"
+
+      # The prose warning above has now failed twice as a control — once when this job was
+      # first written, and again when the ffmpeg/mediabunny dependencies were added from
+      # Windows and `@emnapi/runtime` went missing a second time. So the rule is enforced
+      # rather than described. Runs BEFORE `npm ci` so the failure arrives as one line naming
+      # the package, instead of npm's EUSAGE wall with the useful sentence buried in it.
+      #
+      # AND THE GUARD IS PROVED RED ON EVERY RUN, in the same step, because this one is
+      # unusually easy to write so that it always passes: the edge that breaks is a PEER
+      # dependency, which the first draft of the script skipped — it ran clean against the
+      # exact lockfile that had just failed `npm ci`. A guard nobody has watched fail is not
+      # evidence. This deletes a package that something else requires and asserts the script
+      # notices; the package is DERIVED from the tree rather than named here, so the proof
+      # keeps working when the dependency that happens to be fragile changes.
+      - name: Verify package-lock.json is complete, and that this guard can fail
+        run: |
+          node scripts/check-lockfile.mjs
+
+          node - <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          const pkgs = lock.packages;
+
+          // A package that is required by something else and is not itself the requirer's
+          // nested copy: removing it must leave a dangling edge.
+          const wanted = new Set();
+          for (const p of Object.values(pkgs)) {
+            for (const f of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+              for (const n of Object.keys(p?.[f] || {})) wanted.add(n);
+            }
+          }
+          const victim = Object.keys(pkgs).find((k) => {
+            if (!k.startsWith('node_modules/')) return false;
+            if (k.slice('node_modules/'.length).includes('node_modules/')) return false;
+            return wanted.has(k.slice('node_modules/'.length));
+          });
+          if (!victim) {
+            console.error('lockfile-prove: no top-level package in the tree is required by anything, which cannot be right — this proof can no longer be constructed, so fix it rather than dropping it');
+            process.exit(1);
+          }
+          delete pkgs[victim];
+          writeFileSync('/tmp/lock-prove.json', JSON.stringify(lock));
+          console.log(`lockfile-prove: removed ${victim}; the guard must now fail`);
+          NODE
+
+          if node scripts/check-lockfile.mjs /tmp/lock-prove.json > /dev/null 2>&1; then
+            echo "::error::scripts/check-lockfile.mjs accepted a lockfile with a package removed. It is no longer checking anything — see the note at the top of that file before changing it."
+            exit 1
+          fi
+          echo "lockfile-prove: the guard went red as it should"
+          rm -f /tmp/lock-prove.json
 
       - run: npm ci
       - run: npm run lint
