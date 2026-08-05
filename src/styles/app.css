@@ -1766,12 +1766,80 @@
   }
   /* Real SVG flags (data-URI) — Windows Chrome/Edge don't render flag emoji, so we
      don't rely on them. 3:2 ratio, subtle ring for definition on the dark panel. */
+  /* The neutral fill is the FALLBACK, and it is why this rule sets a colour it mostly
+     never shows: a code with no `.flag-<code>` rule below used to paint nothing inside the
+     ring, so an unmapped language read as an empty checkbox sitting next to real flags
+     rather than as a language whose flag we happen not to have. */
   .flag{display:inline-block;width:22px;height:15px;border-radius:2px;margin-right:9px;vertical-align:-2px;
+    background-color:rgba(255,255,255,.13);
     background-size:cover;background-position:center;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
   .flag-uk{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23FFD500'/><rect width='3' height='1' fill='%230057B7'/></svg>")}
   .flag-ru{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 6'><rect width='9' height='6' fill='%23fff'/><rect y='2' width='9' height='2' fill='%230039A6'/><rect y='4' width='9' height='2' fill='%23D52B1E'/></svg>")}
   .flag-ka{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 200'><rect width='300' height='200' fill='%23fff'/><g fill='%23ff0000'><rect x='130' width='40' height='200'/><rect y='80' width='300' height='40'/><rect x='55' y='30' width='20' height='8'/><rect x='61' y='24' width='8' height='20'/><rect x='225' y='30' width='20' height='8'/><rect x='231' y='24' width='8' height='20'/><rect x='55' y='162' width='20' height='8'/><rect x='61' y='156' width='8' height='20'/><rect x='225' y='162' width='20' height='8'/><rect x='231' y='156' width='8' height='20'/></g></svg>")}
   .flag-en{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 30'><clipPath id='a'><path d='M0 0v30h60V0z'/></clipPath><clipPath id='b'><path d='M30 15h30v15zv15H0zH0V0zV0h30z'/></clipPath><g clip-path='url(%23a)'><path d='M0 0v30h60V0z' fill='%23012169'/><path d='M0 0l60 30m0-30L0 30' stroke='%23fff' stroke-width='6'/><path d='M0 0l60 30m0-30L0 30' clip-path='url(%23b)' stroke='%23C8102E' stroke-width='4'/><path d='M30 0v30M0 15h60' stroke='%23fff' stroke-width='10'/><path d='M30 0v30M0 15h60' stroke='%23C8102E' stroke-width='6'/></g></svg>")}
+  /* The rest of them. Only en/ru/ka/uk existed, so every other language bucket rendered as
+     an empty ring — which is what the ID/MY/SA/TH/TW tabs looked like. Generated rather than
+     hand-written (scripts note: simple geometry, 3:2 unless the real flag is not), and each is
+     a recognisable simplification at 22x15 rather than an exact vexillological reproduction.
+     .flag-und is deliberately a GLOBE and not a flag: it is the "Original" bucket, meaning the
+     release never said what its audio language is, and no country owns that. */
+  .flag-es{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23AA151B'/><rect y='.5' width='3' height='1' fill='%23F1BF00'/></svg>")}
+  .flag-fr{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ED2939'/><rect width='2' height='2' fill='%23ffffff'/><rect width='1' height='2' fill='%23002395'/></svg>")}
+  .flag-de{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23000000'/><rect y='1' width='3' height='1' fill='%23DD0000'/><rect y='2' width='3' height='1' fill='%23FFCE00'/></svg>")}
+  .flag-it{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23CE2B37'/><rect width='2' height='2' fill='%23ffffff'/><rect width='1' height='2' fill='%23009246'/></svg>")}
+  .flag-pt{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23FF0000'/><rect width='1.2' height='2' fill='%23006600'/><circle cx='1.2' cy='1' r='.4' fill='%23FFE800' stroke='%23ffffff' stroke-width='.07'/></svg>")}
+  .flag-ja{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><circle cx='1.5' cy='1' r='.6' fill='%23BC002D'/></svg>")}
+  .flag-ko{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><circle cx='1.5' cy='1' r='.55' fill='%23CD2E3A'/><path d='M1.5 .45a.275 .275 0 0 0 0 .55 .275 .275 0 0 1 0 .55 .55 .55 0 0 0 0-1.1z' fill='%230047A0'/><g fill='%23000000'><rect x='.28' y='.36' width='.5' height='.07' transform='rotate(35 .53 .4)'/><rect x='2.22' y='1.57' width='.5' height='.07' transform='rotate(35 2.47 1.6)'/></g></svg>")}
+  .flag-zh{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23DE2910'/><polygon points='0.60,0.21 0.80,0.83 0.28,0.44 0.92,0.44 0.40,0.83' fill='%23FFDE00'/><polygon points='1.15,0.11 1.23,0.35 1.03,0.20 1.27,0.20 1.07,0.35' fill='%23FFDE00'/><polygon points='1.38,0.37 1.46,0.61 1.26,0.46 1.50,0.46 1.30,0.61' fill='%23FFDE00'/><polygon points='1.36,0.70 1.44,0.94 1.24,0.79 1.48,0.79 1.28,0.94' fill='%23FFDE00'/><polygon points='1.12,0.93 1.20,1.17 1.00,1.02 1.24,1.02 1.04,1.17' fill='%23FFDE00'/></svg>")}
+  .flag-ar{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23006C35'/><rect x='.55' y='.82' width='1.9' height='.14' fill='%23ffffff'/><rect x='.75' y='1.12' width='1.5' height='.1' fill='%23ffffff'/></svg>")}
+  .flag-hi{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><rect width='3' height='.667' fill='%23FF9933'/><rect y='1.333' width='3' height='.667' fill='%23138808'/><circle cx='1.5' cy='1' r='.26' fill='none' stroke='%23000080' stroke-width='.07'/></svg>")}
+  .flag-tr{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23E30A17'/><circle cx='1.2' cy='1' r='.44' fill='%23ffffff'/><circle cx='1.34' cy='1' r='.35' fill='%23E30A17'/><polygon points='1.82,0.80 1.94,1.16 1.63,0.94 2.01,0.94 1.70,1.16' fill='%23ffffff'/></svg>")}
+  .flag-pl{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><rect y='1' width='3' height='1' fill='%23DC143C'/></svg>")}
+  .flag-nl{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23AE1C28'/><rect y='1' width='3' height='1' fill='%23ffffff'/><rect y='2' width='3' height='1' fill='%2321468B'/></svg>")}
+  .flag-id{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23CE1126'/><rect y='1' width='3' height='1' fill='%23ffffff'/></svg>")}
+  .flag-ms{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 14'><rect width='28' height='14' fill='%23ffffff'/><rect y='0' width='28' height='1' fill='%23CC0001'/><rect y='4' width='28' height='1' fill='%23CC0001'/><rect y='8' width='28' height='1' fill='%23CC0001'/><rect y='12' width='28' height='1' fill='%23CC0001'/><rect y='3' width='28' height='1' fill='%23CC0001'/><rect y='7' width='28' height='1' fill='%23CC0001'/><rect y='11' width='28' height='1' fill='%23CC0001'/><rect y='13' width='28' height='1' fill='%23CC0001'/><rect width='14' height='8' fill='%23010066'/><circle cx='5.6' cy='4' r='2.4' fill='%23FFCC00'/><circle cx='6.7' cy='4' r='2' fill='%23010066'/><polygon points='9.60,2.10 10.72,5.54 7.79,3.41 11.41,3.41 8.48,5.54' fill='%23FFCC00'/></svg>")}
+  .flag-th{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23A51931'/><rect y='.33' width='3' height='1.34' fill='%23F4F5F8'/><rect y='.67' width='3' height='.66' fill='%232D2A4A'/></svg>")}
+  .flag-vi{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23DA251D'/><polygon points='1.50,0.45 1.82,1.44 0.98,0.83 2.02,0.83 1.18,1.44' fill='%23FFFF00'/></svg>")}
+  .flag-tl{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23CE1126'/><rect width='3' height='1' fill='%230038A8'/><path d='M0 0l1.3 1L0 2z' fill='%23ffffff'/><polygon points='0.45,0.78 0.58,1.18 0.24,0.93 0.66,0.93 0.32,1.18' fill='%23FCD116'/></svg>")}
+  .flag-he{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><rect y='.26' width='3' height='.26' fill='%230038B8'/><rect y='1.48' width='3' height='.26' fill='%230038B8'/><path d='M1.5.68l.36.62h-.72zM1.5 1.32l.36-.62h-.72z' fill='none' stroke='%230038B8' stroke-width='.08'/></svg>")}
+  .flag-sv{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><rect width='16' height='11' fill='%23006AA7'/><rect x='4' width='3' height='11' fill='%23FECC00'/><rect y='4' width='16' height='3' fill='%23FECC00'/></svg>")}
+  .flag-da{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><rect width='16' height='11' fill='%23C60C30'/><rect x='4' width='3' height='11' fill='%23ffffff'/><rect y='4' width='16' height='3' fill='%23ffffff'/></svg>")}
+  .flag-no{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><rect width='16' height='11' fill='%23BA0C2F'/><rect x='4' width='3' height='11' fill='%23ffffff'/><rect y='4' width='16' height='3' fill='%23ffffff'/><rect x='5' width='1' height='11' fill='%2300205B'/><rect y='5' width='16' height='1' fill='%2300205B'/></svg>")}
+  .flag-fi{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><rect width='16' height='11' fill='%23ffffff'/><rect x='4' width='3' height='11' fill='%23003580'/><rect y='4' width='16' height='3' fill='%23003580'/></svg>")}
+  .flag-is{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><rect width='16' height='11' fill='%2302529C'/><rect x='4' width='3' height='11' fill='%23ffffff'/><rect y='4' width='16' height='3' fill='%23ffffff'/><rect x='5' width='1' height='11' fill='%23DC1E35'/><rect y='5' width='16' height='1' fill='%23DC1E35'/></svg>")}
+  .flag-cs{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><rect y='1' width='3' height='1' fill='%23D7141A'/><path d='M0 0l1.5 1L0 2z' fill='%2311457E'/></svg>")}
+  .flag-el{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 27 18'><rect width='27' height='18' fill='%23ffffff'/><rect y='0' width='27' height='2' fill='%230D5EAF'/><rect y='4' width='27' height='2' fill='%230D5EAF'/><rect y='8' width='27' height='2' fill='%230D5EAF'/><rect y='12' width='27' height='2' fill='%230D5EAF'/><rect y='16' width='27' height='2' fill='%230D5EAF'/><rect width='10' height='10' fill='%230D5EAF'/><rect x='4' width='2' height='10' fill='%23ffffff'/><rect y='4' width='10' height='2' fill='%23ffffff'/></svg>")}
+  .flag-ro{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23CE1126'/><rect width='2' height='2' fill='%23FCD116'/><rect width='1' height='2' fill='%23002B7F'/></svg>")}
+  .flag-hu{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23CE2939'/><rect y='1' width='3' height='1' fill='%23ffffff'/><rect y='2' width='3' height='1' fill='%23477050'/></svg>")}
+  .flag-bg{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23ffffff'/><rect y='1' width='3' height='1' fill='%2300966E'/><rect y='2' width='3' height='1' fill='%23D62612'/></svg>")}
+  .flag-sr{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23C6363C'/><rect y='1' width='3' height='1' fill='%230C4076'/><rect y='2' width='3' height='1' fill='%23ffffff'/></svg>")}
+  .flag-hr{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23FF0000'/><rect y='1' width='3' height='1' fill='%23ffffff'/><rect y='2' width='3' height='1' fill='%23171796'/></svg>")}
+  .flag-sl{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23ffffff'/><rect y='1' width='3' height='1' fill='%230000FF'/><rect y='2' width='3' height='1' fill='%23FF0000'/></svg>")}
+  .flag-sk{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23ffffff'/><rect y='1' width='3' height='1' fill='%230B4EA2'/><rect y='2' width='3' height='1' fill='%23EE1C25'/></svg>")}
+  .flag-tw{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23FE0000'/><rect width='1.5' height='1' fill='%23000095'/><circle cx='.75' cy='.5' r='.28' fill='%23ffffff'/></svg>")}
+  /* A GLOBE ON BLUE, WITH LAND ON IT — not the wireframe of meridians this used to be.
+     Two reasons it changed. The old one was drawn as a 24x24 square and painted into the 22x15
+     flag box with `cover`, so the circle was cropped top and bottom and sat off-centre next to
+     flags that fit exactly; and hairline 1.5px strokes at 22px wide are the first thing to
+     disappear on a TV, which left "Original" reading as an empty dark tile beside four flags with
+     real colour in them. Filled land on a solid blue field survives the downscale, because it is
+     shape and contrast rather than line weight.
+     The viewBox is the flag box's own 22x15, so nothing crops and the globe lands dead centre. */
+  .flag-und{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 15'><rect width='22' height='15' fill='%235B93D6'/><defs><clipPath id='g'><circle cx='11' cy='7.5' r='5.65'/></clipPath></defs><g clip-path='url(%23g)' fill='%23ffffff'><path d='M4.8 3.1 L8.1 2.3 L9.5 3.5 L8.3 4.9 L6.3 5.1 L5.0 4.3 Z'/><path d='M11.3 2.1 L15.1 1.9 L17.4 3.3 L16.3 5.1 L13.1 5.5 L11.5 4.2 Z'/><path d='M7.5 7.5 L9.7 7.2 L10.1 9.3 L8.8 11.9 L7.3 10.7 L6.9 8.7 Z'/><path d='M13.3 9.5 L15.3 9.9 L15.5 11.5 L13.6 12.1 L12.8 10.7 Z'/></g><circle cx='11' cy='7.5' r='6' fill='none' stroke='%23ffffff' stroke-width='.75'/></svg>")}
+  .flag-sa,.flag-ae,.flag-eg{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23006C35'/><rect x='.55' y='.82' width='1.9' height='.14' fill='%23ffffff'/><rect x='.75' y='1.12' width='1.5' height='.1' fill='%23ffffff'/></svg>")}
+  .flag-my{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 14'><rect width='28' height='14' fill='%23ffffff'/><rect y='0' width='28' height='1' fill='%23CC0001'/><rect y='4' width='28' height='1' fill='%23CC0001'/><rect y='8' width='28' height='1' fill='%23CC0001'/><rect y='12' width='28' height='1' fill='%23CC0001'/><rect y='3' width='28' height='1' fill='%23CC0001'/><rect y='7' width='28' height='1' fill='%23CC0001'/><rect y='11' width='28' height='1' fill='%23CC0001'/><rect y='13' width='28' height='1' fill='%23CC0001'/><rect width='14' height='8' fill='%23010066'/><circle cx='5.6' cy='4' r='2.4' fill='%23FFCC00'/><circle cx='6.7' cy='4' r='2' fill='%23010066'/><polygon points='9.60,2.10 10.72,5.54 7.79,3.41 11.41,3.41 8.48,5.54' fill='%23FFCC00'/></svg>")}
+  .flag-vn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23DA251D'/><polygon points='1.50,0.45 1.82,1.44 0.98,0.83 2.02,0.83 1.18,1.44' fill='%23FFFF00'/></svg>")}
+  .flag-in{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><rect width='3' height='.667' fill='%23FF9933'/><rect y='1.333' width='3' height='.667' fill='%23138808'/><circle cx='1.5' cy='1' r='.26' fill='none' stroke='%23000080' stroke-width='.07'/></svg>")}
+  .flag-il{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><rect y='.26' width='3' height='.26' fill='%230038B8'/><rect y='1.48' width='3' height='.26' fill='%230038B8'/><path d='M1.5.68l.36.62h-.72zM1.5 1.32l.36-.62h-.72z' fill='none' stroke='%230038B8' stroke-width='.08'/></svg>")}
+  .flag-ph{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23CE1126'/><rect width='3' height='1' fill='%230038A8'/><path d='M0 0l1.3 1L0 2z' fill='%23ffffff'/><polygon points='0.45,0.78 0.58,1.18 0.24,0.93 0.66,0.93 0.32,1.18' fill='%23FCD116'/></svg>")}
+  .flag-se{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><rect width='16' height='11' fill='%23006AA7'/><rect x='4' width='3' height='11' fill='%23FECC00'/><rect y='4' width='16' height='3' fill='%23FECC00'/></svg>")}
+  .flag-dk{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><rect width='16' height='11' fill='%23C60C30'/><rect x='4' width='3' height='11' fill='%23ffffff'/><rect y='4' width='16' height='3' fill='%23ffffff'/></svg>")}
+  .flag-cz{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><rect y='1' width='3' height='1' fill='%23D7141A'/><path d='M0 0l1.5 1L0 2z' fill='%2311457E'/></svg>")}
+  .flag-gr{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 27 18'><rect width='27' height='18' fill='%23ffffff'/><rect y='0' width='27' height='2' fill='%230D5EAF'/><rect y='4' width='27' height='2' fill='%230D5EAF'/><rect y='8' width='27' height='2' fill='%230D5EAF'/><rect y='12' width='27' height='2' fill='%230D5EAF'/><rect y='16' width='27' height='2' fill='%230D5EAF'/><rect width='10' height='10' fill='%230D5EAF'/><rect x='4' width='2' height='10' fill='%23ffffff'/><rect y='4' width='10' height='2' fill='%23ffffff'/></svg>")}
+  .flag-rs{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 3'><rect width='3' height='3' fill='%23C6363C'/><rect y='1' width='3' height='1' fill='%230C4076'/><rect y='2' width='3' height='1' fill='%23ffffff'/></svg>")}
+  .flag-jp{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><circle cx='1.5' cy='1' r='.6' fill='%23BC002D'/></svg>")}
+  .flag-kr{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23ffffff'/><circle cx='1.5' cy='1' r='.55' fill='%23CD2E3A'/><path d='M1.5 .45a.275 .275 0 0 0 0 .55 .275 .275 0 0 1 0 .55 .55 .55 0 0 0 0-1.1z' fill='%230047A0'/><g fill='%23000000'><rect x='.28' y='.36' width='.5' height='.07' transform='rotate(35 .53 .4)'/><rect x='2.22' y='1.57' width='.5' height='.07' transform='rotate(35 2.47 1.6)'/></g></svg>")}
+  .flag-cn,.flag-hk{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'><rect width='3' height='2' fill='%23DE2910'/><polygon points='0.60,0.21 0.80,0.83 0.28,0.44 0.92,0.44 0.40,0.83' fill='%23FFDE00'/><polygon points='1.15,0.11 1.23,0.35 1.03,0.20 1.27,0.20 1.07,0.35' fill='%23FFDE00'/><polygon points='1.38,0.37 1.46,0.61 1.26,0.46 1.50,0.46 1.30,0.61' fill='%23FFDE00'/><polygon points='1.36,0.70 1.44,0.94 1.24,0.79 1.48,0.79 1.28,0.94' fill='%23FFDE00'/><polygon points='1.12,0.93 1.20,1.17 1.00,1.02 1.24,1.02 1.04,1.17' fill='%23FFDE00'/></svg>")}
   .ep-list{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;padding-right:4px}
   .ep-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);
     border-radius:4px;background:var(--card);cursor:pointer;transition:border-color .15s,background .15s;text-align:left;width:100%}
@@ -1811,6 +1879,13 @@
   .addon-stream .stream-info{position:relative;z-index:1;flex:1;min-width:0}
   .addon-stream .stream-title{display:block;font-size:16px;color:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .addon-stream .stream-detail{display:block;font-family:var(--font-mono);font-size:13px;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color .4s ease}
+  /* Dolby/DTS audio this browser has no decoder for. The row stays clickable and legible —
+     the release name is evidence, not proof — so this dims rather than disables, and the
+     warning is amber rather than red because nothing has gone wrong yet. */
+  .addon-stream .stream-warn{display:block;font-family:var(--font-mono);font-size:12px;letter-spacing:.02em;
+    color:#e0a94a;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .addon-stream.no-audio{opacity:.72}
+  .addon-stream.no-audio:hover,.addon-stream.no-audio:focus-visible{opacity:1}
   .addon-stream:hover .stream-detail,.addon-stream:focus-visible .stream-detail{color:var(--ink)}
   .addon-stream-chevron{position:relative;z-index:1;flex-shrink:0;color:var(--text-muted);font-size:20px;line-height:1;transition:transform .4s ease,color .4s ease}
   .addon-stream:hover .addon-stream-chevron,.addon-stream:focus-visible .addon-stream-chevron{color:var(--ink);transform:translateX(3px)}
@@ -1898,6 +1973,14 @@
   .vp-overlay.hide-ui .vp-center{opacity:0;pointer-events:none}
 
   /* loading / status overlay */
+  /* Silent-playback toast. Sits above the chrome, clear of the control bar, and does not
+     cover the frame: the video is fine, only the audio track is undecodable. */
+  .vp-silent{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);z-index:6;
+    max-width:min(560px,86vw);padding:11px 16px;border-radius:10px;
+    background:rgba(20,16,8,.92);border:1px solid rgba(224,169,74,.42);color:#f0d9ae;
+    font-family:var(--font-mono);font-size:13px;line-height:1.45;text-align:center;
+    box-shadow:0 10px 30px rgba(0,0,0,.5);pointer-events:none}
+
   .vp-loading{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;
     gap:18px;text-align:center;z-index:3;background:radial-gradient(ellipse at center,rgba(20,20,20,.6),rgba(0,0,0,.85))}
   .vp-loading.show{display:flex}
@@ -1985,6 +2068,17 @@
 
   /* settings menu */
   .vp-menu-wrap{position:relative}
+  /* Audio-track popup. Reuses .vp-menu geometry; only the width and the two rows the gear
+     menu has no equivalent for are new. .vp-icon-muted marks the button as present-but-
+     inert: the release has several audio languages and this browser can select none of
+     them, which is a different state from having no button at all. */
+  .vp-audio-menu{width:300px;padding:10px}
+  .vp-menu-title{font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--text-muted);padding:2px 8px 8px}
+  .vp-menu-note{font-size:12.5px;line-height:1.5;color:#f0d9ae;padding:2px 8px 4px}
+  .vp-icon.vp-icon-muted{opacity:.55}
+  .vp-icon.vp-icon-muted:hover,.vp-icon.vp-icon-muted:focus-visible{opacity:.9}
+
   .vp-menu{position:absolute;bottom:calc(100% + 12px);right:0;width:264px;max-height:72vh;overflow-y:auto;
     overscroll-behavior:contain;
     background:rgb(0, 0, 0);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.1);border-radius:14px;

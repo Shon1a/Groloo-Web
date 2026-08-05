@@ -57,3 +57,6 @@ dev-dist
 # src/lib/heart.ts, so if this list ever falls behind a rename, CI says so out loud.
 !public/assets/groloo-core/
 !public/assets/heart/
+
+# ffmpeg.wasm core — 32 MB, copied from node_modules by scripts/copy-ffmpeg.mjs
+public/ffmpeg/

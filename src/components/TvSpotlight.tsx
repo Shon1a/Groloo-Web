@@ -105,6 +105,40 @@ const SLIDE_MS_CHAINED = 320;
 /** Under this gap between presses, the remote is being held rather than tapped. */
 const SLIDE_CHAIN_WINDOW = 320;
 
+/* How long a press will wait for the incoming billboard to be decoded before dissolving anyway.
+ * The full reasoning is on the swap gate; the number is "comfortably under half of SLIDE_MS", so
+ * even a capped-out swap lands while the strip is still moving. */
+const SWAP_WAIT_CAP = 200;
+
+/* ---- HOW FAST THE PHOTOGRAPH ITSELF COMES UP, and why a HELD key needs its own answer --------
+ *
+ * MEASURED, and it is not the thing it looks like. A held key leaves the billboard dim for about
+ * half the walk, which reads exactly like artwork that has not loaded — so the obvious diagnosis
+ * is caching, and the obvious fix is to fetch further ahead. That was tried and measured and it
+ * does NOTHING: five cards of lookahead against one card came out at 52.8% vs 52.7%, because by
+ * four presses in the whole row has already been requested either way.
+ *
+ * What the frames actually say is that on the dim frames the picture had ALREADY ARRIVED — `rdy`
+ * was true on 18 of 20, with none waiting on bytes. It was mid-fade. `.art-photo` takes 450ms to
+ * reach full opacity, a held key arrives every ~120ms, and a fade four presses long simply never
+ * finishes: each card starts its rise, gets a fifth of the way up, and is replaced. The row was
+ * not short of pictures, it was short of TIME TO SHOW THEM.
+ *
+ * So the fade follows the pressing, exactly as the slide already does (SLIDE_MS /
+ * SLIDE_MS_CHAINED, same `chained` test, same one idea about how this build answers a held key).
+ * A deliberate press keeps the full 450ms, which is the settle the reference has and what makes a
+ * single press feel like weight rather than a cut. A chained press gets a fade that FITS INSIDE
+ * one press, so every card you fly past is a picture at full strength instead of a fifth of one. */
+const ART_FADE_MS = 450;
+/** Comfortably inside the ~120ms of a held key, so each card completes before the next arrives. */
+const ART_FADE_MS_CHAINED = 90;
+
+/* URLs already asked for by the warm-ahead, so walking back and forth over a row does not build a
+ * fresh Image per press for a picture the browser already has. Module-scoped because the whole
+ * point is that it OUTLIVES the row: this is what makes a return visit to a row free.
+ * Strings only — no bitmaps are pinned here, which is the note on the warm effect. */
+const warmed = new Set<string>();
+
 /* Renditions sized to what is painted, not to the source. The billboard is 16:9 of a <=380px
  * row (~675px wide) and thumbs paint at ~228px — see the note in lib/hero.ts for why reaching
  * for `original` on a TV is fatal rather than merely wasteful. */
@@ -546,6 +580,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     return a ? { ...it, ...a } : it;
   };
 
+  /* THE BILLBOARD'S URL, IN ONE PLACE, because three things now ask for it and a fourth would be
+   * a bug. The warm-ahead below fetches it, the swap gate decodes it, and `heroArt` paints it — if
+   * any of them built the string itself and drifted by a rendition, the warm would be a cache MISS
+   * that still looks like a hit from here, and the blink would come back with nothing to show why.
+   *
+   * ON AN `enrich` ROW A POSTER IS NOT AN ACCEPTABLE STAND-IN for the backdrop that has not
+   * arrived yet: it is a portrait crammed into 16:9, which reads as a broken picture rather than
+   * as a card waiting. The branded gradient already exists for exactly this and holds the frame
+   * for the one request. Catalogue rows keep the old fallback — their cards genuinely sometimes
+   * have a poster and no backdrop, with nothing else coming. */
+  const billboardUrl = (it: MediaItem): string => {
+    const source = enrich ? it.backdrop : (it.backdrop || it.poster);
+    return visible ? imgW(source || '', BILLBOARD_RENDITION) : '';
+  };
+
   /* THE STRIP IS MEMOISED, AND THAT IS A SCROLL FIX, NOT A MICRO-OPTIMISATION.
    *
    * Every arrow press flips `open` on two rows. Without this, React would rebuild 24 <button>
@@ -723,14 +772,120 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * the walk — the position it is standing on simply stops being the end card and becomes the
    * first title of the batch that just arrived. Without the length in here nothing would tell the
    * billboard that, and it would go on showing a "+" card until the next press. */
+  /* ---- THE SWAP WAITS FOR A PICTURE TO SWAP TO ----------------------------------------------
+   * THE DEFECT: the billboard blinked through black on every press, briefly and unmistakably.
+   *
+   * It was the two fades disagreeing about what they were for. The LAYER cross-dissolves in 90ms
+   * (tv.css) — deliberately, it is a reaction and not a journey — but the PHOTOGRAPH inside it is
+   * held at zero until `decode()` resolves and then takes 450ms to arrive (FadeBg). So the layers
+   * traded places long before the incoming layer had anything in it, and for the gap between them
+   * the billboard was showing the only thing that layer HAD: `heroFallbackGradient`, which is
+   * hsl(0 0% 14%) → hsl(0 0% 6%). That gradient is doing its real job on a cold row, where it
+   * holds the frame while the first picture loads. Mid-walk it is just black.
+   *
+   * FadeBg could not have fixed this from the inside. It guarantees a picture arrives WHOLE, which
+   * it does — the banding is gone. It cannot know that the thing underneath it is a layer being
+   * dissolved to, and nothing at that level can: the decision "is there anything to dissolve to
+   * yet" belongs to whoever owns both layers, which is here.
+   *
+   * So the press now holds the swap until the incoming bitmap is decoded, and the cross-dissolve
+   * goes picture → picture the way it always read as intending to. The gradient stays exactly
+   * where it was for the case it was written for and is never seen on a walk.
+   *
+   * THE ROW IS NOT HELD WITH IT. The strip slides off `active` and moves on the press frame
+   * regardless, so the press is always answered instantly — it is the artwork that arrives on the
+   * beat rather than early and empty, which is also what the reference does.
+   *
+   * WARM, THIS COSTS NOTHING AND IS THE NORMAL CASE: `complete && naturalWidth` is checked first,
+   * so a neighbour the effect below already fetched flips synchronously, with no wait at all and
+   * not a frame's delay against the old behaviour. */
   useEffect(() => {
     if (firstRun.current) { firstRun.current = false; return; }
-    setXfade((s) => {
-      const back: 'a' | 'b' = s.front === 'a' ? 'b' : 'a';
-      return { ...s, [back]: slotAt(active), front: back };
-    });
+    const slot = slotAt(active);
+    let spent = false;
+    const flip = () => {
+      if (spent) return;
+      spent = true;
+      setXfade((s) => {
+        const back: 'a' | 'b' = s.front === 'a' ? 'b' : 'a';
+        return { ...s, [back]: slot, front: back };
+      });
+    };
+    /* The end card has no artwork by design, and an `enrich` row whose detail has not landed yet
+     * has none to wait for either — both dissolve immediately, exactly as before. */
+    const url = slot === 'end' ? '' : billboardUrl(withArt(slot));
+    if (!url) { flip(); return; }
+
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = url;
+    if (img.complete && img.naturalWidth > 0) { flip(); return; }
+    if (typeof img.decode === 'function') img.decode().then(flip, flip);
+    else { img.onload = flip; img.onerror = flip; }
+    /* THE CAP IS WHAT KEEPS A GATE FROM BECOMING A STALL. A cold row on a slow set must not leave
+     * the billboard on the title you just walked off — past this the swap happens anyway and the
+     * old behaviour takes over (gradient, then the photo fading in when it lands), which is a
+     * worse frame but never a stuck one. Under half of SLIDE_MS on purpose: even at the cap the
+     * artwork changes while the strip is still travelling, so the press stays one gesture.
+     *
+     * A chained press cancels a pending flip through the cleanup rather than queueing behind it —
+     * holding a direction walks to where the remote actually is, not through every card on the
+     * way. */
+    const capId = window.setTimeout(flip, SWAP_WAIT_CAP);
+    return () => { spent = true; window.clearTimeout(capId); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, n]);
+
+  /* ---- THE NEXT BILLBOARD IS FETCHED BEFORE IT IS ASKED FOR ---------------------------------
+   * The gate above removes the black frame; this is what keeps it from costing anything, and the
+   * two are one change. Without it every press waits out a cold fetch AND a decode of a 780px
+   * JPEG, so the gate would trade a blink for a lag — the same defect wearing the other hat.
+   *
+   * NOTHING WAS WARMING THIS. The strip promotes its tiles nine cards ahead of the walk, which
+   * looks like it should already cover the billboard and does not: those are THUMB_RENDITION
+   * (w342) off `poster || backdrop`, and the billboard is BILLBOARD_RENDITION (w780) off
+   * `backdrop || poster`. Different rendition of a different picture — a different URL, and so a
+   * different cache entry. The billboard was the one bitmap on this row that was always cold.
+   *
+   * ONE CARD EITHER WAY, matching the span the preview and `enrich` already use, and for the same
+   * reason: one press of Left or Right is what happens next. The walk wraps, so the warm wraps.
+   *
+   * NOT RETAINED, DELIBERATELY. The Image is dropped as soon as it has decoded — holding it would
+   * pin a ~1.4MB pixmap per neighbour per row, and thirteen rows of that is precisely the passive
+   * load this component is arranged to avoid (see the note on `visible`). The BYTES stay in the
+   * HTTP cache, which is the part that costs a round trip; the re-decode at the gate is fast and
+   * off the main thread.
+   *
+   * ON THE IDLE FRAME, for the reason the tile promotion records one screenful down: decoding
+   * artwork on the keypress frame measured WORSE than not windowing at all, because it lands on
+   * the one frame that is animating a cross-fade. Between presses the row is doing nothing. */
+  const BILLBOARD_WARM_SPAN = 1;
+  useEffect(() => {
+    if (!visible || stops < 2) return;
+    const warm = () => {
+      for (let d = 1; d <= BILLBOARD_WARM_SPAN; d++) {
+        for (const i of [(active + d) % stops, (active - d + stops) % stops]) {
+          const slot = slotAt(i);
+          if (slot === 'end') continue;
+          const url = billboardUrl(withArt(slot));
+          if (!url || warmed.has(url)) continue;
+          warmed.add(url);
+          const img = new Image();
+          img.decoding = 'async';
+          img.src = url;
+          if (typeof img.decode === 'function') img.decode().catch(() => { /* 404 / expired signature — the gate's cap covers it */ });
+        }
+      }
+    };
+    const ric = window.requestIdleCallback;
+    if (typeof ric === 'function') {
+      const id = ric(warm, { timeout: 600 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(warm, 120);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, active, stops, artById]);
 
   // Suppress the strip's scroll animation on a wrap / multi-step jump, so it resets instead of
   // rewinding through every card.
@@ -782,6 +937,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const el = sectionRef.current;
     if (el) {
       el.style.setProperty('--sp-slide', `${chained ? SLIDE_MS_CHAINED : SLIDE_MS}ms`);
+      /* The photograph's own rise, on the same test as the slide — the reasoning, and the
+       * measurement that says this is a fade problem rather than the caching problem it looks
+       * like, are at ART_FADE_MS. Set on the SECTION for the reason `--sp-slide` is: it has to
+       * inherit down to both cross-fade layers, and the section is the nearest ancestor of both. */
+      el.style.setProperty('--sp-art-fade', `${chained ? ART_FADE_MS_CHAINED : ART_FADE_MS}ms`);
       /* WHICH WAY THE PRESS WENT. The artwork's drift needs it — it enters from the side the
        * remote came from — and CSS cannot work it out, because CSS only ever sees the new state.
        * +1 is rightward. The COPY does not use it: measured across every frame of the reference,
@@ -794,17 +954,15 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /* Until the row is near the viewport the layer keeps the branded gradient and requests no
    * bitmap at all — see the memory note in the header. */
   const heroArt = (it: MediaItem) => {
-    /* ON AN `enrich` ROW A POSTER IS NOT AN ACCEPTABLE STAND-IN for the backdrop that has not
-     * arrived yet: it is a portrait crammed into 16:9, which reads as a broken picture rather
-     * than as a card waiting. The branded gradient already exists for exactly this and holds the
-     * frame for the one request. Catalogue rows keep the old fallback — their cards genuinely
-     * sometimes have a poster and no backdrop, with nothing else coming. */
-    const source = enrich ? it.backdrop : (it.backdrop || it.poster);
-    const bg = visible ? imgW(source || '', BILLBOARD_RENDITION) : '';
+    /* THROUGH `billboardUrl`, never built here — the warm-ahead and the swap gate both target
+     * this exact string, and a second copy of the rendition logic is how they would silently stop
+     * matching it. The reasoning about which source a row may fall back to is up there with it. */
+    const bg = billboardUrl(it);
     /* The gradient is no longer an EITHER/OR with the picture — it is what sits underneath one.
      * See FadeBg: the billboard is the largest bitmap on the home screen, and a 676px-wide JPEG
      * decoding straight into the document is the "loads top to bottom" band-by-band paint that
-     * this row was the most obvious victim of. */
+     * this row was the most obvious victim of. It is also no longer seen DURING a walk, which is
+     * a separate defect with its own note on the swap gate. */
     return {
       url: bg || undefined,
       fallback: heroFallbackGradient(it),
