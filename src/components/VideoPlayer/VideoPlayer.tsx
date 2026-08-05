@@ -5,6 +5,11 @@ import { useSettings } from '../../stores/settings';
 import { useT } from '../../i18n/i18n';
 import { loadHls, isHlsUrl, type HlsInstance } from '../../lib/hls';
 import { toVttBlobUrl } from '../../lib/subtitles';
+import { isDecodingSilently, SILENT_AFTER } from '../../lib/codecs';
+import { resolvePlayback } from '../../lib/streamingServer';
+import { playDemuxed, probeUrl, type DemuxHandle, type DemuxBlocker } from '../../lib/browserDemux';
+import { playWithWasmAudio, needsWasmDecoder, type WasmAudioHandle } from '../../lib/wasmAudio';
+import { langName } from '../../lib/addonClient';
 import { apiFetch } from '../../lib/api';
 import { registerBackHandler, mediaAction } from '../../lib/tvKeys';
 import EpisodePanel from './EpisodePanel';
@@ -23,19 +28,102 @@ const IcEpisodes = <svg viewBox="0 0 24 24" width="18" height="18" fill="current
 
 // friendly name for an HLS audio rendition + a snapped quality label (matches vanilla)
 const AUDIO_NAMES: Record<string, string> = { eng: 'English', en: 'English', rus: 'Russian', ru: 'Russian', ka: 'ქართული', kat: 'ქართული', geo: 'ქართული', ukr: 'Ukrainian', uk: 'Ukrainian', tur: 'Turkish', fre: 'French', fr: 'French', ger: 'German', de: 'German', ita: 'Italian', jpn: 'Japanese', ja: 'Japanese', kor: 'Korean', spa: 'Spanish', es: 'Spanish' };
-function audioName(a: { name?: string; lang?: string }, i: number): string { return a.name || AUDIO_NAMES[(a.lang || '').toLowerCase()] || a.lang || `Track ${i + 1}`; }
+/* Accepts both track shapes: hls.js renditions ({name, lang}) and native
+ * AudioTrack ({label, language}). The code lookup strips any region subtag so
+ * "ru-RU" still resolves to "Russian" rather than falling through to the raw tag. */
+function audioName(a: { name?: string; lang?: string; label?: string; language?: string }, i: number): string {
+  const raw = a.lang || a.language || '';
+  const tag = raw.toLowerCase().replace(/_/g, '-').split('-')[0];
+  return a.name || a.label || AUDIO_NAMES[tag] || raw || `Track ${i + 1}`;
+}
 function levelLabel(l: { height?: number; width?: number; bitrate?: number }): string {
   const eq = Math.max(l.height || 0, l.width ? Math.round((l.width * 9) / 16) : 0);
   if (eq >= 1900) return '2160p'; if (eq >= 1300) return '1440p'; if (eq >= 900) return '1080p';
   if (eq >= 650) return '720p'; if (eq >= 400) return '480p'; if (eq >= 300) return '360p';
   if (eq > 0) return '240p'; return l.bitrate ? Math.round(l.bitrate / 1000) + 'k' : '?';
 }
+/* Every spelling of a language an audio rendition might be tagged with: ISO-639-1, both
+ * 639-2 forms, the English name and the endonym. A track arrives as "rus", "ru-RU",
+ * "Russian" or "Русский" depending on who muxed it, and all four have to hit.
+ *
+ * MATCHING IS AGAINST THIS SET, NEVER A SUBSTRING OF THE CODE. The previous rule was
+ * `new RegExp(pref, 'i').test(name + ' ' + lang)`, i.e. the bare two-letter code tested as
+ * a free substring — so the default preference 'en' matched "French", "Slovenian" and
+ * "Danish" before it reached "English", and asking for English handed you whichever of
+ * those the muxer happened to list first. Tags match on the base subtag; names match on a
+ * whole word. */
+const LANG_ALIASES: Record<string, string[]> = {
+  en: ['en', 'eng', 'english'],
+  ru: ['ru', 'rus', 'russian', 'русский'],
+  ka: ['ka', 'kat', 'geo', 'georgian', 'ქართული'],
+  uk: ['uk', 'ukr', 'ukrainian', 'українська'],
+  de: ['de', 'ger', 'deu', 'german', 'deutsch'],
+  fr: ['fr', 'fre', 'fra', 'french', 'français', 'francais'],
+  es: ['es', 'spa', 'spanish', 'español', 'espanol', 'castellano', 'latino'],
+  it: ['it', 'ita', 'italian', 'italiano'],
+  pt: ['pt', 'por', 'portuguese', 'português', 'portugues', 'brazilian'],
+  ja: ['ja', 'jpn', 'jap', 'japanese', '日本語'],
+  ko: ['ko', 'kor', 'korean', '한국어'],
+  zh: ['zh', 'chi', 'zho', 'cmn', 'chinese', 'mandarin', '中文'],
+  ar: ['ar', 'ara', 'arabic', 'العربية'],
+  hi: ['hi', 'hin', 'hindi', 'हिन्दी'],
+  tr: ['tr', 'tur', 'turkish', 'türkçe', 'turkce'],
+  pl: ['pl', 'pol', 'polish', 'polski'],
+  nl: ['nl', 'dut', 'nld', 'dutch', 'nederlands'],
+  id: ['id', 'ind', 'indonesian', 'bahasa indonesia'],
+  ms: ['ms', 'may', 'msa', 'malay', 'melayu'],
+  th: ['th', 'tha', 'thai', 'ไทย'],
+  vi: ['vi', 'vie', 'vietnamese', 'tiếng việt'],
+  he: ['he', 'heb', 'hebrew', 'עברית'],
+  sv: ['sv', 'swe', 'swedish', 'svenska'],
+  da: ['da', 'dan', 'danish', 'dansk'],
+  no: ['no', 'nor', 'nob', 'norwegian', 'norsk'],
+  fi: ['fi', 'fin', 'finnish', 'suomi'],
+  cs: ['cs', 'cze', 'ces', 'czech', 'čeština'],
+  el: ['el', 'gre', 'ell', 'greek', 'ελληνικά'],
+  ro: ['ro', 'rum', 'ron', 'romanian', 'română'],
+  hu: ['hu', 'hun', 'hungarian', 'magyar'],
+};
+const langAliases = (code: string): string[] => LANG_ALIASES[code.toLowerCase()] || [code.toLowerCase()];
+
+/** Does this audio rendition carry `code`? `lang` is compared on its base subtag
+ *  (`ru-RU` → `ru`); `name` is compared on whole words, so "French" cannot answer for
+ *  "en" and "Latino" cannot be found inside some unrelated release string. */
+function trackIsLang(t: { name?: string; lang?: string; label?: string; language?: string }, code: string): boolean {
+  const aliases = langAliases(code);
+  const tag = (t.lang || t.language || '').toLowerCase().replace(/_/g, '-').split('-')[0].trim();
+  if (tag && aliases.includes(tag)) return true;
+  const name = (t.name || t.label || '').toLowerCase().trim();
+  if (!name) return false;
+  return aliases.some((a) => new RegExp(`(^|[^\\p{L}])${a}($|[^\\p{L}])`, 'u').test(name));
+}
+
+/** Index of the first rendition in `code`, or -1. 'original'/'' → -1 (leave the stream's
+ *  own default alone, which is what "Original" means). */
+function pickAudioTrack(tracks: Array<{ name?: string; lang?: string; label?: string; language?: string }>, code: string): number {
+  if (!code || code === 'original') return -1;
+  return tracks.findIndex((t) => trackIsLang(t, code));
+}
+
 function applyAudioPref(hls: HlsInstance, pref: string) {
-  if (!pref || pref === 'original') return;
-  const re = new RegExp(pref, 'i');
-  const i = hls.audioTracks.findIndex((a) => re.test((a.name || '') + ' ' + (a.lang || '')));
+  const i = pickAudioTrack(hls.audioTracks || [], pref);
   if (i >= 0 && hls.audioTrack !== i) { try { hls.audioTrack = i; } catch { /* ignore */ } }
 }
+
+/* Native (progressive mp4/mkv/webm) playback has its own track list, and it is NOT
+ * hls.js's. `HTMLMediaElement.audioTracks` is implemented by Safari, iOS and the WebKit-
+ * derived TV browsers (Tizen, webOS) — where the TV build actually runs — and is absent
+ * in Chrome, Edge and Firefox, which expose no way to enumerate or switch the audio
+ * tracks of a progressive file at all. Where it is missing a multi-audio release plays
+ * whichever track the container marks default and no web player can do better; the menu
+ * simply stays empty rather than offering a switch that would do nothing. */
+interface NativeAudioTrack { id?: string; kind?: string; label?: string; language?: string; enabled: boolean }
+interface NativeAudioTrackList { length: number; [i: number]: NativeAudioTrack; onchange?: ((this: unknown, ev: Event) => void) | null }
+const nativeAudioTracks = (v: HTMLVideoElement): NativeAudioTrackList | null => {
+  const l = (v as unknown as { audioTracks?: NativeAudioTrackList }).audioTracks;
+  return l && typeof l.length === 'number' ? l : null;
+};
+const nativeAudioList = (l: NativeAudioTrackList): NativeAudioTrack[] => Array.from({ length: l.length }, (_, i) => l[i]);
 
 /* Core video player — reproduces the #playerOverlay markup/classes (so app.css
  * styles it) with HLS.js + native playback and the essential controls: play/pause,
@@ -61,6 +149,16 @@ const IcFwd = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor
 const IcMute = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4z" /><path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M18.5 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>;
 const IcGear = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.8 7.8 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1l-.4-2.6h-3.8l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L4.6 11a7.8 7.8 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.6h3.8l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4zM12 15.2A3.2 3.2 0 1 1 12 8.8a3.2 3.2 0 0 1 0 6.4z" /></svg>;
 const IcPip = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M3 5h18v14H3V5zm2 2v10h14V7H5zm6 4h7v5h-7v-5z" /></svg>;
+/* Audio track: a speaker with stacked bars — deliberately NOT the volume speaker (which has
+ * arcs) and not a musical note, which reads as "music" rather than "spoken language". */
+const IcAudioTrack = (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+    <path d="M3 9v6h3.6L11 18.8V5.2L6.6 9H3z" />
+    <rect x="13.6" y="7" width="1.8" height="10" rx=".9" />
+    <rect x="17" y="9.2" width="1.8" height="5.6" rx=".9" />
+    <rect x="20.4" y="10.8" width="1.8" height="2.4" rx=".9" />
+  </svg>
+);
 const IcFs = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M4 9V4h5v2H6v3H4zm11-5h5v5h-2V6h-3V4zM6 15v3h3v2H4v-5h2zm12 0h2v5h-5v-2h3v-3z" /></svg>;
 
 // gesture-HUD glyphs: double-chevron seek ripples + volume/brightness meters
@@ -146,6 +244,9 @@ export default function VideoPlayer() {
   const recordedRef = useRef(false);   // record watch-history once per opened source
   const lastProgRef = useRef(0);       // throttle progress writes
   const resumedRef = useRef(false);    // seek-to-resume once per source
+  const audioPrefDone = useRef(false); // audio-language preference applied once per source
+  const demuxRef = useRef<DemuxHandle | null>(null); // in-page demuxer, when one is driving playback
+  const wasmRef = useRef<WasmAudioHandle | null>(null); // in-page Dolby/DTS decoder, likewise
 
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
@@ -170,6 +271,10 @@ export default function VideoPlayer() {
   const [vtt, setVtt] = useState<Array<{ lang: string; label: string; url: string }>>([]);
   const [epPanelOpen, setEpPanelOpen] = useState(false);
   const [segments, setSegments] = useState<Segments | null>(null);
+  const [silent, setSilent] = useState(false); // playing video, decoding no audio at all
+  const [audioOpen, setAudioOpen] = useState(false); // the audio-track popup
+  // why in-page demuxing is not driving this source; null when it is
+  const [demuxBlocker, setDemuxBlocker] = useState<DemuxBlocker | null>(null);
   const ccOn = currentSub >= 0;
 
   // --- TV remote (see "TEN FEET AWAY" above; all of this is dropped from the web build) ---
@@ -200,22 +305,48 @@ export default function VideoPlayer() {
   const vHudTimer = useRef<number | undefined>(undefined);
   useEffect(() => { hideUiRef.current = hideUi; }, [hideUi]);
 
+  /* RESOLVE BEFORE ATTACHING. A progressive file goes to the local streaming server first
+   * to be re-served as HLS when that would gain anything — several audio tracks to choose
+   * between, a codec this browser cannot decode, a container it will not open. See
+   * lib/streamingServer.ts. Costs one probe, and only when a server is actually running;
+   * every failure path falls back to the original URL, so this can only improve on direct
+   * playback. `playSrc` gates the attach effect below, which is what keeps the element
+   * from loading the raw URL first and swapping under itself. */
+  const [playSrc, setPlaySrc] = useState<{ url: string; kind: 'hls' | 'url'; via: boolean } | null>(null);
+  useEffect(() => {
+    if (!source) { setPlaySrc(null); return; }
+    const ctrl = new AbortController();
+    let alive = true;
+    setPlaySrc(null); setLoading(true); setErrKind(null); setSilent(false); setDemuxBlocker(null);
+    resolvePlayback(source.url, source.kind, ctrl.signal)
+      .then((r) => { if (alive) setPlaySrc(r); })
+      .catch(() => { if (alive) setPlaySrc({ url: source.url, kind: source.kind || 'url', via: false }); });
+    return () => { alive = false; ctrl.abort(); };
+  }, [source]);
+
   // attach the source (HLS via hls.js, else native)
   useEffect(() => {
     const v = videoRef.current;
-    if (!v || !source) return;
+    if (!v || !source || !playSrc) return;
     let cancelled = false;
     recordedRef.current = false; resumedRef.current = false; lastProgRef.current = 0;
-    setLoading(true); setErrKind(null); setPlaying(false); setCur(0); setDur(0); setBuffered(0); setLevels([]); setCurLevel(-1); setMenuOpen(false); setHideUi(false); setAudioTracks([]); setCurAudio(0); setEpPanelOpen(false); setBright(1); setSeekHud(null); setVHud(null); seekAccumRef.current = { side: '', secs: 0 };
+    setLoading(true); setErrKind(null); setPlaying(false); setCur(0); setDur(0); setBuffered(0); setLevels([]); setCurLevel(-1); setMenuOpen(false); setAudioOpen(false); setHideUi(false); setAudioTracks([]); setCurAudio(0); setEpPanelOpen(false); setBright(1); setSeekHud(null); setVHud(null); seekAccumRef.current = { side: '', secs: 0 };
     setTvNav(false); setSeekPreview(null); seekPreviewRef.current = null; window.clearTimeout(seekCommitTimer.current);
-    const url = source.url;
+    const url = playSrc.url;
     // Prefer hls.js for any HLS source. DON'T gate on canPlayType('…mpegurl'):
     // modern Chrome returns "maybe" for that MIME type yet CANNOT actually play HLS
     // (no native demuxer) — trusting it sent every HLS stream down the native path and
     // stalled on a black screen. Native HLS is only a fallback for Safari/iOS, where
     // hls.js reports isSupported()===false.
-    const isHls = source.kind === 'hls' || isHlsUrl(url);
+    const isHls = playSrc.kind === 'hls' || isHlsUrl(url);
     const canNativeHls = !!v.canPlayType('application/vnd.apple.mpegurl');
+    /* The language THIS playback was asked for beats the standing preference. `source.lang`
+     * is the bucket the user clicked in the detail modal — an explicit, per-title choice —
+     * and `settings.audioLang` is the default for when they made none. Applied once per
+     * source (the ref), so a manual pick from the audio menu is never overwritten by a
+     * later `hlsAudioTracksUpdated`. */
+    const wantLang = source.lang || settings.audioLang;
+    audioPrefDone.current = false;
 
     if (isHls) {
       loadHls().then((Hls) => {
@@ -280,7 +411,7 @@ export default function VideoPlayer() {
             }
             // audio renditions + preferred audio language
             if (hls.audioTracks && hls.audioTracks.length > 1) {
-              applyAudioPref(hls, settings.audioLang);
+              if (!audioPrefDone.current) { applyAudioPref(hls, wantLang); audioPrefDone.current = true; }
               setAudioTracks(hls.audioTracks.map((a, i) => ({ i, name: audioName(a, i) })));
               setCurAudio(hls.audioTrack);
             }
@@ -288,8 +419,17 @@ export default function VideoPlayer() {
           });
           hls.on('hlsLevelSwitched', () => setCurLevel(hls.currentLevel));
           hls.on('hlsAudioTrackSwitched', () => setCurAudio(hls.audioTrack));
+          /* Renditions can land AFTER manifest-parsed (a demuxed-alternate-audio manifest
+           * publishes its list on the first fragment), which is why the preference is
+           * applied here too and not only above — otherwise the pick silently no-opped on
+           * exactly the multi-audio streams it exists for. `audioPrefDone` keeps it to one
+           * application per source so it can't stomp a manual choice from the menu. */
           hls.on('hlsAudioTracksUpdated', () => {
-            if (hls.audioTracks && hls.audioTracks.length > 1) { setAudioTracks(hls.audioTracks.map((a, i) => ({ i, name: audioName(a, i) }))); setCurAudio(hls.audioTrack); }
+            if (hls.audioTracks && hls.audioTracks.length > 1) {
+              if (!audioPrefDone.current) { applyAudioPref(hls, wantLang); audioPrefDone.current = true; }
+              setAudioTracks(hls.audioTracks.map((a, i) => ({ i, name: audioName(a, i) })));
+              setCurAudio(hls.audioTrack);
+            }
           });
         } else if (canNativeHls) {
           // Safari / iOS: real native HLS playback.
@@ -299,18 +439,130 @@ export default function VideoPlayer() {
         }
       });
     } else {
-      // progressive file (mp4/webm/…) — native playback
-      v.src = url; v.play().catch(() => {});
+      /* PROGRESSIVE FILE. Straight to <video> is the fast path and the wrong one when the
+       * file has more than one audio track, because the element will play whichever the
+       * muxer marked default and offer no way to change it. `playDemuxed` opens the
+       * container in the page instead and feeds MediaSource one track at a time, which is
+       * the only route to audio-track switching that needs nothing installed.
+       *
+       * ONLY WHEN IT BUYS SOMETHING. One audio track, or a codec no browser decodes
+       * (AC-3/DTS), and demuxing gains nothing — so the element gets the URL as before and
+       * pays none of the cost. Any failure falls back the same way: this can start
+       * playback that would otherwise be in the wrong language, and can never prevent
+       * playback that would otherwise have worked. */
+      void (async () => {
+        const probe = await probeUrl(url).catch(() => ({ ok: false as const, reason: 'unreadable' as const }));
+        if (cancelled) return;
+        if (!probe.ok) {
+          /* DOLBY / DTS — the one blocker with an answer. Everything else falls through to
+           * direct playback as before; only this case is worth 32 MB of decoder, and only
+           * once the file is already open and known to need it. Failure falls back to the
+           * same direct playback, so the worst case is what happened before. */
+          const wasm = probe.reason === 'undecodable-audio'
+            && probe.tracks?.find((t) => needsWasmDecoder(t.codec));
+          if (wasm) {
+            try {
+              setDemuxBlocker(null);
+              setLoading(true);
+              const pick = probe.tracks!.findIndex((t) => trackIsLang({ lang: t.language }, wantLang));
+              const h = await playWithWasmAudio(v, url, pick >= 0 ? pick : 0,
+                (m) => { if (import.meta.env.DEV) console.info('[wasm-audio]', m); });
+              if (cancelled) { void h.destroy(); return; }
+              wasmRef.current = h;
+              setAudioTracks(h.tracks.map((t) => ({ i: t.index, name: audioName({ lang: t.language }, t.index) })));
+              setCurAudio(pick >= 0 ? pick : 0);
+              audioPrefDone.current = true;
+              v.play().catch(() => {});
+              return;
+            } catch (e) {
+              if (import.meta.env.DEV) console.info('[wasm-audio] falling back:', (e as Error).message);
+            }
+          }
+          setDemuxBlocker(probe.reason);
+          v.src = url; v.play().catch(() => {});
+          return;
+        }
+        setDemuxBlocker(null);
+        try {
+          const want = Math.max(0, probe.tracks.findIndex((t) => t.playable && trackIsLang({ lang: t.language }, wantLang)));
+          const h = await playDemuxed(v, url, want, (m) => { if (import.meta.env.DEV) console.info('[demux]', m); });
+          if (cancelled) { void h.destroy(); return; }
+          demuxRef.current = h;
+          setAudioTracks(h.tracks.map((t) => ({ i: t.index, name: audioName({ lang: t.language }, t.index) })));
+          setCurAudio(h.current());
+          audioPrefDone.current = true;  // the language was chosen when the stream was built
+          v.play().catch(() => {});
+        } catch (e) {
+          if (import.meta.env.DEV) console.info('[demux] falling back to direct playback:', (e as Error).message);
+          v.src = url; v.play().catch(() => {});
+        }
+      })();
     }
+
+    /* Native audio renditions, for both native paths above (progressive files AND
+     * Safari's own HLS). The list is only populated once metadata is in, and on some
+     * WebKit builds it arrives a beat later still, hence the `addtrack` listener as well
+     * as `loadedmetadata`. Where the browser has no `audioTracks` (Chrome, Edge, Firefox)
+     * every line here is a no-op and the menu stays empty — see the note on
+     * `nativeAudioTracks`. hls.js drives its own list and must not be touched from here. */
+    const syncNativeAudio = () => {
+      if (cancelled || hlsRef.current) return;
+      const list = nativeAudioTracks(v);
+      if (!list || list.length < 2) return;
+      const tracks = nativeAudioList(list);
+      if (!audioPrefDone.current) {
+        const want = pickAudioTrack(tracks, wantLang);
+        if (want >= 0) { try { tracks.forEach((t, i) => { t.enabled = i === want; }); } catch { /* ignore */ } }
+        audioPrefDone.current = true;
+      }
+      setAudioTracks(tracks.map((t, i) => ({ i, name: audioName(t, i) })));
+      setCurAudio(Math.max(0, tracks.findIndex((t) => t.enabled)));
+    };
+    v.addEventListener('loadedmetadata', syncNativeAudio);
+    const nlist = nativeAudioTracks(v) as unknown as EventTarget | null;
+    nlist?.addEventListener?.('addtrack', syncNativeAudio);
+    nlist?.addEventListener?.('change', syncNativeAudio);
 
     return () => {
       cancelled = true;
       window.clearTimeout(hideTimer.current); // don't let a pending auto-hide fire into the next open
+      v.removeEventListener('loadedmetadata', syncNativeAudio);
+      nlist?.removeEventListener?.('addtrack', syncNativeAudio);
+      nlist?.removeEventListener?.('change', syncNativeAudio);
       flush(); // persist any pending resume-progress when the source changes / player closes
+      if (wasmRef.current) { void wasmRef.current.destroy(); wasmRef.current = null; }
+      if (demuxRef.current) { void demuxRef.current.destroy(); demuxRef.current = null; }
       if (hlsRef.current) { try { hlsRef.current.destroy(); } catch { /* ignore */ } hlsRef.current = null; }
       try { v.removeAttribute('src'); v.load(); } catch { /* ignore */ }
     };
-  }, [source, flush]);
+  }, [playSrc, source, flush]);
+
+  /* SILENT PLAYBACK IS NOT AN ERROR AND NOTHING ELSE REPORTS IT.
+   *
+   * Chrome and Edge ship no Dolby or DTS decoder, so an AC-3 / E-AC-3 / DTS track decodes
+   * to nothing while the video plays perfectly: no `error` event, no stall, no clue. The
+   * source list warns where the release NAME gives the codec away, but plenty of captions
+   * say nothing, and remuxes are mislabelled — so this is the backstop that reads what the
+   * decoder actually did. `webkitAudioDecodedByteCount` pinned at zero while
+   * `webkitVideoDecodedByteCount` climbs is exactly that condition, and it is unambiguous.
+   *
+   * Polled rather than event-driven because there is no event to listen for, and stopped
+   * the moment it answers so a long watch is not paying for a check that has finished. */
+  useEffect(() => {
+    setSilent(false);
+    if (!source) return;
+    const v = videoRef.current;
+    if (!v || isDecodingSilently(v) === null) return; // counters absent → cannot tell, say nothing
+    let played = 0;
+    const id = window.setInterval(() => {
+      if (v.paused || v.readyState < 3) return;
+      played += 1;
+      if (played < SILENT_AFTER) return;
+      window.clearInterval(id);
+      if (isDecodingSilently(v)) setSilent(true);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [source]);
 
   // convert add-on subtitle tracks (SRT / gzipped) to same-origin VTT blob URLs so
   // the browser can actually render them
@@ -486,7 +738,57 @@ export default function VideoPlayer() {
     setCurrentSub(i);
   };
   const toggleCC = () => { if (!vtt.length) return; selectSub(ccOn ? -1 : Math.max(0, currentSub)); };
-  const selectAudio = (i: number) => { const h = hlsRef.current; if (h) { try { h.audioTrack = i; } catch { /* ignore */ } } setCurAudio(i); };
+  /* Manual audio switch. hls.js owns the list when it is attached; otherwise the list came
+   * from the element itself, where switching means enabling one track and disabling the
+   * rest (a native AudioTrackList permits several enabled at once, which would mix them). */
+  const selectAudio = (i: number) => {
+    /* THE IN-PAGE DEMUXER GOES FIRST, because when it is driving there is no track to
+     * select on the element — the stream it built has exactly one, and changing language
+     * means rebuilding it around a different one from the current position. */
+    const w = wasmRef.current;
+    if (w) {
+      setCurAudio(i);
+      void w.switchAudio(i).then(() => videoRef.current?.play().catch(() => {}));
+      return;
+    }
+    const d = demuxRef.current;
+    if (d) {
+      setCurAudio(i);
+      void d.switchAudio(i)
+        .then(() => videoRef.current?.play().catch(() => {}))
+        /* A FILE CAN MIX CODECS ACROSS ITS TRACKS, and the one being switched to may be
+         * Dolby when the one playing was not — real example: Apex, five tracks, three of
+         * them Russian. The demuxer cannot help there and says so; handing over to the WASM
+         * decoder at the same timestamp is the answer, and letting the failure surface as
+         * "this file can't play in the browser" (which is what happened) blames the file
+         * for a switch we simply had not implemented. */
+        .catch(async (e: Error) => {
+          const v = videoRef.current;
+          if (!v || !source || e.message !== 'NEEDS_WASM_DECODER') { if (import.meta.env.DEV) console.warn('[demux] switch failed:', e.message); return; }
+          const at = v.currentTime;
+          try {
+            await d.destroy();
+            demuxRef.current = null;
+            const h = await playWithWasmAudio(v, source.url, i,
+              (m) => { if (import.meta.env.DEV) console.info('[wasm-audio]', m); });
+            wasmRef.current = h;
+            v.currentTime = at;
+            v.play().catch(() => {});
+          } catch (err) {
+            if (import.meta.env.DEV) console.warn('[wasm-audio] handover failed:', (err as Error).message);
+          }
+        });
+      return;
+    }
+    const h = hlsRef.current;
+    if (h) { try { h.audioTrack = i; } catch { /* ignore */ } }
+    else {
+      const v = videoRef.current, list = v && nativeAudioTracks(v);
+      if (list) { try { nativeAudioList(list).forEach((t, k) => { t.enabled = k === i; }); } catch { /* ignore */ } }
+    }
+    audioPrefDone.current = true; // an explicit pick outranks any later preference pass
+    setCurAudio(i);
+  };
   const toggleAcc = (sec: string) => setAcc((a) => ({ ...a, [sec]: !a[sec] }));
 
   // scrub
@@ -604,6 +906,7 @@ export default function VideoPlayer() {
        * no such resolver and the bug was the website's too.) */
       if (e.key === 'Escape') {
         if (document.fullscreenElement) document.exitFullscreen();
+        else if (audioOpen) setAudioOpen(false);
         else if (menuOpen) setMenuOpen(false);
         else if (epPanelOpen) setEpPanelOpen(false);
         else close();
@@ -692,11 +995,51 @@ export default function VideoPlayer() {
         return;
       }
 
-      // 5. CONTROLS MODE. Movement and OK belong to TvSpatialNav and to the buttons themselves;
-      // all this does is keep the bar alive while the remote is working in it.
+      // 5. CONTROLS MODE. Vertical movement and OK belong to TvSpatialNav and to the buttons
+      // themselves; this keeps the bar alive while the remote is working in it.
       if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Enter' || k === ' ') {
         setHideUi(false);
         window.clearTimeout(hideTimer.current);
+      }
+
+      /* 6. LEFT/RIGHT INSIDE THE CONTROL ROW WALK THE ROW, and they have to be taken back from
+       * spatial navigation to do it.
+       *
+       * THE DEFECT, MEASURED ON THE RUNNING PLAYER: Right from 🔊 landed on the PROGRESS BAR
+       * rather than on ⚙, and Left from ⚙ did the same. Geometry explains it and geometry cannot
+       * fix it. `pick` scores a candidate as travel + 2x drift, and the scrubber is a full-width
+       * element sitting one row above the buttons — so from mute its centre is ~700px away with
+       * only the few px between the two rows as drift, while the gear is a genuine ~1460px along
+       * the row. The bar wins a HORIZONTAL press on distance, because it is enormous and directly
+       * overhead. Every gap in the row (the time read-out, the spacer that pushes ⚙ to the far
+       * corner) makes it worse, which is why it bites exactly where the row has holes in it.
+       *
+       * Widening `pick`'s cross-axis test would fix it here and break the home screen, where a
+       * full-width billboard being reachable from a narrow poster is the whole reason the test is
+       * a span overlap rather than centre-to-centre (see the note there). So this is answered
+       * locally, where the answer is unambiguous: within a row of transport buttons, Left and
+       * Right mean the NEXT BUTTON, never a jump to another control. Up and Down still belong to
+       * spatial nav, which already does the right thing — the bar is directly above, and ✕ above
+       * that.
+       *
+       * DOM ORDER, NOT GEOMETRY, because the row IS its DOM order and the buttons are optional:
+       * Episodes only exists for a series and CC only when the file has subtitles, so any fixed
+       * list of ids would silently skip whichever is absent.
+       *
+       * THE ENDS STOP RATHER THAN WRAP, and the press is consumed either way — that is the whole
+       * point. Letting a press at the end fall through is precisely how the scrubber captured it. */
+      if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        const ae = document.activeElement as HTMLElement | null;
+        const row = ae?.closest<HTMLElement>('.vp-controls');
+        if (row && ae) {
+          const items = Array.from(row.querySelectorAll<HTMLElement>('button, [tabindex]'))
+            .filter((el) => el.tabIndex >= 0 && !el.hasAttribute('disabled') && el.getClientRects().length > 0);
+          const at = items.indexOf(ae);
+          if (at >= 0) {
+            consume();
+            items[at + (k === 'ArrowRight' ? 1 : -1)]?.focus({ preventScroll: true });
+          }
+        }
       }
     };
     window.addEventListener('keydown', onKey, true);
@@ -872,6 +1215,15 @@ export default function VideoPlayer() {
         </div>
       )}
 
+      {/* A TOAST AND NOT AN ERROR SCREEN, because this is not a failure: the video is
+          playing correctly and only the audio track is undecodable. Blanking the frame
+          over it would throw away the half that works. */}
+      {/* Not while the audio menu is open — it is explaining the same thing in more detail
+          three centimetres away, and the two boxes overlapped each other on screen. */}
+      {silent && !audioOpen && (
+        <div className="vp-silent" role="status" aria-live="polite">{t('player.silent')}</div>
+      )}
+
       <div className="vp-ui">
         <div className="vp-top">
           <div>
@@ -953,8 +1305,41 @@ export default function VideoPlayer() {
             {hasSubs && (
               <button className={`vp-icon cc${ccOn ? ' on' : ''}`} id="vpCC" aria-label={t('ctl.subs_a')} aria-pressed={ccOn} onClick={toggleCC}>CC</button>
             )}
+
+            {/* AUDIO TRACK — a control bar button, not a row buried three levels into the gear
+                menu's Settings accordion, which is where the only way to change audio used to
+                live. It is rendered whenever the RELEASE claims more than one language, even
+                when none of them can be selected, because "the button is missing" and "this
+                browser cannot switch tracks" look identical from the outside and only one of
+                them is true. When it cannot switch it says so in place of the list. */}
+            {(audioTracks.length > 1 || (source.langs?.length ?? 0) > 1) && (
+              <div className="vp-menu-wrap">
+                <button
+                  className={`vp-icon${audioOpen ? ' on' : ''}${audioTracks.length > 1 ? '' : ' vp-icon-muted'}`}
+                  id="vpAudio" aria-label={t('ctl.audio_a')} aria-haspopup="menu" aria-expanded={audioOpen}
+                  onClick={() => { setAudioOpen((o) => !o); setMenuOpen(false); }}
+                >{IcAudioTrack}</button>
+                {(!IS_TV || audioOpen) && (
+                  <div className={`vp-menu vp-audio-menu${audioOpen ? ' open' : ''}`} role="menu">
+                    <div className="vp-menu-title">{t('menu.audio_lang')}</div>
+                    {audioTracks.length > 1 ? (
+                      audioTracks.map((a) => (
+                        <OptRow key={a.i} on={a.i === curAudio} label={a.name} onClick={() => { selectAudio(a.i); setAudioOpen(false); }} />
+                      ))
+                    ) : (
+                      <div className="vp-menu-note">
+                        {t(demuxBlocker === 'undecodable-audio' ? 'player.audio_dolby'
+                          : demuxBlocker === 'unreadable' ? 'player.audio_unreadable'
+                          : 'player.audio_locked', { langs: (source.langs || []).map(langName).join(', ') })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="vp-menu-wrap">
-              <button className="vp-icon" id="vpGear" aria-label={t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>{IcGear}</button>
+              <button className="vp-icon" id="vpGear" aria-label={t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuOpen((o) => !o); setAudioOpen(false); }}>{IcGear}</button>
               {/* A CLOSED DROPDOWN IS STILL IN THE DOM, AND THAT IS A BUG FOR A REMOTE. `.vp-menu`
                   hides itself with opacity + pointer-events, which a pointer respects and
                   geometry does not: every row inside it keeps a real bounding box floating above
@@ -1018,7 +1403,25 @@ export default function VideoPlayer() {
                     <span className="vp-acc-val">{settings.enhance ? `${Math.round(settings.grain * 100)}%` : t('menu.off')}</span>
                   </button>
                   <div className="vp-acc-body">
-                    <OptRow on={settings.enhance} label={t('menu.enhance_on')} onClick={() => updateSettings({ enhance: !settings.enhance })} />
+                    {/* SWITCHING IT ON HAS TO LAND ON A LEVEL, not just raise a flag.
+                        `enhance: !enhance` alone can produce an enhancement that is on and doing
+                        nothing: the grain rows set `enhance: g > 0`, so choosing "Grain · Off" is
+                        how you turn the whole thing off — which leaves `grain` at 0. Switching
+                        back on from here then gave 0% grain, no row ticked, and a picture
+                        identical to the one before the press.
+                        So a level that is at Off comes up at LOW, which is where the defaults
+                        start and the gentlest thing that is actually visible. A level the viewer
+                        has already set to Medium or High is left alone — this is a resume, not a
+                        reset, and re-picking their strength on every toggle would be the more
+                        annoying failure of the two. */}
+                    <OptRow on={settings.enhance} label={t('menu.enhance_on')}
+                      onClick={() => updateSettings(settings.enhance
+                        ? { enhance: false }
+                        : {
+                            enhance: true,
+                            grain: settings.grain > 0 ? settings.grain : TV_GRAIN[1],
+                            clarity: settings.clarity > 0 ? settings.clarity : TV_CLARITY[1],
+                          })} />
                     {/* PRESETS ON THE TV, SLIDERS ON THE WEB — see TV_GRAIN above. A range input
                         is the one control a D-pad cannot get back out of: arrows move the value,
                         so nothing is left to move focus, and the remote is trapped on it. */}
@@ -1037,8 +1440,14 @@ export default function VideoPlayer() {
                     )}
                     {IS_TV ? (
                       <>
+                        {/* GATED ON `enhance`, THE SAME WAY THE GRAIN ROWS ARE. The tick was on
+                            `clarity === c` alone, so with the enhancement switched off the menu
+                            still showed "Clarity · Low" marked — while the sharpen filter it
+                            names is applied only when `enhance` is true (see the <video>'s
+                            `filter` above). A ✓ against something that is not in effect is worse
+                            than no ✓: it is the menu disagreeing with the picture. */}
                         {TV_CLARITY.map((c, i) => (
-                          <OptRow key={c} on={settings.clarity === c} label={`${t('menu.clarity')} · ${t(TV_LEVEL_KEYS[i])}`}
+                          <OptRow key={c} on={settings.enhance && settings.clarity === c} label={`${t('menu.clarity')} · ${t(TV_LEVEL_KEYS[i])}`}
                             onClick={() => updateSettings({ clarity: c })} />
                         ))}
                       </>

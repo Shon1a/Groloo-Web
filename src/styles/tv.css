@@ -744,6 +744,19 @@
 }
 .tv-spot-art { transition: opacity .5s ease; }
 
+/* THE PHOTOGRAPH'S RISE FOLLOWS THE PRESSING, and only on this row.
+   `.art-photo`'s own .45s is right for a picture ARRIVING — a hero, a title screen, a billboard
+   reached deliberately. It is wrong for a billboard being walked past at ~120ms a press, where a
+   450ms fade is four presses long and no card ever reaches full strength: measured, that is what
+   the dimness during a held key actually is (18 of 20 dim frames had the bitmap decoded and were
+   simply mid-fade), NOT artwork waiting on the network. TvSpotlight's `step` sets the variable
+   from the same `chained` test that drives the slide; the fallback is `.art-photo`'s own value,
+   so a row that has never been pressed is unchanged.
+   SCOPED TO `.tv-spot-art` deliberately — the featured hero and the title screen use the same
+   FadeBg and want the unhurried arrival, which is the whole reason the variable is not on
+   `.art-photo` itself. */
+.tv-spot-art .art-photo { transition-duration: var(--sp-art-fade, .45s); }
+
 /* WIDER THAN THE CARD, BECAUSE THE PICTURE DRIFTS. The artwork travels 3.2% sideways as it changes
    (measured off the reference — see the parallax effect in TvSpotlight). At `inset: 0` it exactly
    fills the billboard, so that drift drags its own edge into frame and puts a black band down one
@@ -1340,10 +1353,16 @@
   cursor: pointer;
 }
 
-/* Pills replace both dropdowns (source picker, language picker). A menu that opens over itself
-   is a mouse control: on a remote it costs an OK to open, arrows to walk, an OK to choose, and
-   it hides the thing it is choosing between. Laid flat, the options are just there and Left/
-   Right walks them — one press per change, nothing to dismiss. */
+/* Pills replace dropdowns wherever the set of options is small and FIXED. A menu that opens over
+   itself is a mouse control: on a remote it costs an OK to open, arrows to walk, an OK to choose,
+   and it hides the thing it is choosing between. Laid flat, the options are just there and Left/
+   Right walks them — one press per change, nothing to dismiss.
+
+   THE LANGUAGE PICKER IS NO LONGER ONE OF THEM, and the condition above is why: its options come
+   from whatever the add-ons return for this title, so the row was two pills for one film and six
+   for the next, wrapping to a second row and pushing the source list down by a different amount
+   each time. It is a chip menu now, beside the source tabs it sits under (see the note in
+   TvDetail). What still uses this: the signed-out SIGN IN pill. */
 .tv-det-pills {
   display: flex;
   flex-wrap: wrap;
@@ -1749,6 +1768,51 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+/* ---- THE LANGUAGE CHIP, IN THE HEAD ROW BESIDE THE SOURCE CHIP ----------------------------
+   A plain flex item so it sits in `.tv-ep-head`'s row and takes the row's own gap; it holds only
+   the chip, and it is here rather than restyling `.tv-chipmenu` so the source chip and the season
+   picker are untouched.
+
+   THE FLAG'S TRAILING MARGIN COMES OFF. `.flag` carries `margin-right: 9px` for its usual job —
+   sitting before a word — and there is no word any more (see TvDetail: the name is `.sr-only`).
+   Left on, it pushes the chevron out and the chip reads as a flag with an empty column after it
+   rather than as one control. The chip's own `gap: 8px` is what separates them now.
+
+   NO `overflow` ANYWHERE ON THIS PATH, deliberately: the menu is absolutely positioned out of the
+   chip and hangs over the panel beneath it. `.tv-chipmenu`'s z-index (300) puts it above the
+   rows; a clip here would cut it off instead. */
+.tv-src-langchip { display: flex; flex: 0 0 auto; }
+.tv-src-langchip .flag { margin-right: 0; }
+
+/* ---- AND IT HAS TO BE AS TALL AS THE CHIP BESIDE IT ---------------------------------------
+   It was 10px shorter — 36px against "Addon Sources"' 46px — and the padding was identical on
+   both, so it was never the chip's own box. `.tv-chipmenu-btn` is an `inline-flex`, so the source
+   chip's bare text becomes an anonymous flex item carrying the FONT'S LINE BOX (~26.6px), while
+   this one's tallest item is the 15px flag. The language name that would have set the same line
+   box is `.sr-only`, and `.sr-only` is `position:absolute` — out of flow, contributing no height.
+   Removing the word took the chip's height with it.
+
+   SO A STRUT PUTS IT BACK: one zero-width flex item holding a non-breaking space, which has the
+   button's own font and therefore its exact line box. The height is then DERIVED rather than
+   declared — no number here to fall out of step with the chip's `font-size` clamp, and it stays
+   right at both TV resolutions on its own.
+
+   `overflow: hidden` is not decoration: a flex item's `min-width: auto` resolves to its
+   min-content width, which for a space is not zero, so `width: 0` alone would not hold. Any
+   `overflow` other than `visible` makes that `auto` resolve to 0. `min-width: 0` says the same
+   thing outright, for the Chromium 87 floor.
+
+   The negative margin cancels ONE of the button's own `gap: 8px` — the strut is a real flex item,
+   so without it the flag would be pushed 8px off the chip's left padding and the control would
+   look mis-centred. If that gap ever changes, this changes with it. */
+.tv-src-langchip .tv-chipmenu-btn::before {
+  content: "\00a0";
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  margin-right: -8px;
 }
 
 /* THE ARRIVAL. Opacity and transform only — the two things a TV composites for free — and short
@@ -2810,18 +2874,29 @@
 .vp-overlay.tv .vp-bar { height: 8px; border-radius: 4px; }
 .vp-overlay.tv .vp-thumb { width: 20px; height: 20px; transform: translate(-50%, -50%) scale(1); }
 
-/* THE TIMELINE IS THE ONE THING THAT KEEPS A RING. Everything else in the bar fills white when
-   the remote lands on it (see below) — but this element is full-width and its content is a
-   coloured bar that IS the information. Filling it white would erase the played/buffered split
-   the viewer is reading, so it takes the outline instead, and the bar itself grows and lights up
-   underneath. The two together are the focus state and the "you are scrubbing" state.
+/* THE TIMELINE TAKES NEITHER OF THE TWO FOCUS TREATMENTS — IT LIGHTS ITSELF UP.
+ *
+   It cannot have the fill the rest of the bar uses: this element is full-width and its content is
+   a coloured bar that IS the information, so filling it white would erase the played/buffered
+   split the viewer is reading. That is why the shared rule below still excludes it by name.
 
-   Restated here rather than left to the shared rule below, because that rule now excludes this
-   element by name — without this it would have no focus state at all. */
+   It carried a 3px ring instead, and the ring was wrong at this size. Every other focus ring in
+   the build hugs a glyph; this one enclosed a full-width element with 12-20px of vertical padding
+   inside it, so it drew a bordered box the entire width of the screen over the picture — the
+   heaviest thing on a frame it is supposed to sit quietly on top of, and it read as a panel round
+   the film rather than as a selected control.
+
+   Nothing was lost by dropping it, because the rules directly below were never the ring's
+   supporting act — they are a complete focus state on their own: the bar grows 8px → 12px, its
+   track brightens, it picks up a halo, and the playhead goes 20px → 26px. That is four changes to
+   the thing the eye is already on, which is a stronger signal at ten feet than an outline around
+   it, and it stays entirely inside the bar's own shape.
+
+   `outline: none` is explicit rather than omitted, because leaving it off would let app.css's
+   base ring (and the UA's) come straight back — see the note further down about focus states that
+   change an element's shape. */
 .vp-overlay.tv .vp-progress:focus-visible {
-  outline: 3px solid rgba(255, 255, 255, .72);
-  outline-offset: 3px;
-  border-radius: 10px;
+  outline: none;
 }
 .vp-overlay.tv .vp-progress:focus-visible .vp-bar {
   height: 12px;
@@ -2862,8 +2937,10 @@
  * The same inversion the report card already uses (`.tv-rep-toggle:focus-visible`), so this is
  * the app's existing answer applied to the player rather than a new idea.
  *
- * `:not(.vp-progress)` is the whole exception: the timeline keeps its ring, for the reason
- * given up at the scrubber. */
+ * `:not(.vp-progress)` is the whole exception, and it is about the FILL, not about rings: the
+ * timeline's content is the information, so inverting it would erase what the viewer is reading.
+ * It has no ring either any more — it lights its own bar up instead, for the reason given up at
+ * the scrubber. */
 .vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):focus-visible {
   outline: none;
   background: #fff;

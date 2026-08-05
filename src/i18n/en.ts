@@ -149,6 +149,12 @@ const SEED: Record<string, string> = {
   'modal.you_may_like': 'You may like',
   'modal.pick_episode': 'Pick an episode to see sources.',
   'modal.no_streams': 'No sources yet — install a streaming add-on to play.',
+  // {codec} is a codec name ("Dolby Digital Plus", "DTS") — no browser can decode these.
+  'modal.no_audio_codec': 'No sound in this browser · {codec} audio',
+  // The wanted language is in the file but on a track this browser can't select.
+  'modal.plays_instead': '{want} is a secondary track — plays {primary} here',
+  'modal.secondary_track': '{want} is a secondary track — the default one plays here',
+  'player.silent': 'This source is playing without sound — its audio track uses a codec no browser can decode (Dolby or DTS). Pick another source.',
   'modal.signin_addon': 'Sign in to install your add-on.',
   'modal.tab_streaming': 'Streaming Services',
   'modal.tab_addons': 'Addon Sources',
@@ -182,7 +188,15 @@ const SEED: Record<string, string> = {
   'ctl.mute_a': 'Mute',
   'ctl.vol_a': 'Volume',
   'ctl.subs_a': 'Toggle subtitles',
+  'ctl.audio_a': 'Audio track',
   'ctl.settings_a': 'Playback settings',
+  // Shown in place of the track list when the release has several audio languages and the
+  // browser exposes no way to choose between them. {langs} is a readable list.
+  // Shown in the audio menu when tracks cannot be switched. Three different causes, three
+  // different answers — a single generic message sent people to fix the wrong thing.
+  'player.audio_locked': 'This file has {langs} audio, but its tracks could not be separated here. Try another source, or open this on a TV, where the player switches tracks natively.',
+  'player.audio_dolby': 'This file’s audio is Dolby or DTS, which no browser can decode — that is why it plays silently. Pick a source with AAC audio, or open this on a TV, where Dolby plays natively.',
+  'player.audio_unreadable': 'This source could not be opened for track switching — the host does not allow the page to read the file directly (only to play it). Picking another source usually fixes it; on a TV this limitation does not apply.',
   'ctl.pip_a': 'Picture in picture',
   'ctl.fs_a': 'Toggle fullscreen',
   'ctl.grain': 'Grain',
