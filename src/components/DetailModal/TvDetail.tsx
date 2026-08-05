@@ -524,6 +524,42 @@ export default function TvDetail(p: TvDetailProps) {
             { key: 'addons', label: t('modal.tab_addons') },
           ]}
         />
+        {/* ---- THE LANGUAGE PICKER -------------------------------------------------------------
+            A CHIP MENU RATHER THAN A ROW OF PILLS, which is what tv.css's "no dropdowns on a TV"
+            rule asks for — one press per choice instead of open-walk-choose. TvChipMenu states
+            the condition that rule depends on: it holds for a set that is small and FIXED. This
+            set is neither. The languages are whatever the add-ons return for this title, so it
+            was two pills for one film and six for the next, and at six they wrapped to a second
+            row — pushing the source list down the screen by a different amount per title, the
+            exact failure the season picker became a chip menu to escape. The cost the rule warns
+            about is paid back the way it is there: the menu opens on the language you are already
+            using, so a neighbour is Down-OK — two presses, the same as walking a pill row.
+
+            BESIDE THE SOURCE CHIP, not inside the panel below it. The two controls pick what the
+            list underneath IS, so they belong in the row that is for picking, next to each other
+            and in the same shape — rather than one chip up here and a second control inches below
+            doing the same job.
+
+            AND FLAG-ONLY, which the move is what makes possible: the flag already says which
+            language, and this row has the panel's fixed width to fit two chips and two discs
+            into, where "Українська" alone cost more of it than the whole rest of the group.
+
+            THE NAME IS NOT DELETED, IT IS UNPAINTED. `.sr-only` keeps it as the button's
+            accessible name, so a reader still says "Українська" instead of meeting an unlabelled
+            control. It is `position:absolute`, so it adds no width and no flex gap to the chip. */}
+        {srcTab === 'addons' && availableLangs.length > 1 && (
+          <div className="tv-src-langchip">
+            <TvChipMenu
+              ariaLabel={t('menu.audio_lang')}
+              value={availableLangs.includes(lang) ? lang : availableLangs[0]}
+              onSelect={setLang}
+              options={availableLangs.map((l) => ({
+                key: l,
+                label: <><i className={`flag flag-${l}`} /><span className="sr-only">{langName(l)}</span></>,
+              }))}
+            />
+          </div>
+        )}
         {actions}
       </div>
 
@@ -537,16 +573,8 @@ export default function TvDetail(p: TvDetailProps) {
         {pickedEp && <span className="tv-det-panel-sub"> · S{pickedEp.season} E{pickedEp.ep}</span>}
       </h3>
 
-      {/* The language dropdown, flattened. Only when there is a choice to make. */}
-      {srcTab === 'addons' && availableLangs.length > 1 && (
-        <div className="tv-det-pills tv-det-langs">
-          {availableLangs.map((l) => (
-            <button key={l} type="button" className={`tv-det-pill${l === lang ? ' on' : ''}`} onClick={() => setLang(l)}>
-              <i className={`flag flag-${l}`} />{langName(l)}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* The language picker used to sit here, between this heading and the list. It is up in the
+          head row beside the source chip now — see the note there. */}
 
       <div className="tv-det-list" onKeyDown={leaveList}>
         {srcTab === 'services' ? (

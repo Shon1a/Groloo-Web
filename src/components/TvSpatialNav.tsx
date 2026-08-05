@@ -433,25 +433,21 @@ export default function TvSpatialNav() {
         const reachable = cands.filter((c) => c !== cur && !unreachable(c, curBox, layer));
         let next = pick(dir, cur.getBoundingClientRect(), reachable);
         if (!next) return false;
-        /* ARRIVING IN A ROW OF PILLS LANDS ON THE ONE YOU ARE ON — the same rule as the top bar
-         * below, for the same reason, on the other kind of tab strip.
+        /* A `.tv-det-pills` SPECIAL CASE USED TO LIVE HERE, and it is gone with the thing it was
+         * for. It made Up out of the source list land on the ACTIVE language pill rather than the
+         * leftmost one — necessary because a source row is the full width of the panel, so every
+         * pill overlapped it, every pill scored zero drift and identical travel, and document
+         * order decided it. Landing on the wrong pill mattered there because pressing OK by
+         * reflex re-filtered the list you had just come out of.
          *
-         * The language pills sit between the source list and the panel's head, so Up out of the
-         * list enters them. Geometry cannot choose well there: a source row is the full width of
-         * the panel, so every pill overlaps it, every pill scores zero drift and the same vertical
-         * travel, and the winner is decided by document order — the leftmost pill, every time,
-         * whatever language the list is actually filtered to. That is the worst of the three to
-         * land on, because each of these presses re-filters the list you just came out of, so a
-         * viewer walking Up and pressing OK by reflex changes the thing they were looking at.
-         * Entering on the ACTIVE pill makes that reflex a no-op.
+         * The language picker is a chip menu now (see TvDetail), so there is no row to arrive in:
+         * one control, already showing the language it is on, and OK opens it rather than
+         * changing anything. `.tv-det-pills` has no other member than the signed-out SIGN IN
+         * button, which is alone in its group and so cannot be arrived at wrongly.
          *
-         * Vertical only, and only from OUTSIDE the group: Left/Right within the pills is the
-         * viewer walking the languages deliberately, which must go where they pointed. */
-        if (dir === 'up' || dir === 'down') {
-          const group = next.closest('.tv-det-pills');
-          const on = group && !group.contains(cur) && group.querySelector<HTMLElement>('.tv-det-pill.on');
-          if (on) next = on;
-        }
+         * Left as a note rather than deleted silently because the geometry it describes has not
+         * changed — anything full-width put back between the panel head and the list will hit it
+         * again. */
         next.focus({ preventScroll: true });
         if (dir === 'left' || dir === 'right') {
           // horizontally-scrolled strips (season tabs, language chips) are the browser's job

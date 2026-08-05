@@ -33,6 +33,22 @@ export interface PlayMedia {
 export interface PlaySource {
   url: string;
   kind?: 'hls' | 'url';
+  /* The audio language the user PICKED for this playback (the language bucket in the
+   * detail modal), as a bare code — 'ru', 'ka', 'en'. The player prefers it over the
+   * global `settings.audioLang` when choosing among a stream's audio renditions.
+   *
+   * This exists because picking a language bucket only ever filtered the SOURCE LIST.
+   * A multi-audio release is one file that sits in every bucket, so "Русский" selected
+   * the same torrent as "English" and then played its default track — which is how you
+   * ask for Russian and get Japanese. The pick has to travel with the source to mean
+   * anything at playback time. Undefined → fall back to the global preference. */
+  lang?: string;
+  /* Every audio language the RELEASE claims, from `AddonStream.langs`. Not the same thing
+   * as the tracks the player can enumerate: Chrome exposes no `audioTracks` for a
+   * progressive file, so a dual-audio rip claims two languages and offers zero switchable
+   * tracks. The audio button uses the gap between the two to say WHY it cannot switch,
+   * instead of silently not being there. */
+  langs?: string[];
   title?: string;
   subtitle?: string;      // shown under the title (e.g. "S1 · E1 — The Heirs of the Dragon")
   subtitles?: SubtitleTrack[];

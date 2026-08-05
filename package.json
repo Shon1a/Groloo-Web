@@ -6,17 +6,22 @@
   "scripts": {
     "dev": "vite",
     "dev:tv": "vite --mode tv",
-    "build": "tsc -b && vite build",
-    "build:tv": "tsc -b && vite build --mode tv",
+    "build": "node scripts/copy-ffmpeg.mjs && tsc -b && vite build",
+    "build:tv": "node scripts/copy-ffmpeg.mjs && tsc -b && vite build --mode tv",
     "lint": "oxlint",
     "preview": "vite preview",
     "shots:record": "node scripts/tv-shots.mjs --record",
     "shots:baseline": "node scripts/tv-shots.mjs --baseline",
     "shots:check": "node scripts/tv-shots.mjs --check",
-    "shots:check:prod": "vite preview --port 4173 & sleep 3; SHOT_URL=http://localhost:4173 node scripts/tv-shots.mjs --check"
+    "shots:check:prod": "vite preview --port 4173 & sleep 3; SHOT_URL=http://localhost:4173 node scripts/tv-shots.mjs --check",
+    "postinstall": "node scripts/copy-ffmpeg.mjs"
   },
   "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "@tanstack/react-query": "^5.101.2",
+    "mediabunny": "^1.52.3",
     "qrcode-generator": "^2.0.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

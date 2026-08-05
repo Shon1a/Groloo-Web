@@ -14,12 +14,118 @@ import { useTrailer } from './useTrailer';
 import EpisodeChooser from './EpisodeChooser';
 import StreamLangSelect from './StreamLangSelect';
 import SourceSelect from './SourceSelect';
-import { collectAddonStreams, orderLangs, qualityRank, type AddonStream } from '../../lib/addonClient';
+import { collectAddonStreams, orderLangs, qualityRank, isSingleAudioTrack, namedAudioLangs, primaryAudioLang, langName, UNDETERMINED, type AddonStream } from '../../lib/addonClient';
+import { audioPlayability, silentCodecName } from '../../lib/codecs';
+import { hasStreamingServer, streamingServerReady } from '../../lib/streamingServer';
 import { pickWatchServices } from '../../lib/watchProviders';
 import { mediaUrl, syncAddressBar, type MediaAddress } from '../../lib/launchIntent';
 import TvDetail from './TvDetail';
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
+
+/* EVERY LANGUAGE THE SOURCES CLAIM IS OFFERED. NOTHING IS HIDDEN.
+ *
+ * This filtered out languages no source could "deliver" — meaning the language was on a
+ * non-default audio track and this browser cannot switch tracks. The reasoning was sound
+ * and the result was worse than the bug: The Mentalist S04E16 has a `[TB+] Torrentio 720p`
+ * release flagged 🇬🇧/🇷🇺 whose English track Stremio plays perfectly, and this dropped it
+ * from the English tab entirely — leaving FEWER sources than Stremio lists and still no
+ * English. Removing a real option is not an improvement over mislabelling it.
+ *
+ * So the list matches what the add-on actually offers, `forRender` puts the sources that
+ * will genuinely play the chosen language first, and the ones that merely CONTAIN it are
+ * labelled as such on the row. Rank and label, never hide. */
+const langTabs = (list: AddonStream[]): string[] => {
+  const all = orderLangs(list.flatMap((s) => s.langs));
+  return [...all.filter((l) => l !== UNDETERMINED), ...all.filter((l) => l === UNDETERMINED)];
+};
+
+/* How likely this source is to ACTUALLY PLAY `want`, rather than merely contain it.
+ *
+ *   3 — `want` is the release's PRIMARY track, the one that plays by default.
+ *   2 — one audio track and it is `want`.
+ *   1 — the release name says it was dubbed into `want` ("[English Dub]").
+ *   0 — `want` is in there among others, reachable only by switching audio tracks.
+ *
+ * Tier 3 exists because tier 2 was being fooled. `"Дом дракона … MVO (Syncmer) + Original
+ * + Sub (Rus Eng)"` captions with the single flag 🇬🇧, which reads as one English audio
+ * track — so it scored tier 2 and sorted to the TOP of the English list — and is a Russian
+ * multi-voice-over that keeps the original beside it. `primaryAudioLang` reads the Cyrillic
+ * release name and answers `ru`, which both demotes it out of English and correctly makes
+ * it the best answer for Russian.
+ *
+ * The `und` bucket scores everything 0 because "Original" makes no claim about a language,
+ * so there quality alone should decide. */
+const deliverability = (s: AddonStream, want: string): number => {
+  if (!want || want === UNDETERMINED) return 0;
+  const primary = primaryAudioLang(s.label);
+  if (primary === want) return 3;
+  if (primary && primary !== want) return 0; // a known primary in ANOTHER language: not this one
+  if (isSingleAudioTrack(s) && s.langs[0] === want) return 2;
+  if (namedAudioLangs(s.label).includes(want)) return 1;
+  return 0;
+};
+
+/* CAN THIS BROWSER SELECT AN AUDIO TRACK AT ALL?
+ *
+ * `HTMLMediaElement.audioTracks` is implemented by Safari, iOS and the WebKit-derived TV
+ * browsers, and by NONE of Chrome, Edge or Firefox. Where it is missing, a progressive
+ * file plays whatever the muxer marked default and there is no API — in any library, at
+ * any price — to change it. hls.js is the exception: it demuxes the stream itself, so an
+ * HLS source is always switchable regardless of browser. */
+const CAN_SWITCH_TRACKS = typeof HTMLMediaElement !== 'undefined' && 'audioTracks' in HTMLMediaElement.prototype;
+
+/* …OR a local streaming server can, on the browser's behalf. It re-serves the file as HLS
+ * with one audio rendition per track, which hls.js switches between — so with one running,
+ * every source becomes switchable and none of the warnings below apply. Read live rather
+ * than captured in a const: detection is async and lands after first render. */
+const canSwitchAudio = (): boolean => CAN_SWITCH_TRACKS || streamingServerReady();
+
+/** Can this source actually be heard in `want` HERE — in this browser, for this file? */
+const canDeliver = (s: AddonStream, want: string): boolean => {
+  if (!want || want === UNDETERMINED) return true;
+  if (deliverability(s, want) > 0) return true;
+  return canSwitchAudio() || s.kind === 'hls'; // tier 0 is only reachable by switching
+};
+
+/* THE ROWS ARE A UI LAYER OVER `shownStreams`, NOT A REPLACEMENT FOR IT.
+ *
+ * `shownStreams` stays exactly the filter-then-quality-sort the parity corpus transcribes
+ * as the twin of the core's `rank_streams`, and it stays the value that family compares.
+ * This filters and re-sorts a COPY for rendering, which is the "UI change, not a
+ * substitution" that fixture's own obligation note anticipates.
+ *
+ * IT RANKS, IT NO LONGER FILTERS. It briefly did both, and dropping the undeliverable
+ * sources cost more than it saved — see the note on `langTabs`. Sources that will actually
+ * play the chosen language come first; the rest stay listed and carry a label saying what
+ * they will really play. The sort is stable, so quality still decides inside each tier. */
+const forRender = (list: AddonStream[], want: string): AddonStream[] =>
+  [...list].sort((a, b) => (audible(b) - audible(a)) || (deliverability(b, want) - deliverability(a, want)));
+
+/** For a row under the `want` tab: the language it will REALLY play, or null when `want`
+ *  is what plays (or nothing can be said). Drives the per-row warning. */
+const playsInstead = (s: AddonStream, want: string): string | null => {
+  if (!want || want === UNDETERMINED || canDeliver(s, want)) return null;
+  const primary = primaryAudioLang(s.label);
+  return primary && primary !== want ? langName(primary) : '';
+};
+
+/* AUDIBILITY OUTRANKS LANGUAGE, because a source you cannot hear at all is not a worse
+ * answer to "play this in Russian" — it is not an answer. Chrome ships no Dolby or DTS
+ * decoder, so an AC-3 Russian dub plays perfect video in total silence, which is both the
+ * commonest way these sources fail and the one that looks least like a bug. Sources whose
+ * name claims a codec this browser cannot decode sink to the bottom; a name that claims
+ * nothing ranks with the playable ones rather than being punished for being terse. */
+const audible = (s: AddonStream): number => (audioPlayability(s.label) === false ? 0 : 1);
+
+/** The one to start for `want`: deliverable only, audible first, then best quality. Falls
+ *  back to the plain best if nothing can deliver, so ▶ is never a dead button. */
+const bestFor = (list: AddonStream[], want: string): AddonStream | undefined => {
+  const rank = (a: AddonStream, b: AddonStream) => (audible(b) - audible(a))
+    || (deliverability(b, want) - deliverability(a, want))
+    || (qualityRank(b.quality) - qualityRank(a.quality));
+  return [...list.filter((s) => canDeliver(s, want))].sort(rank)[0] ?? [...list].sort(rank)[0];
+};
 
 /* The TV build renders a different SHAPE for the same data — one screen, no page scroll, the
  * sources beside the synopsis rather than below it. See TvDetail.tsx for what that is and why.
@@ -204,7 +310,7 @@ export default function DetailModal() {
   // still offered, else prefer the language the user was last watching (so RESUME plays
   // the same one), else fall back to the first available.
   useEffect(() => {
-    const langs = orderLangs(streams.flatMap((s) => s.langs));
+    const langs = langTabs(streams);
     // Compute the resume key inline rather than via buildMediaFor(): that helper is a
     // const declared below the `if (!target) return` early-return, so it sits in the
     // temporal dead zone on the target=null render that fires when the modal closes
@@ -219,6 +325,10 @@ export default function DetailModal() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streams]);
+
+  // Warm the streaming-server probe early:  is read synchronously
+  // while rendering the rows, and starts out false until this resolves.
+  useEffect(() => { void hasStreamingServer(); }, []);
 
   // picking an episode brings its freshly-loaded sources into view (matches vanilla)
   useEffect(() => { if (pickedEp) streamsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [pickedEp]);
@@ -333,7 +443,7 @@ export default function DetailModal() {
     // the language this playback represents, so resume can pick the same one later
     const chosen = langTag ?? (lang && s.langs.includes(lang) ? lang : s.langs[0]);
     playSource({
-      url: s.url, kind: s.kind, title,
+      url: s.url, kind: s.kind, title, lang: chosen, langs: s.langs,
       subtitle: ep ? `S${ep.season} · E${ep.ep}` : undefined,
       media: buildMediaFor(ep, chosen), subtitles: subsOf(s),
       next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined,
@@ -346,20 +456,27 @@ export default function DetailModal() {
     const imdb = meta?.imdb; if (!imdb) return;
     setPickedEp({ season, ep });
     const list = await collectAddonStreams(`${imdb}:${season}:${ep}`, 'series');
-    const langs = orderLangs(list.flatMap((s) => s.langs));
+    const langs = langTabs(list);
     const want = langs.includes(lang) ? lang : langs[0];
-    const shown = list.filter((s) => !want || s.langs.includes(want)).sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
-    const best = shown[0] || list[0];
+    const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want) || list[0];
     if (best) { playStreamFor(best, { season, ep }, want); return; }
     const nxt = nextEpOf({ season, ep });
     playSource({ url: '/assets/demo.mp4', title, subtitle: `S${season} · E${ep}`, media: buildMediaFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
   };
   // language buckets (from the sources) + the sources for the picked language, sorted
   // best-quality first
-  const availableLangs = orderLangs(streams.flatMap((s) => s.langs));
+  const availableLangs = langTabs(streams);
+  /* THE NEXT TWO LINES ARE PINNED BY THE PARITY CORPUS — `fixtures.mjs` transcribes them
+   * character for character (SHELL_FILTER_SOURCE / SHELL_SORT_SOURCE) and re-reads them
+   * by line number on every run, because they are the twin of the core's `rank_streams`
+   * and cannot be imported out of JSX. Editing either text, or moving them without
+   * re-pinning the line numbers in fixtures.mjs, closes the gate. The language preference
+   * lives in `forRender` / `bestFor` below, neither of which is pinned. */
   const shownStreams = streams
     .filter((s) => !lang || s.langs.includes(lang))
     .sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
+  // what the rows actually render as: the same sources, deliverable-language-first
+  const rowStreams = forRender(shownStreams, lang);
   // Each stream row is titled by the open CONTENT — the movie name, or for a series the
   // show name + chosen episode as `S# · E#` (same format the player subtitle uses). The
   // add-on's own caption (s.label) drops to the detail line so its release info survives.
@@ -369,7 +486,8 @@ export default function DetailModal() {
   // seeks to any saved resume position itself (VideoPlayer reads getResume), so
   // "continue watching" needs no extra wiring here.
   const playBest = () => {
-    if (shownStreams.length) playStreamFor(shownStreams[0], pickedEp);
+    const pick = bestFor(shownStreams, lang);
+    if (pick) playStreamFor(pick, pickedEp);
     else if (streams.length) playStreamFor(streams[0], pickedEp);
   };
 
@@ -417,7 +535,7 @@ export default function DetailModal() {
         onReport={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}
         srcTab={srcTab} setSrcTab={setSrcTab}
         signedIn={signedIn} openAuth={openAuth}
-        streamsLoading={streamsLoading} shownStreams={shownStreams}
+        streamsLoading={streamsLoading} shownStreams={rowStreams}
         availableLangs={availableLangs} lang={lang} setLang={setLang}
         playStream={playStream} streamTitle={streamTitle}
         pickedEp={pickedEp} setPickedEp={setPickedEp}
@@ -543,13 +661,29 @@ export default function DetailModal() {
                     <div className="demo-note">{t('modal.pick_episode')}</div>
                   ) : streamsLoading ? (
                     <div className="stream-source-label">{t('modal.loading_synopsis')}</div>
-                  ) : shownStreams.length ? (
-                    shownStreams.map((s, i) => (
-                      <button className="addon-stream" type="button" key={i} aria-label={streamTitle} onClick={() => playStream(s)}>
+                  ) : rowStreams.length ? (
+                    rowStreams.map((s, i) => (
+                      <button className={`addon-stream${silentCodecName(s.label) ? ' no-audio' : ''}`} type="button" key={i} aria-label={streamTitle} onClick={() => playStream(s)}>
                         <span className={`quality-badge ${qualClass(s.quality)}`}>{s.quality || 'SD'}</span>
                         <span className="stream-info">
                           <span className="stream-title">{streamTitle || s.label}</span>
                           <span className="stream-detail">{[s.label, s.size, s.source].filter(Boolean).join(' · ')}</span>
+                          {/* Named, not hidden: the codec is evidence from the release name, and a
+                              source the user can see and cannot start is worse than one that
+                              might disappoint. Remuxes do get mislabelled. */}
+                          {silentCodecName(s.label) && (
+                            <span className="stream-warn">{t('modal.no_audio_codec', { codec: silentCodecName(s.label) as string })}</span>
+                          )}
+                          {/* The chosen language is IN this file but not on the track that
+                              plays, and this browser cannot switch. Say which one it will
+                              actually play instead of letting the tab imply otherwise. */}
+                          {playsInstead(s, lang) !== null && (
+                            <span className="stream-warn">
+                              {playsInstead(s, lang)
+                                ? t('modal.plays_instead', { want: langName(lang), primary: playsInstead(s, lang) as string })
+                                : t('modal.secondary_track', { want: langName(lang) })}
+                            </span>
+                          )}
                         </span>
                         <span className="addon-stream-chevron" aria-hidden="true">›</span>
                       </button>
