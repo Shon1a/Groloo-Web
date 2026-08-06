@@ -209,6 +209,13 @@ const SEED: Record<string, string> = {
   'menu.low': 'Low',
   'menu.medium': 'Medium',
   'menu.high': 'High',
+  // Subtitle add-ons are asked over the network while the menu is already open, so the list has
+  // a "still asking" state the old eager-fetch one never needed.
+  'menu.loading_subs': 'Looking for subtitles…',
+  'menu.sub_failed': 'That subtitle couldn’t be loaded — its host blocks direct downloads. Try another.',
+  // The TV player's episode rail (Down from the scrubber).
+  'player.more_episodes': 'More Episodes',
+  'player.now_playing': 'Now Playing',
 
   // discover / search / grid
   'search.ph': 'Search titles, people, genres…',
