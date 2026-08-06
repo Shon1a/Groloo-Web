@@ -3,8 +3,9 @@ import type { SeasonInfo } from '../lib/types';
 
 /* What the video player is currently playing. null → closed. A source can be an
  * HLS manifest (.m3u8) or a progressive file (mp4/mkv/webm); the player probes
- * window.Hls for HLS and falls back to native. Real add-on streams (and their
- * subtitle tracks) come from DetailModal's collectAddonStreams. */
+ * window.Hls for HLS and falls back to native. Real add-on streams (and the subtitle
+ * tracks embedded in them) come from DetailModal's collectAddonStreams; STANDALONE
+ * subtitle add-ons are asked by the player itself, via `subsQuery` below. */
 
 export interface SubtitleTrack {
   lang: string;
@@ -52,6 +53,12 @@ export interface PlaySource {
   title?: string;
   subtitle?: string;      // shown under the title (e.g. "S1 · E1 — The Heirs of the Dragon")
   subtitles?: SubtitleTrack[];
+  /* What to ask SUBTITLE add-ons for, so the player can fetch tracks the stream itself
+   * does not carry. Built where the IMDb id is known (DetailModal) rather than derived in
+   * the player, because `media.id` is a TMDB id and add-ons are asked in IMDb terms —
+   * re-deriving it downstream would mean a second id-resolution path with its own bugs.
+   * Absent → the player shows only the stream's embedded tracks, as it always did. */
+  subsQuery?: { videoId: string; type: 'movie' | 'series' };
   media?: PlayMedia;      // for history + resume
   next?: () => void;      // play the next episode (series) — used by auto-play-next + the Next button
   series?: PlaySeries;    // series context → the in-player Episodes button + panel

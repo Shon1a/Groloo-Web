@@ -9,10 +9,12 @@ import { isDecodingSilently, SILENT_AFTER } from '../../lib/codecs';
 import { resolvePlayback } from '../../lib/streamingServer';
 import { playDemuxed, probeUrl, type DemuxHandle, type DemuxBlocker } from '../../lib/browserDemux';
 import { playWithWasmAudio, needsWasmDecoder, type WasmAudioHandle } from '../../lib/wasmAudio';
-import { langName } from '../../lib/addonClient';
+import { langName, collectAddonSubtitles } from '../../lib/addonClient';
 import { apiFetch } from '../../lib/api';
 import { registerBackHandler, mediaAction } from '../../lib/tvKeys';
 import EpisodePanel from './EpisodePanel';
+import EpisodeRail from './EpisodeRail';
+import { scrollCardToSlot } from './railScroll';
 
 /* THE TV BUILD IS A DIFFERENT PLAYER, and this constant is what splits them. `import.meta.env.MODE`
  * is a Vite compile-time string, so every `IS_TV` branch below is resolved at build time and the
@@ -148,6 +150,11 @@ const IcBack = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColo
 const IcFwd = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M11.5 7V4l5 5-5 5V11A4.5 4.5 0 1 0 16 15.5h1.5A6 6 0 1 1 11.5 7z" /></svg>;
 const IcMute = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4z" /><path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M18.5 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>;
 const IcGear = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.8 7.8 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1l-.4-2.6h-3.8l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L4.6 11a7.8 7.8 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.6h3.8l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4zM12 15.2A3.2 3.2 0 1 1 12 8.8a3.2 3.2 0 0 1 0 6.4z" /></svg>;
+/* The TV's settings button. A cogwheel is a fiddly shape at three metres — a lot of small teeth
+ * that turn to mush once a set scales the frame — and it also names a category ("machine
+ * settings") narrower than what the menu now holds. Three dots read at any distance and mean
+ * "more", which is the whole menu. */
+const IcMore = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>;
 const IcPip = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M3 5h18v14H3V5zm2 2v10h14V7H5zm6 4h7v5h-7v-5z" /></svg>;
 /* Audio track: a speaker with stacked bars — deliberately NOT the volume speaker (which has
  * arcs) and not a musical note, which reads as "music" rather than "spoken language". */
@@ -224,6 +231,12 @@ function fmt(s: number): string {
 
 interface Level { i: number; height?: number }
 
+/* A subtitle track the user COULD pick, not one that has been fetched. `url` is the
+ * add-on's own (SRT, often gzipped, frequently on a host with no CORS); it becomes
+ * playable only after `toVttBlobUrl`. `source` is the add-on's name, shown as the row's
+ * second line so two identical "English" rows are still telling the user something. */
+interface SubCandidate { lang: string; label: string; url: string; source?: string }
+
 export default function VideoPlayer() {
   const t = useT();
   const source = usePlayer((s) => s.source);
@@ -245,6 +258,8 @@ export default function VideoPlayer() {
   const lastProgRef = useRef(0);       // throttle progress writes
   const resumedRef = useRef(false);    // seek-to-resume once per source
   const audioPrefDone = useRef(false); // audio-language preference applied once per source
+  const subPicked = useRef(false);     // the USER chose a subtitle → stop applying the preference
+  const vttCache = useRef(new Map<string, string>()); // add-on subtitle url → converted blob: url
   const demuxRef = useRef<DemuxHandle | null>(null); // in-page demuxer, when one is driving playback
   const wasmRef = useRef<WasmAudioHandle | null>(null); // in-page Dolby/DTS decoder, likewise
 
@@ -268,8 +283,28 @@ export default function VideoPlayer() {
   const [acc, setAcc] = useState<Record<string, boolean>>({}); // expanded accordion sections
   const [fs, setFs] = useState(false);
   const [hideUi, setHideUi] = useState(false);
-  const [vtt, setVtt] = useState<Array<{ lang: string; label: string; url: string }>>([]);
+  /* Every subtitle track OFFERED for this source — the ones embedded in the stream plus
+   * everything the installed subtitle add-ons answered. URLs only; see the block above
+   * `resolveSub` for why exactly one of these is ever downloaded. */
+  const [subs, setSubs] = useState<SubCandidate[]>([]);
+  const [subsLoading, setSubsLoading] = useState(false);   // add-ons still being asked
+  const [subFailed, setSubFailed] = useState(false);       // the chosen track would not load
+  // the one track currently converted to VTT and mounted as a <track>; null = none showing
+  const [vtt, setVtt] = useState<{ lang: string; label: string; url: string } | null>(null);
   const [epPanelOpen, setEpPanelOpen] = useState(false);
+  /* TWO STATES FOR ONE SHELF, because a CSS transition needs both ends of it to exist.
+   *
+   *   railMounted  the rail is in the DOM. Goes true with `epPanelOpen` and stays true for the
+   *                length of the slide-down after it goes false — an unmounted element does not
+   *                animate, which is why closing it used to blink out of existence while the
+   *                control bar slid gracefully back down without it.
+   *   railShown    the rail is UP. Held back one animation frame on opening, because a
+   *                transition with no previous frame to interpolate from does not run at all: the
+   *                shelf would appear already in place. It also drives the overlay's `tv-rail`
+   *                class, so the bar's lift and the shelf's rise begin on the SAME frame —
+   *                driving them from different states is what made the two look uncoordinated. */
+  const [railMounted, setRailMounted] = useState(false);
+  const [railShown, setRailShown] = useState(false);
   const [segments, setSegments] = useState<Segments | null>(null);
   const [silent, setSilent] = useState(false); // playing video, decoding no audio at all
   const [audioOpen, setAudioOpen] = useState(false); // the audio-track popup
@@ -285,7 +320,20 @@ export default function VideoPlayer() {
   const seekCommitTimer = useRef<number | undefined>(undefined);
   const seekRepeats = useRef(0);
   const seekLastAt = useRef(0);
-  const tvWantFocus = useRef<'bar' | 'gear' | 'episodes'>('bar'); // where the bar should re-seed focus
+  /* Where the bar should re-seed focus when a layer above it closes. 'scrubber' is distinct
+   * from 'bar': 'bar' is "no opinion, use the usual order" (which prefers a visible Skip
+   * Intro button), while 'scrubber' means the viewer stepped UP out of the episode rail and
+   * the timeline is the thing they stepped up FROM — landing them on Skip Intro instead
+   * would move them sideways for no reason they asked for. */
+  const tvWantFocus = useRef<'bar' | 'scrubber' | 'gear' | 'episodes'>('bar'); // where the bar should re-seed focus
+  const railFrom = useRef<'bar' | 'button'>('button'); // which door opened the episode rail
+  /* Something is open ON TOP of the control bar and is being read. The auto-hide consults this
+   * rather than the three states directly, because it fires from a timer closed over on mount and
+   * would otherwise need re-arming on every one of them. */
+  const uiBusyRef = useRef(false);
+  // `exitTvNav` is defined below `bump`, and `bump`'s timer has to call it. A ref rather than
+  // reordering the two: they genuinely depend on each other, and this is the seam.
+  const exitTvNavRef = useRef<() => void>(() => {});
   useEffect(() => { tvNavRef.current = tvNav; }, [tvNav]);
 
   // --- mobile touch gestures ---
@@ -564,33 +612,102 @@ export default function VideoPlayer() {
     return () => window.clearInterval(id);
   }, [source]);
 
-  // convert add-on subtitle tracks (SRT / gzipped) to same-origin VTT blob URLs so
-  // the browser can actually render them
+  /* WHAT THIS SOURCE COULD SHOW, in one list, without downloading any of it.
+   *
+   * Two origins, and they arrive at different times. The stream's own embedded tracks are
+   * already in hand and go in synchronously, so a source that carries subtitles has a
+   * populated menu on the first frame exactly as it did before. The subtitle ADD-ONS are a
+   * network round-trip and land second, appended — never replacing, because a user who
+   * opened the menu immediately and picked the embedded English must not have the row
+   * renumbered out from under them. Appending keeps every existing index stable, which is
+   * what makes `currentSub` safe to hold across the update. */
   useEffect(() => {
-    const subs = source?.subtitles;
-    if (!subs?.length) { setVtt([]); return; }
+    const embedded: SubCandidate[] = (source?.subtitles || []).map((s) => ({
+      lang: s.lang, label: s.label || langName(s.lang) || 'Subtitle', url: s.url,
+    }));
+    setSubs(embedded);
+    setCurrentSub(-1);
+    /* Cleared HERE and not left to the resolve effect below. That effect is keyed on
+     * [subs, currentSub], so on the commit that swaps the source its deps have not changed
+     * yet and it does not run — leaving one rendered frame in which the <track> still
+     * points at a blob the cleanup has just revoked, and the browser fetches it and logs
+     * the failure. Dropping it in the same pass as the list is what closes that frame. */
+    setVtt(null);
+    setSubFailed(false);
+    subPicked.current = false;
+
+    const q = source?.subsQuery;
+    if (!q) { setSubsLoading(false); return; }
     let alive = true;
-    const created: string[] = [];
-    Promise.all(subs.map(async (s) => {
-      const url = await toVttBlobUrl(s.url);
-      if (url) created.push(url);
-      return url ? { lang: s.lang, label: s.label, url } : null;
-    })).then((tracks) => { if (alive) setVtt(tracks.filter(Boolean) as Array<{ lang: string; label: string; url: string }>); });
-    return () => { alive = false; created.forEach((u) => URL.revokeObjectURL(u)); };
+    setSubsLoading(true);
+    collectAddonSubtitles(q.videoId, q.type)
+      .then((list) => { if (alive && list.length) setSubs([...embedded, ...list]); })
+      .catch(() => { /* the fan-out already swallows per-add-on failures */ })
+      .finally(() => { if (alive) setSubsLoading(false); });
+    return () => { alive = false; };
   }, [source]);
 
-  // honor the default-subtitles-language setting once tracks exist
+  /* Honour the default-subtitles-language setting — ONCE, and only until the user disagrees.
+   *
+   * `subPicked` is why this is not simply keyed on the list: the add-on tracks arrive after
+   * the menu is already usable, so this effect necessarily re-runs on a list the user may
+   * have already made a choice in, and without the flag it would overrule them a second or
+   * two into playback. It also lets an add-on's Georgian win when the stream carried none:
+   * the preference is re-evaluated against the grown list precisely while the user has
+   * expressed no preference of their own. */
+  useEffect(() => {
+    if (subPicked.current || !subs.length) return;
+    const want = settings.subLang;
+    if (want === 'off') return;
+    const i = subs.findIndex((s) => s.lang?.toLowerCase().startsWith(want));
+    if (i >= 0) setCurrentSub(i);
+  }, [subs, settings.subLang]);
+
+  /* DOWNLOAD THE ONE TRACK THAT IS SHOWING, and cache it for the rest of the playback.
+   *
+   * The old code fetched, gunzipped and converted EVERY track up front and mounted them all
+   * as <track> elements. With only a stream's embedded subtitles that is two or three
+   * requests and it was fine. It stops being fine the moment subtitle add-ons are in the
+   * list: OpenSubtitles answers a popular episode with dozens of files, and paying for all
+   * of them to render a menu — most of which the user will never open — is the reason a
+   * lazy fetch is the only workable shape here. Only the chosen track is ever fetched.
+   *
+   * The cache is what keeps switching back and forth cheap, and it is keyed by the ADD-ON's
+   * url (the stable identity) rather than the blob's. Every blob it holds is revoked when
+   * the source changes — a blob: URL is a document-lifetime leak otherwise, and a
+   * binge-watch is a hundred episodes in one document. */
+  useEffect(() => {
+    const c = subs[currentSub];
+    if (!c) { setVtt(null); return; }
+    const hit = vttCache.current.get(c.url);
+    if (hit) { setVtt({ lang: c.lang, label: c.label, url: hit }); setSubFailed(false); return; }
+    let alive = true;
+    setSubFailed(false);
+    void toVttBlobUrl(c.url).then((url) => {
+      if (!alive) return;
+      if (!url) {
+        /* A subtitle host without permissive CORS cannot be read from a browser at all, and
+         * that is most of them. Saying so beats a row that ticks and shows nothing. */
+        setVtt(null); setSubFailed(true); return;
+      }
+      vttCache.current.set(c.url, url);
+      setVtt({ lang: c.lang, label: c.label, url });
+    });
+    return () => { alive = false; };
+  }, [subs, currentSub]);
+
+  // one mounted <track> at a time, so showing it is not an index lookup
   useEffect(() => {
     const v = videoRef.current; if (!v) return;
-    const want = settings.subLang;
-    let shown = -1;
-    for (let i = 0; i < v.textTracks.length; i++) {
-      const match = want !== 'off' && !!vtt[i]?.lang?.toLowerCase().startsWith(want);
-      v.textTracks[i].mode = match && shown < 0 ? 'showing' : 'hidden';
-      if (match && shown < 0) shown = i;
-    }
-    setCurrentSub(shown);
-  }, [vtt, settings.subLang]);
+    const tt = v.textTracks[0];
+    if (tt) tt.mode = vtt ? 'showing' : 'hidden';
+  }, [vtt]);
+
+  // drop every converted subtitle when the source changes (and on unmount)
+  useEffect(() => () => {
+    vttCache.current.forEach((u) => URL.revokeObjectURL(u));
+    vttCache.current.clear();
+  }, [source]);
 
   // IntroDB intro/outro markers for the current episode (best-effort; the skip button
   // falls back to the heuristic window when there are none)
@@ -609,12 +726,23 @@ export default function VideoPlayer() {
   const bump = useCallback(() => {
     setHideUi(false);
     window.clearTimeout(hideTimer.current);
-    /* CHROME THE REMOTE IS STANDING ON MUST NOT FADE OUT FROM UNDER IT. On the web the pointer
-     * leaves and the bar goes; on a TV "focus is on the mute button" is a position the viewer is
-     * holding, and hiding it would leave an invisible selection and a bar that reappears
-     * somewhere unexpected on the next press. It hides when they step OUT of it — see exitTvNav. */
-    if (IS_TV && tvNavRef.current) return;
-    hideTimer.current = window.setTimeout(() => { if (!videoRef.current?.paused) setHideUi(true); }, IS_TV ? TV_HIDE_MS : 3000);
+    /* IDLE IN CONTROLS MODE NOW ENDS IT, and that is the replacement for a Back press.
+     *
+     * This used to return early whenever the D-pad held the chrome, on the reasoning that chrome
+     * the remote is standing on must not fade out from under it — true, and it only worked
+     * because Back was the way out of controls mode. Back closes the player now, so an early
+     * return here would leave the bar up forever after a single Down press, with nothing that
+     * dismisses it.
+     *
+     * Five seconds of no presses is the viewer having stopped using the controls, so the controls
+     * stop: focus is parked back on the overlay (via `exitTvNav`, so no invisible selection is
+     * left behind) and the chrome fades. Never while a menu, the audio popup or the episode shelf
+     * is open — those are things being READ, and reading is not idleness. */
+    hideTimer.current = window.setTimeout(() => {
+      if (videoRef.current?.paused || uiBusyRef.current) return;
+      if (IS_TV && tvNavRef.current) exitTvNavRef.current();
+      setHideUi(true);
+    }, IS_TV ? TV_HIDE_MS : 3000);
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -660,10 +788,13 @@ export default function VideoPlayer() {
   /** Summon the controls and give the D-pad to them. */
   const enterTvNav = useCallback(() => {
     if (seekPreviewRef.current != null) commitSeek();
-    setHideUi(false);
-    window.clearTimeout(hideTimer.current);
     setTvNav(true);
-  }, [commitSeek]);
+    /* ARM THE IDLE CLOCK ON THE WAY IN. This used to clear the hide timer and leave it cleared,
+     * which was right when Back was the way out of controls mode; with Back now closing the
+     * player, the press that summons the bar has to also start the thing that dismisses it, or
+     * the bar is up for the rest of the film. */
+    bump();
+  }, [commitSeek, bump]);
 
   /** Step back out to transport mode: nothing selected, chrome free to fade again. */
   const exitTvNav = useCallback(() => {
@@ -674,6 +805,8 @@ export default function VideoPlayer() {
     overlayRef.current?.focus({ preventScroll: true });
     bump();
   }, [bump]);
+  useEffect(() => { exitTvNavRef.current = exitTvNav; }, [exitTvNav]);
+  useEffect(() => { uiBusyRef.current = menuOpen || audioOpen || epPanelOpen; }, [menuOpen, audioOpen, epPanelOpen]);
 
   /* WHERE THE REMOTE LANDS IN THE CONTROL BAR, and where it goes back to when a panel over the
    * bar closes. Both are the same problem — something has just appeared or disappeared and focus
@@ -701,6 +834,7 @@ export default function VideoPlayer() {
          it has nothing to say. */
       const target = (tvWantFocus.current === 'gear' ? root.querySelector<HTMLElement>('#vpGear') : null)
         ?? (tvWantFocus.current === 'episodes' ? root.querySelector<HTMLElement>('#vpEpisodes') : null)
+        ?? (tvWantFocus.current === 'scrubber' ? barRef.current : null)
         ?? root.querySelector<HTMLElement>('.vp-skip.show')
         ?? barRef.current
         ?? root.querySelector<HTMLElement>('#vpPlay');
@@ -709,6 +843,34 @@ export default function VideoPlayer() {
     });
     return () => cancelAnimationFrame(id);
   }, [tvNav, menuOpen, epPanelOpen]);
+  /* Drive the rail's mount/slide off `epPanelOpen`. 470ms is the 420ms transform (`--vp-rail-ease`
+   * in tv.css) plus margin; it only has to OUTLAST the animation — unmounting a few ms late costs
+   * nothing, unmounting early is the blink this exists to prevent, so if the curve is ever
+   * lengthened this number goes up with it. */
+  useEffect(() => {
+    if (!IS_TV) return;
+    if (epPanelOpen) {
+      setRailMounted(true);
+      /* TWO FRAMES, NOT ONE, AND THAT IS THE WHOLE REASON THE SHELF DID NOT SLIDE.
+       *
+       * A rAF callback runs BEFORE the paint of the frame it was scheduled for. Setting state
+       * there gives React a chance to render and commit the `.open` class within that very same
+       * frame, so the browser paints `translateY(100%)` and `translateY(0)` in one go and there
+       * is no start state to interpolate from — the shelf simply appears, which is exactly what
+       * "showing without scrolling animation from the bottom" looks like. The control bar was
+       * unaffected because it is always mounted and only receives a class, so its previous frame
+       * genuinely exists. The second rAF guarantees a painted frame in between. */
+      let inner = 0;
+      const id = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => setRailShown(true));
+      });
+      return () => { cancelAnimationFrame(id); cancelAnimationFrame(inner); };
+    }
+    setRailShown(false);
+    const id = window.setTimeout(() => setRailMounted(false), 470);
+    return () => window.clearTimeout(id);
+  }, [epPanelOpen]);
+
   const toggleMute = useCallback(() => { const v = videoRef.current; if (v) v.muted = !v.muted; }, []);
   const toggleFs = useCallback(() => {
     const el = overlayRef.current;
@@ -732,12 +894,12 @@ export default function VideoPlayer() {
   }, []);
   const setLevel = (i: number) => { const h = hlsRef.current; if (h) h.currentLevel = i; setCurLevel(i); };
   const setSpeed = (r: number) => { const v = videoRef.current; if (v) v.playbackRate = r; setRate(r); };
-  const selectSub = (i: number) => {
-    const v = videoRef.current; if (!v) return;
-    for (let k = 0; k < v.textTracks.length; k++) v.textTracks[k].mode = k === i ? 'showing' : 'hidden';
-    setCurrentSub(i);
-  };
-  const toggleCC = () => { if (!vtt.length) return; selectSub(ccOn ? -1 : Math.max(0, currentSub)); };
+  /* Pick a track by its index in `subs`. The element's textTracks are NOT touched here any
+   * more: only the chosen track is ever mounted, so which one shows follows from which one
+   * was fetched, and the effect that mounts it also sets its mode. Setting a mode here
+   * would be setting it on the OUTGOING track, one commit before the incoming one exists. */
+  const selectSub = (i: number) => { subPicked.current = true; setCurrentSub(i); };
+  const toggleCC = () => { if (!subs.length) return; selectSub(ccOn ? -1 : Math.max(0, currentSub)); };
   /* Manual audio switch. hls.js owns the list when it is attached; otherwise the list came
    * from the element itself, where switching means enabling one track and disabling the
    * rest (a native AudioTrackList permits several enabled at once, which would mix them). */
@@ -965,12 +1127,60 @@ export default function VideoPlayer() {
         return;
       }
 
-      // 2. A panel over the bar owns the D-pad completely — spatial nav walks it, and seeking
-      // the film underneath a list the viewer is reading is the bug this exists to prevent.
-      if (menuOpen || epPanelOpen) return;
-
       const k = e.key;
       const onBar = document.activeElement === barRef.current;
+
+      /* 2. THE EPISODE RAIL owns the D-pad while it is up, and unlike the gear menu it cannot
+       * simply be handed to TvSpatialNav and forgotten.
+       *
+       * UP HAS TO BE TAKEN. Geometrically the rail sits at the bottom of the screen with the
+       * scrubber directly above it, so Up "works" — but it leaves the rail OPEN behind the
+       * bar, covering the bottom third of the picture, with no press that obviously shuts it
+       * again. Down opened it; Up closes it. The whole gesture is one axis.
+       *
+       * LEFT/RIGHT HAVE TO BE TAKEN for the reason the control row documents at length below:
+       * `pick` scores travel + 2x drift, and the scrubber is a full-width element sitting
+       * directly above a strip of ~300px cards — from the first card, Left has nowhere to go
+       * along the row and the enormous bar overhead wins on distance. Walking the track in DOM
+       * order makes the ends stop instead of teleporting to the timeline. */
+      if (epPanelOpen && IS_TV) {
+        if (k === 'ArrowUp') {
+          consume();
+          /* MOVE FOCUS HERE, NOT VIA THE RESTORE EFFECT. That effect bails when the remote is
+           * already on something inside the overlay ("already somewhere real"), and on the
+           * commit that closes the shelf the remote IS — on the card it was standing on, which
+           * is still mounted for its slide-down. So it declines to act, the card then goes
+           * `tabIndex={-1}` and the browser blurs it, and focus lands on <body>: the next arrow
+           * press restarts from the ✕ in the far corner. Measured, not theorised. The hint is
+           * still set, as the answer for the frame where the bar has not rendered yet. */
+          tvWantFocus.current = 'scrubber';
+          setEpPanelOpen(false);
+          barRef.current?.focus({ preventScroll: true });
+          return;
+        }
+        if (k === 'ArrowLeft' || k === 'ArrowRight') {
+          const ae = document.activeElement as HTMLElement | null;
+          const track = ae?.closest<HTMLElement>('.vp-eprail-track');
+          if (track && ae) {
+            const cards = Array.from(track.querySelectorAll<HTMLElement>('.vp-epcard'));
+            const at = cards.indexOf(ae);
+            if (at >= 0) {
+              consume();
+              /* The card the remote lands on becomes the LEFTMOST one and the strip slides under
+                 it, rather than a highlight travelling along a strip that stays put. See
+                 `scrollCardToSlot` for why this is not `scrollIntoView` — that scrolls the whole
+                 overlay along with the strip, and takes the picture with it. */
+              const to = cards[at + (k === 'ArrowRight' ? 1 : -1)];
+              if (to) { to.focus({ preventScroll: true }); scrollCardToSlot(to); }
+            }
+          }
+        }
+        return;
+      }
+
+      // A panel over the bar owns the D-pad completely — spatial nav walks it, and seeking
+      // the film underneath a list the viewer is reading is the bug this exists to prevent.
+      if (menuOpen || epPanelOpen) return;
 
       // 3. THE SCRUBBER, whether it holds focus or nothing does. Same two keys, same job — which
       // is the point: Left is "back a bit" in both modes, so there is nothing to learn.
@@ -978,6 +1188,29 @@ export default function VideoPlayer() {
         if (k === 'ArrowLeft') { consume(); tvSeek(-1); return; }
         if (k === 'ArrowRight') { consume(); tvSeek(1); return; }
         if (k === 'Enter' && seekPreviewRef.current != null) { consume(); commitSeek(); return; }
+        /* OK ON THE SCRUBBER, WITH NOTHING PENDING, IS PLAY/PAUSE. It has to be, now that the
+         * play button is a badge rather than a stop on the row: the bar is where the remote
+         * lives in controls mode, and OK there previously did nothing at all unless a scrub was
+         * waiting to be committed. Same meaning it has in transport mode, so there is nothing
+         * new to learn — OK is play/pause everywhere except when it has a seek to confirm. */
+        if (onBar && (k === 'Enter' || k === ' ')) { consume(); togglePlay(); bump(); return; }
+      }
+
+      /* 3b. DOWN FROM THE SCRUBBER OPENS THE EPISODE RAIL — the one gesture this whole feature
+       * is. It is available only from the bar, and only in controls mode: in transport mode
+       * Down is how you summon the chrome in the first place (step 4), and spending that press
+       * on a shelf of episodes would take the seek bar away from someone who only wanted the
+       * bar. So it is always exactly two presses from watching — Down, Down — and the second
+       * one is in the direction the shelf appears from.
+       *
+       * The bar is the BOTTOM control on a television (the transport row is rendered above it
+       * there, matching every TV player and freeing this press); on the web the order is
+       * reversed and none of this code runs. A film has no rail and Down does nothing. */
+      if (tvNav && onBar && k === 'ArrowDown' && source.series) {
+        consume();
+        railFrom.current = 'bar';
+        setEpPanelOpen(true);
+        return;
       }
 
       if (!tvNav) {
@@ -997,9 +1230,11 @@ export default function VideoPlayer() {
 
       // 5. CONTROLS MODE. Vertical movement and OK belong to TvSpatialNav and to the buttons
       // themselves; this keeps the bar alive while the remote is working in it.
+      /* Every press restarts the idle clock. It used to CANCEL it — correct when only Back could
+         leave controls mode, and wrong now that going idle is what leaves it: cancelling would
+         mean the first press into the bar was also the last thing that could ever dismiss it. */
       if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Enter' || k === ' ') {
-        setHideUi(false);
-        window.clearTimeout(hideTimer.current);
+        bump();
       }
 
       /* 6. LEFT/RIGHT INSIDE THE CONTROL ROW WALK THE ROW, and they have to be taken back from
@@ -1058,15 +1293,49 @@ export default function VideoPlayer() {
     return registerBackHandler(() => {
       // The hint tells the focus effect which button to hand the remote back to — see there.
       if (menuOpen) { tvWantFocus.current = 'gear'; setMenuOpen(false); return true; }
-      if (epPanelOpen) { tvWantFocus.current = 'episodes'; setEpPanelOpen(false); return true; }
-      /* THE CONTROL BAR IS A LAYER TOO, and the last one before playback itself. Without this
-       * step Back from the gear button closed the whole film — the viewer having opened the bar
-       * only to check the subtitle track. Dismissing the controls is what Back means there;
-       * a second press then closes the player, which is what it means everywhere else. */
-      if (IS_TV && tvNav) { exitTvNav(); return true; }
+      /* THE AUDIO POPUP IS A LAYER AND WAS NOT IN THIS CHAIN. It never had to be while Back's
+       * last step was "dismiss the control bar" — a Back with the popup open closed the bar and
+       * the popup went with it, which looked right by accident. Now that the last step ends the
+       * film, the same press closed the whole player out from under a viewer who had opened a
+       * list to change the audio track. Measured, not theorised. */
+      if (audioOpen) {
+        setAudioOpen(false);
+        if (IS_TV) overlayRef.current?.querySelector<HTMLElement>('#vpAudio')?.focus({ preventScroll: true });
+        return true;
+      }
+      /* BACK PUTS THE REMOTE WHERE THE EPISODES CAME FROM, and on a TV there are now two doors
+       * into them. Handing it back to the Episodes button is right when that button opened it,
+       * and wrong when Down from the scrubber did: the button is at the far end of the control
+       * row, so Back would close the shelf and simultaneously teleport the selection across the
+       * bar — a move the viewer did not ask for and cannot undo with the same key. */
+      if (epPanelOpen) {
+        const toBar = railFrom.current === 'bar';
+        tvWantFocus.current = toBar ? 'scrubber' : 'episodes';
+        setEpPanelOpen(false);
+        // Same reason as the Up handler's explicit focus: on the TV the rail outlives this
+        // commit by the length of its slide-down, so the restore effect sees the remote as
+        // already parked somewhere valid and leaves it on a card that is about to be blurred.
+        if (IS_TV) {
+          (toBar ? barRef.current : overlayRef.current?.querySelector<HTMLElement>('#vpEpisodes'))
+            ?.focus({ preventScroll: true });
+        }
+        return true;
+      }
+      /* THE CONTROL BAR IS NO LONGER A LAYER BACK HAS TO PEEL, and that is a deliberate reversal.
+       *
+       * It used to be one, so that Back from the gear button dismissed the chrome instead of
+       * ending the film — a real hazard when the gear, CC, Episodes, skip and mute all lived in
+       * that row and a viewer could be several presses deep in it. That row is now the scrubber
+       * and nothing else: the settings menu answers its own Back, the episode shelf answers its
+       * own, and what is left underneath is a seek bar over a playing film. Making Back mean
+       * "dismiss the seek bar" there spends a press on removing something that fades by itself
+       * after five seconds, and puts a second press between the viewer and leaving.
+       *
+       * So Back now falls through to the app's chain, which closes the player. Settings first,
+       * shelf next, then out — one press each, in the order they were opened. */
       return false;
     });
-  }, [source, menuOpen, epPanelOpen, tvNav, exitTvNav]);
+  }, [source, menuOpen, audioOpen, epPanelOpen]);
 
   // picture-enhance: rewrite the unsharp-mask convolution kernel from the clarity
   // slider (identity at 0 → 3×3 Laplacian sharpen at 1; energy-preserving so it
@@ -1085,7 +1354,7 @@ export default function VideoPlayer() {
   const seekDelta = seekPreview == null ? 0 : Math.round(seekPreview - cur);
   const pct = dur ? (shownTime / dur) * 100 : 0;
   const bufPct = dur ? (buffered / dur) * 100 : 0;
-  const hasSubs = vtt.length > 0;
+  const hasSubs = subs.length > 0;
 
   // ::cue styling from the subtitle settings (color / bg / size / outline)
   const ow = settings.subOutlineW, oc = settings.subOutline;
@@ -1107,202 +1376,58 @@ export default function VideoPlayer() {
     }
   }
 
-  return (
-    <div
-      /* `tv-nav` is the flag TvSpatialNav watches: present means the D-pad drives the chrome,
-         absent means the arrows are transport and it must stand down. `tv` is the styling hook
-         for the 10-foot control bar. */
-      className={`vp-overlay open${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ''}${IS_TV && tvNav ? ' tv-nav' : ''}`}
-      id="playerOverlay"
-      ref={overlayRef}
-      /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
-         control bar. -1 keeps it out of TvSpatialNav's candidate pool (it filters tabIndex < 0). */
-      tabIndex={IS_TV ? -1 : undefined}
-      style={{ ['--grain' as string]: settings.enhance ? settings.grain : 0 }}
-      onPointerMove={bump}
-      onClick={(e) => { if (e.target === videoRef.current) togglePlay(); }}
-    >
-      {/* unsharp-mask filter for the Clarity control (kernel rewritten live above) */}
-      <svg aria-hidden="true" width="0" height="0" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
-        <filter id="vpSharpen" colorInterpolationFilters="sRGB">
-          <feConvolveMatrix ref={kernelRef} order="3" preserveAlpha="true" kernelMatrix="0 0 0 0 1 0 0 0 0" />
-        </filter>
-      </svg>
-      <video
-        id="playerVideo"
-        ref={videoRef}
-        playsInline
-        style={{ filter: settings.enhance && settings.clarity > 0 ? 'url(#vpSharpen)' : undefined }}
-        onLoadedMetadata={(e) => {
-          const v = e.currentTarget;
-          setDur(v.duration || 0);
-          // resume where we left off (once), if there's saved progress for this title
-          if (!resumedRef.current && source.media?.key) {
-            resumedRef.current = true;
-            const r = getResume(source.media.key);
-            if (r && r.pos > 0 && r.pos < (v.duration || Infinity)) v.currentTime = r.pos;
-          }
-        }}
-        onTimeUpdate={(e) => {
-          const v = e.currentTarget;
-          setCur(v.currentTime);
-          // throttle resume-progress writes to ~once/5s
-          const now = v.currentTime;
-          if (source.media?.key && v.currentTime > 8 && Math.abs(now - lastProgRef.current) >= 5) {
-            lastProgRef.current = now;
-            putProgress(source.media.key, v.currentTime, v.duration || 0, source.media.lang);
-          }
-        }}
-        onProgress={(e) => { const v = e.currentTarget; if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1)); }}
-        onPlay={() => {
-          setPlaying(true); bump();
-          if (!recordedRef.current && source.media) {
-            recordedRef.current = true;
-            const m = source.media;
-            record({ id: m.id, title: m.title, poster: m.poster, year: m.year, type: m.type, genre: m.genre, rating: m.rating, ep: m.ep, key: m.key, season: m.season, episode: m.episode });
-          }
-        }}
-        onPause={() => { setPlaying(false); setHideUi(false); }}
-        onWaiting={() => setLoading(true)}
-        onPlaying={() => { setLoading(false); setErrKind(null); }}
-        onCanPlay={() => { setLoading(false); setErrKind(null); }}
-        onError={() => { setLoading(false); setErrKind((k) => k ?? 'codec'); }}
-        onVolumeChange={(e) => { setVol(e.currentTarget.volume); setMuted(e.currentTarget.muted); }}
-        onEnded={() => { setPlaying(false); if (settings.autoplayNext && source.next) source.next(); }}
-      >
-        {vtt.map((s, i) => (
-          <track key={i} kind="subtitles" src={s.url} srcLang={s.lang} label={s.label} />
-        ))}
-      </video>
-
-      {/* subtitle appearance from Settings, applied to the cue text */}
-      <style>{cueCss}</style>
-
-      <div className="vp-grain" id="vpGrain" aria-hidden="true" />
-
-      {/* mobile gesture surface: tap toggles chrome, double-tap sides seek ±10s,
-          vertical drag = volume (right) / brightness (left), horizontal drag scrubs */}
-      {isTouch && (
-        <div className="vp-gestures" onTouchStart={onGestureStart} onTouchMove={onGestureMove} onTouchEnd={onGestureEnd} onTouchCancel={onGestureEnd}>
-          <div className="vp-bright" style={{ opacity: clamp(1 - bright, 0, 0.85) }} />
-          <div className={`vp-seekpulse left${seekHud?.side === 'left' ? ' show' : ''}`}>
-            <span className="rip" />
-            <span className="lbl">{IcRew}{(seekHud?.side === 'left' ? seekHud.secs : 10)}s</span>
-          </div>
-          <div className={`vp-seekpulse right${seekHud?.side === 'right' ? ' show' : ''}`}>
-            <span className="rip" />
-            <span className="lbl">{(seekHud?.side === 'right' ? seekHud.secs : 10)}s{IcFF}</span>
-          </div>
-          <div className={`vp-vhud${vHud ? ' show' : ''}`}>
-            <span className="ic">{vHud?.kind === 'bright' ? IcSun : (vHud && vHud.val <= 0.001 ? IcVolMuteHud : IcVolHud)}</span>
-            <span className="bar"><i style={{ width: `${Math.round((vHud?.val ?? 0) * 100)}%` }} /></span>
-          </div>
-        </div>
-      )}
-
-      {loading && !errKind && (
-        <div className="vp-loading show" id="vpLoading" role="status" aria-live="polite">
-          {Worm}
-          <div className="lt">{t('player.preparing')}</div>
-          <div className="ls" />
-        </div>
-      )}
-
-      {errKind && (
-        <div className="vp-loading show" id="vpError" role="alert" aria-live="assertive">
-          <div className="lt">{t(errKind === 'source' ? 'player.source_unavailable' : 'player.cant_play')}</div>
-          <div className="ls" style={{ opacity: 0.75, maxWidth: 420, textAlign: 'center' }}>{t(errKind === 'source' ? 'player.source_unavailable_sub' : 'player.cant_play_sub')}</div>
-        </div>
-      )}
-
-      {/* A TOAST AND NOT AN ERROR SCREEN, because this is not a failure: the video is
-          playing correctly and only the audio track is undecodable. Blanking the frame
-          over it would throw away the half that works. */}
-      {/* Not while the audio menu is open — it is explaining the same thing in more detail
-          three centimetres away, and the two boxes overlapped each other on screen. */}
-      {silent && !audioOpen && (
-        <div className="vp-silent" role="status" aria-live="polite">{t('player.silent')}</div>
-      )}
-
-      <div className="vp-ui">
-        <div className="vp-top">
-          <div>
-            <div className="vp-title" id="playerTitle">{source.title || ''}</div>
-            <div className="vp-subtitle" id="vpSubtitle">{source.subtitle || ''}</div>
-          </div>
-          <div className="vp-top-right">
-            <div className="vp-status" id="playerStatus" role="status" aria-live="polite" />
-            <button className="vp-icon" id="vpClose" title="Close (Esc)" aria-label={t('player.close')} onClick={close}>✕</button>
-          </div>
-        </div>
-
-        {/* The centre disc is a BUTTON on the web and a plain badge on the TV. It has to stop
-            being focusable there: it is a second, ambiguous play control sitting in the middle of
-            the screen, and TvSpatialNav would offer it as a target above the bar's own ▶. OK
-            already toggles playback from anywhere in transport mode, so on a TV this is only ever
-            the "this is paused" sign it looks like. */}
-        {IS_TV ? (
-          <div className={`vp-center${playing ? ' hidden' : ''}`} aria-hidden="true">
-            <span className="ic">{playing ? IcPause : IcPlay}</span>
-          </div>
-        ) : (
-          <button className={`vp-center${playing ? ' hidden' : ''}`} aria-label="Play / Pause" onClick={togglePlay}>
-            <span className="ic">{playing ? IcPause : IcPlay}</span>
-          </button>
-        )}
-
-        <div className="vp-bottom">
-          <div
-            className={`vp-progress${seekPreview != null ? ' seeking' : ''}`}
-            id="vpProgress"
-            ref={barRef}
-            onPointerDown={onBarPointerDown}
-            /* On the TV the bar is a control in its own right — the remote lands on it and
-               Left/Right move the preview, which is exactly a slider. On the web it stays a
-               click target and nothing about it changes. */
-            tabIndex={IS_TV ? 0 : undefined}
-            role={IS_TV ? 'slider' : undefined}
-            aria-label={IS_TV ? t('player.seek') : undefined}
-            aria-valuemin={IS_TV ? 0 : undefined}
-            aria-valuemax={IS_TV ? Math.round(dur) : undefined}
-            aria-valuenow={IS_TV ? Math.round(shownTime) : undefined}
-            aria-valuetext={IS_TV ? fmt(shownTime) : undefined}
-          >
-            <div className="vp-bar">
-              <div className="vp-buffered" id="vpBuffered" style={{ width: `${bufPct}%` }} />
-              <div className="vp-played" id="vpPlayed" style={{ width: `${pct}%` }} />
-              <div className="vp-thumb" id="vpThumb" style={{ left: `${pct}%` }} />
-            </div>
-          </div>
-          <div className="vp-controls">
-            <button className="vp-icon" id="vpPlay" aria-label={t('ctl.play_a')} onClick={togglePlay}>{playing ? IcPause : IcPlay}</button>
-            <button className="vp-icon" id="vpBack" aria-label={t('ctl.back_a')} onClick={() => nudge(-10)}>{IcBack}</button>
-            <button className="vp-icon" id="vpFwd" aria-label={t('ctl.fwd_a')} onClick={() => nudge(10)}>{IcFwd}</button>
-            {/* VOLUME IS THE TELEVISION'S, NOT OURS. The set has its own volume on the same
-                remote, and on all three TV platforms it is handled below the browser — see the
-                note in lib/tvKeys.ts. A second, app-local volume that the remote's volume keys
-                do not drive is a control that looks broken; mute stays, since that IS ours. */}
-            {IS_TV ? (
-              <button className="vp-icon" id="vpMute" aria-label={t('ctl.mute_a')} aria-pressed={muted} onClick={toggleMute}>{IcMute}</button>
-            ) : (
-              <div className="vp-vol">
-                <button className="vp-icon" id="vpMute" aria-label={t('ctl.mute_a')} aria-pressed={muted} onClick={toggleMute}>{IcMute}</button>
-                <input type="range" className="vp-vol-slider" id="vpVol" min={0} max={1} step={0.02} value={muted ? 0 : vol} aria-label={t('ctl.vol_a')}
-                  onChange={(e) => { const v = videoRef.current; if (v) { v.volume = +e.target.value; v.muted = +e.target.value === 0; } }} />
-              </div>
+  /* THE CONTROL GROUP, BUILT ONCE AND MOUNTED IN ONE OF TWO PLACES.
+   *
+   * On the web it is the row under the scrubber, exactly as before. On a television everything
+   * in it that belonged to a transport row has been taken out — play moved into the scrubber
+   * line as a badge, skip and mute went to the remote, CC went to the menu it duplicates, and
+   * Episodes went to the shelf that Down already opens — which leaves the audio picker and the
+   * settings menu. Those two are not transport; they are what the corner of a TV player is for,
+   * so on that build this whole group is rendered inside `.vp-top-right` instead.
+   *
+   * A VARIABLE RATHER THAN THE JSX TWICE. The settings menu underneath is two hundred lines of
+   * accordions, and a second copy behind an `IS_TV` branch is two copies to keep in step — the
+   * exact drift the add-on client's header warns about, in a file where nobody would think to
+   * look for it. Built here, mounted once, in whichever parent the build calls for. */
+  const controlsRow = (
+    <div className="vp-controls">
+            {/* Play is the scrubber line's own disc on a TV — see the note where it is rendered. */}
+            {!IS_TV && <button className="vp-icon" id="vpPlay" aria-label={t('ctl.play_a')} onClick={togglePlay}>{playing ? IcPause : IcPlay}</button>}
+            {/* SKIP ±10 AND MUTE ARE WEB-ONLY NOW, and both for the same reason: on a television
+                the remote already does them better than a button the viewer has to walk to.
+                Left/Right on the scrubber seek, with a step that grows while the key is held (see
+                "SEEKING IS PREVIEWED" above) — reaching a ⏪ button costs presses to do something
+                worse. Mute is on the remote and handled below the browser on all three TV
+                platforms, exactly as volume already was; the note that kept mute here argued it
+                "IS ours", which was true and is not the same as it being worth a slot in a row
+                walked by a D-pad. Nothing is lost from the web player. */}
+            {!IS_TV && (
+              <>
+                <button className="vp-icon" id="vpBack" aria-label={t('ctl.back_a')} onClick={() => nudge(-10)}>{IcBack}</button>
+                <button className="vp-icon" id="vpFwd" aria-label={t('ctl.fwd_a')} onClick={() => nudge(10)}>{IcFwd}</button>
+                <div className="vp-vol">
+                  <button className="vp-icon" id="vpMute" aria-label={t('ctl.mute_a')} aria-pressed={muted} onClick={toggleMute}>{IcMute}</button>
+                  <input type="range" className="vp-vol-slider" id="vpVol" min={0} max={1} step={0.02} value={muted ? 0 : vol} aria-label={t('ctl.vol_a')}
+                    onChange={(e) => { const v = videoRef.current; if (v) { v.volume = +e.target.value; v.muted = +e.target.value === 0; } }} />
+                </div>
+                <div className="vp-time">
+                  <span id="vpCur">{fmt(shownTime)}</span> / <span id="vpDur">{fmt(dur)}</span>
+                  {seekDelta !== 0 && <span className="vp-seekdelta">{seekDelta > 0 ? '+' : '−'}{fmt(Math.abs(seekDelta))}</span>}
+                </div>
+              </>
             )}
-            <div className="vp-time">
-              <span id="vpCur">{fmt(shownTime)}</span> / <span id="vpDur">{fmt(dur)}</span>
-              {/* How far the pending scrub has travelled. The absolute time above answers "where
-                  will I land"; this answers "how far did I just skip", which is what a viewer
-                  holding the button down is actually counting. */}
-              {seekDelta !== 0 && <span className="vp-seekdelta">{seekDelta > 0 ? '+' : '−'}{fmt(Math.abs(seekDelta))}</span>}
-            </div>
-            <div className="vp-spacer" />
-            {source.series && (
-              <button className={`vp-icon${epPanelOpen ? ' on' : ''}`} id="vpEpisodes" aria-label={t('ctl.episodes_a')} aria-pressed={epPanelOpen} onClick={() => setEpPanelOpen((o) => !o)}>{IcEpisodes}</button>
+            {!IS_TV && <div className="vp-spacer" />}
+            {/* EPISODES AND CC ARE WEB-ONLY NOW, and both are duplicates on a television rather
+                than losses. Down from the scrubber opens the episode shelf, which is a better
+                instrument than this button ever was and is already one press away; and the CC
+                toggle only ever switched between "off" and "the first track", which the menu's
+                Subtitles list does with the track names visible. Two fewer stops in a row the
+                D-pad walks, and nothing that can no longer be reached. */}
+            {!IS_TV && source.series && (
+              <button className={`vp-icon${epPanelOpen ? ' on' : ''}`} id="vpEpisodes" aria-label={t('ctl.episodes_a')} aria-pressed={epPanelOpen}
+                onClick={() => { railFrom.current = 'button'; setEpPanelOpen((o) => !o); }}>{IcEpisodes}</button>
             )}
-            {hasSubs && (
+            {!IS_TV && hasSubs && (
               <button className={`vp-icon cc${ccOn ? ' on' : ''}`} id="vpCC" aria-label={t('ctl.subs_a')} aria-pressed={ccOn} onClick={toggleCC}>CC</button>
             )}
 
@@ -1339,7 +1464,7 @@ export default function VideoPlayer() {
             )}
 
             <div className="vp-menu-wrap">
-              <button className="vp-icon" id="vpGear" aria-label={t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuOpen((o) => !o); setAudioOpen(false); }}>{IcGear}</button>
+              <button className="vp-icon" id="vpGear" aria-label={t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuOpen((o) => !o); setAudioOpen(false); }}>{IS_TV ? IcMore : IcGear}</button>
               {/* A CLOSED DROPDOWN IS STILL IN THE DOM, AND THAT IS A BUG FOR A REMOTE. `.vp-menu`
                   hides itself with opacity + pointer-events, which a pointer respects and
                   geometry does not: every row inside it keeps a real bounding box floating above
@@ -1352,12 +1477,27 @@ export default function VideoPlayer() {
                 <div className={`vp-acc${acc.subs ? ' open' : ''}`}>
                   <button className="vp-acc-head" aria-expanded={acc.subs} onClick={() => toggleAcc('subs')}>
                     {AccIc}<span className="vp-acc-label">{t('menu.subtitles')}</span>
-                    <span className="vp-acc-val">{currentSub < 0 ? t('menu.off') : (vtt[currentSub]?.label || vtt[currentSub]?.lang || '')}</span>
+                    <span className="vp-acc-val">{currentSub < 0 ? t('menu.off') : (subs[currentSub]?.label || subs[currentSub]?.lang || '')}</span>
                   </button>
                   <div className="vp-acc-body">
                     <OptRow on={currentSub < 0} label={t('menu.off')} onClick={() => selectSub(-1)} />
-                    {vtt.length === 0 && <div className="vp-opt" style={{ opacity: 0.5 }}>{t('menu.no_subs_found')}</div>}
-                    {vtt.map((s, i) => <OptRow key={i} on={i === currentSub} label={s.label || s.lang || `${t('menu.track')}${i + 1}`} onClick={() => selectSub(i)} />)}
+                    {subs.map((s, i) => (
+                      <OptRow key={`${s.source || ''}${s.url}`} on={i === currentSub}
+                        label={s.label || s.lang || `${t('menu.track')}${i + 1}`}
+                        sub={s.source} onClick={() => selectSub(i)} />
+                    ))}
+                    {/* The three end states are deliberately distinct: still asking, asked
+                        and nothing came back, and nothing was asked because no subtitle
+                        add-on is installed. The last one is the only one the user can act
+                        on, and conflating it with "none found" is what made a missing
+                        feature look like a missing subtitle. */}
+                    {subsLoading && <div className="vp-opt" style={{ opacity: 0.5 }}>{t('menu.loading_subs')}</div>}
+                    {!subsLoading && subs.length === 0 && (
+                      <div className="vp-opt" style={{ opacity: 0.5 }}>
+                        {source.subsQuery ? t('menu.no_subs_found') : t('menu.install_sub_addon')}
+                      </div>
+                    )}
+                    {subFailed && <div className="vp-menu-note">{t('menu.sub_failed')}</div>}
                   </div>
                 </div>
                 {/* Audio language (HLS renditions) */}
@@ -1474,7 +1614,211 @@ export default function VideoPlayer() {
               <button className="vp-icon" id="vpPip" aria-label={t('ctl.pip_a')} onClick={togglePip}>{IcPip}</button>
             )}
             {!IS_TV && <button className="vp-icon" id="vpFs" aria-label={t('ctl.fs_a')} aria-pressed={fs} onClick={toggleFs}>{IcFs}</button>}
+    </div>
+  );
+
+  return (
+    <div
+      /* `tv-nav` is the flag TvSpatialNav watches: present means the D-pad drives the chrome,
+         absent means the arrows are transport and it must stand down. `tv` is the styling hook
+         for the 10-foot control bar. */
+      className={`vp-overlay open${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ''}${IS_TV && tvNav ? ' tv-nav' : ''}${IS_TV && railShown ? ' tv-rail' : ''}`}
+      id="playerOverlay"
+      ref={overlayRef}
+      /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
+         control bar. -1 keeps it out of TvSpatialNav's candidate pool (it filters tabIndex < 0). */
+      tabIndex={IS_TV ? -1 : undefined}
+      style={{ ['--grain' as string]: settings.enhance ? settings.grain : 0 }}
+      onPointerMove={bump}
+      onClick={(e) => { if (e.target === videoRef.current) togglePlay(); }}
+    >
+      {/* unsharp-mask filter for the Clarity control (kernel rewritten live above) */}
+      <svg aria-hidden="true" width="0" height="0" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
+        <filter id="vpSharpen" colorInterpolationFilters="sRGB">
+          <feConvolveMatrix ref={kernelRef} order="3" preserveAlpha="true" kernelMatrix="0 0 0 0 1 0 0 0 0" />
+        </filter>
+      </svg>
+      <video
+        id="playerVideo"
+        ref={videoRef}
+        playsInline
+        style={{ filter: settings.enhance && settings.clarity > 0 ? 'url(#vpSharpen)' : undefined }}
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget;
+          setDur(v.duration || 0);
+          // resume where we left off (once), if there's saved progress for this title
+          if (!resumedRef.current && source.media?.key) {
+            resumedRef.current = true;
+            const r = getResume(source.media.key);
+            if (r && r.pos > 0 && r.pos < (v.duration || Infinity)) v.currentTime = r.pos;
+          }
+        }}
+        onTimeUpdate={(e) => {
+          const v = e.currentTarget;
+          setCur(v.currentTime);
+          // throttle resume-progress writes to ~once/5s
+          const now = v.currentTime;
+          if (source.media?.key && v.currentTime > 8 && Math.abs(now - lastProgRef.current) >= 5) {
+            lastProgRef.current = now;
+            putProgress(source.media.key, v.currentTime, v.duration || 0, source.media.lang);
+          }
+        }}
+        onProgress={(e) => { const v = e.currentTarget; if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1)); }}
+        onPlay={() => {
+          setPlaying(true); bump();
+          if (!recordedRef.current && source.media) {
+            recordedRef.current = true;
+            const m = source.media;
+            record({ id: m.id, title: m.title, poster: m.poster, year: m.year, type: m.type, genre: m.genre, rating: m.rating, ep: m.ep, key: m.key, season: m.season, episode: m.episode });
+          }
+        }}
+        onPause={() => { setPlaying(false); setHideUi(false); }}
+        onWaiting={() => setLoading(true)}
+        onPlaying={() => { setLoading(false); setErrKind(null); }}
+        onCanPlay={() => { setLoading(false); setErrKind(null); }}
+        onError={() => { setLoading(false); setErrKind((k) => k ?? 'codec'); }}
+        onVolumeChange={(e) => { setVol(e.currentTarget.volume); setMuted(e.currentTarget.muted); }}
+        onEnded={() => { setPlaying(false); if (settings.autoplayNext && source.next) source.next(); }}
+      >
+        {/* `key` is the blob url so switching tracks REPLACES the element rather than
+            mutating its src — a <track> that has already loaded keeps its old cues when
+            src changes underneath it, which showed the previous language's subtitles. */}
+        {vtt && <track key={vtt.url} kind="subtitles" src={vtt.url} srcLang={vtt.lang} label={vtt.label} default />}
+      </video>
+
+      {/* subtitle appearance from Settings, applied to the cue text */}
+      <style>{cueCss}</style>
+
+      <div className="vp-grain" id="vpGrain" aria-hidden="true" />
+
+      {/* mobile gesture surface: tap toggles chrome, double-tap sides seek ±10s,
+          vertical drag = volume (right) / brightness (left), horizontal drag scrubs */}
+      {isTouch && (
+        <div className="vp-gestures" onTouchStart={onGestureStart} onTouchMove={onGestureMove} onTouchEnd={onGestureEnd} onTouchCancel={onGestureEnd}>
+          <div className="vp-bright" style={{ opacity: clamp(1 - bright, 0, 0.85) }} />
+          <div className={`vp-seekpulse left${seekHud?.side === 'left' ? ' show' : ''}`}>
+            <span className="rip" />
+            <span className="lbl">{IcRew}{(seekHud?.side === 'left' ? seekHud.secs : 10)}s</span>
           </div>
+          <div className={`vp-seekpulse right${seekHud?.side === 'right' ? ' show' : ''}`}>
+            <span className="rip" />
+            <span className="lbl">{(seekHud?.side === 'right' ? seekHud.secs : 10)}s{IcFF}</span>
+          </div>
+          <div className={`vp-vhud${vHud ? ' show' : ''}`}>
+            <span className="ic">{vHud?.kind === 'bright' ? IcSun : (vHud && vHud.val <= 0.001 ? IcVolMuteHud : IcVolHud)}</span>
+            <span className="bar"><i style={{ width: `${Math.round((vHud?.val ?? 0) * 100)}%` }} /></span>
+          </div>
+        </div>
+      )}
+
+      {loading && !errKind && (
+        <div className="vp-loading show" id="vpLoading" role="status" aria-live="polite">
+          {Worm}
+          <div className="lt">{t('player.preparing')}</div>
+          <div className="ls" />
+        </div>
+      )}
+
+      {errKind && (
+        <div className="vp-loading show" id="vpError" role="alert" aria-live="assertive">
+          <div className="lt">{t(errKind === 'source' ? 'player.source_unavailable' : 'player.cant_play')}</div>
+          <div className="ls" style={{ opacity: 0.75, maxWidth: 420, textAlign: 'center' }}>{t(errKind === 'source' ? 'player.source_unavailable_sub' : 'player.cant_play_sub')}</div>
+        </div>
+      )}
+
+      {/* A TOAST AND NOT AN ERROR SCREEN, because this is not a failure: the video is
+          playing correctly and only the audio track is undecodable. Blanking the frame
+          over it would throw away the half that works. */}
+      {/* Not while the audio menu is open — it is explaining the same thing in more detail
+          three centimetres away, and the two boxes overlapped each other on screen. */}
+      {silent && !audioOpen && (
+        <div className="vp-silent" role="status" aria-live="polite">{t('player.silent')}</div>
+      )}
+
+      <div className="vp-ui">
+        <div className="vp-top">
+          <div>
+            <div className="vp-title" id="playerTitle">{source.title || ''}</div>
+            <div className="vp-subtitle" id="vpSubtitle">{source.subtitle || ''}</div>
+          </div>
+          <div className="vp-top-right">
+            <div className="vp-status" id="playerStatus" role="status" aria-live="polite" />
+            {/* NO CLOSE BUTTON ON A TELEVISION. Back on the remote closes the player — that is
+                the gesture people already use to leave anything, it costs no travel, and it is
+                the one this build's Back chain now ends in (see `registerBackHandler`). A ✕ in
+                the far corner was a D-pad journey to do what one press already did, and it was
+                the target focus fell back to whenever anything else went wrong. */}
+            {!IS_TV && <button className="vp-icon" id="vpClose" title="Close (Esc)" aria-label={t('player.close')} onClick={close}>✕</button>}
+            {/* The settings group lives up here on a TV — see the note where it is built. */}
+            {IS_TV && controlsRow}
+          </div>
+        </div>
+
+        {/* The centre disc is a BUTTON on the web and a plain badge on the TV. It has to stop
+            being focusable there: it is a second, ambiguous play control sitting in the middle of
+            the screen, and TvSpatialNav would offer it as a target above the bar's own ▶. OK
+            already toggles playback from anywhere in transport mode, so on a TV this is only ever
+            the "this is paused" sign it looks like. */}
+        {IS_TV ? (
+          <div className={`vp-center${playing ? ' hidden' : ''}`} aria-hidden="true">
+            <span className="ic">{playing ? IcPause : IcPlay}</span>
+          </div>
+        ) : (
+          <button className={`vp-center${playing ? ' hidden' : ''}`} aria-label="Play / Pause" onClick={togglePlay}>
+            <span className="ic">{playing ? IcPause : IcPlay}</span>
+          </button>
+        )}
+
+        <div className="vp-bottom">
+          {/* ONE LINE ON A TELEVISION: disc, elapsed, bar, duration. The buttons that used to sit
+              under the scrubber are gone (skip and mute to the remote, CC and Episodes to the
+              menu and the shelf) and the settings group has moved to the top-right corner, which
+              leaves the transport with nothing to say that this row cannot say inline. Each time
+              sits at the end of the bar it describes rather than both being crammed into one
+              "13:27 / 23:40" cell. */}
+          {IS_TV && (
+            <>
+              {/* A BADGE, NOT A BUTTON — the same decision the centre disc documents. It is not
+                  focusable: OK toggles playback from transport mode and from the scrubber, so a
+                  second play control in the D-pad's path would be one more stop that does what
+                  OK already did, and TvSpatialNav would offer it beside the bar. */}
+              <div className={`vp-play-disc${playing ? ' playing' : ''}`} aria-hidden="true">
+                {playing ? IcPause : IcPlay}
+              </div>
+              <span className="vp-t vp-t-cur" id="vpCur">
+                {fmt(shownTime)}
+                {/* How far the pending scrub has travelled. The absolute time answers "where will
+                    I land"; this answers "how far did I just skip", which is what a viewer holding
+                    the button down is actually counting. It rides with the elapsed time, which is
+                    the number it is modifying. */}
+                {seekDelta !== 0 && <span className="vp-seekdelta">{seekDelta > 0 ? '+' : '−'}{fmt(Math.abs(seekDelta))}</span>}
+              </span>
+            </>
+          )}
+          <div
+            className={`vp-progress${seekPreview != null ? ' seeking' : ''}`}
+            id="vpProgress"
+            ref={barRef}
+            onPointerDown={onBarPointerDown}
+            /* On the TV the bar is a control in its own right — the remote lands on it and
+               Left/Right move the preview, which is exactly a slider. On the web it stays a
+               click target and nothing about it changes. */
+            tabIndex={IS_TV ? 0 : undefined}
+            role={IS_TV ? 'slider' : undefined}
+            aria-label={IS_TV ? t('player.seek') : undefined}
+            aria-valuemin={IS_TV ? 0 : undefined}
+            aria-valuemax={IS_TV ? Math.round(dur) : undefined}
+            aria-valuenow={IS_TV ? Math.round(shownTime) : undefined}
+            aria-valuetext={IS_TV ? fmt(shownTime) : undefined}
+          >
+            <div className="vp-bar">
+              <div className="vp-buffered" id="vpBuffered" style={{ width: `${bufPct}%` }} />
+              <div className="vp-played" id="vpPlayed" style={{ width: `${pct}%` }} />
+              <div className="vp-thumb" id="vpThumb" style={{ left: `${pct}%` }} />
+            </div>
+          </div>
+          {IS_TV && <span className="vp-t vp-t-dur" id="vpDur">{fmt(dur)}</span>}
+          {!IS_TV && controlsRow}
         </div>
       </div>
 
@@ -1495,11 +1839,18 @@ export default function VideoPlayer() {
         </button>
       )}
 
-      {/* In-player episodes panel (series). Mounted only when open on the TV, for the same reason
-          the gear menu is: parked at translateX(100%) it is off-screen but still has real
-          geometry, so every episode row was a live D-pad target while the panel was shut. It also
-          saves the season fetch the panel fires on mount. */}
-      {source.series && (!IS_TV || epPanelOpen) && <EpisodePanel open={epPanelOpen} series={source.series} onClose={() => setEpPanelOpen(false)} />}
+      {/* IN-PLAYER EPISODES (series) — SAME STATE, SAME `playEp`, TWO INSTRUMENTS. The web keeps
+          the right-hand slide-in panel; the television gets the bottom rail. `epPanelOpen` drives
+          both, so the Episodes button, the Back chain and the focus-restore effect are untouched
+          and there is only ever one "episodes are open" truth.
+
+          The TV branch is unmounted when closed, for the same reason the gear menu is: parked
+          off-screen it still has real geometry, so every card would be a live D-pad target while
+          the shelf was shut. It also saves the season fetches on mount. The web branch stays
+          mounted so it can slide. */}
+      {source.series && (IS_TV
+        ? railMounted && <EpisodeRail open={railShown} series={source.series} onClose={() => setEpPanelOpen(false)} />
+        : <EpisodePanel open={epPanelOpen} series={source.series} onClose={() => setEpPanelOpen(false)} />)}
     </div>
   );
 }

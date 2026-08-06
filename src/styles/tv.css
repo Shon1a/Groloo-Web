@@ -2870,9 +2870,36 @@
 /* ---- The scrubber. Thick enough to read across a room, and its thumb is ALWAYS drawn — on the
    web it appears on hover, a state a television does not have, so the playhead was invisible
    unless you were mid-drag. */
-.vp-overlay.tv .vp-progress { padding: clamp(12px, 1.8vh, 20px) 0; }
-.vp-overlay.tv .vp-bar { height: 8px; border-radius: 4px; }
-.vp-overlay.tv .vp-thumb { width: 20px; height: 20px; transform: translate(-50%, -50%) scale(1); }
+/* Inset from the control row above it rather than running the full width of the panel. A
+   full-bleed line edge to edge reads as a divider between the chrome and the picture; pulled in
+   at both ends it reads as a control, which is what it now is on this build. Tune the clamp to
+   taste — nothing else depends on this width. */
+/* The bar takes whatever the disc and the two clocks leave. `min-width: 0` because a flex item
+   will not shrink below its content otherwise, and this one has none to speak of. */
+.vp-overlay.tv .vp-progress { flex: 1; min-width: 0; padding: clamp(12px, 1.8vh, 20px) 0; }
+/* The unplayed track lifts from the web's .18 — that value is set against a bar the eye is
+   already close to, and at three metres a track this thin at 18% white is barely there. */
+.vp-overlay.tv .vp-bar { height: 10px; border-radius: 5px; background: rgba(255, 255, 255, .26); }
+
+/* ---- THE PLAYED PORTION IS A HEAT GRADIENT, and it is measured against the PLAYED LENGTH, not
+   against the whole track. That is the choice worth stating, because the other reading is just
+   as plausible and looks wrong here: mapping the gradient to the full bar would leave the
+   playhead sitting in yellow for the first half of a film and only turn red near the end, while
+   the thumb — a solid red disc — stayed red throughout. Anchoring the red end to the playhead
+   keeps the two agreeing at every position, which is what makes the disc read as the hot end of
+   the bar rather than as a separate object parked on top of it. */
+.vp-overlay.tv .vp-played {
+  background: linear-gradient(90deg, #f2cf22 0%, #f0921f 42%, #e8571b 72%, #e51f16 100%);
+}
+.vp-overlay.tv .vp-thumb {
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%) scale(1);
+  background: #e51f16;
+  /* The white glow the web thumb carries would ring a red disc in white and cost it its edge
+     against the played bar; a dark halo separates it from a bright frame instead. */
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, .35), 0 2px 8px rgba(0, 0, 0, .45);
+}
 
 /* THE TIMELINE TAKES NEITHER OF THE TWO FOCUS TREATMENTS — IT LIGHTS ITSELF UP.
  *
@@ -2899,12 +2926,18 @@
   outline: none;
 }
 .vp-overlay.tv .vp-progress:focus-visible .vp-bar {
-  height: 12px;
+  height: 14px;
   background: rgba(255, 255, 255, .3);
   box-shadow: 0 0 0 3px rgba(255, 255, 255, .5);
 }
 .vp-overlay.tv .vp-progress:focus-visible .vp-thumb { width: 26px; height: 26px; }
-.vp-overlay.tv .vp-progress.seeking .vp-thumb { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), .5), 0 0 14px rgba(255, 255, 255, .8); }
+/* MID-SCRUB, and it has to be told apart from a red disc sitting still. The halo used to be the
+   accent at 50% — which was legible when the thumb was white and is nearly invisible now that the
+   thumb is red and the bar beneath it ends red. White is the one colour not already in play at
+   this end of the bar, so it is what the scrubbing state gets. */
+.vp-overlay.tv .vp-progress.seeking .vp-thumb {
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, .85), 0 0 16px rgba(0, 0, 0, .6);
+}
 
 /* ---- The button row. 34px is a mouse target; these are sized to be seen, not clicked. */
 .vp-overlay.tv .vp-controls { gap: clamp(6px, .8vw, 14px); margin-top: clamp(4px, .8vh, 10px); }
@@ -2921,10 +2954,9 @@
   padding: 0 clamp(9px, 1vw, 14px);
   border-width: 2px;
 }
-.vp-overlay.tv .vp-time { font-size: clamp(16px, 2.1vh, 22px); padding: 0 clamp(10px, 1vw, 18px); }
-/* The scrub offset sits beside the clock, in the accent so it reads as the thing that is
-   changing rather than as part of the running time. */
-.vp-overlay.tv .vp-seekdelta { margin-left: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+/* The scrub offset reads as the thing that is CHANGING rather than as part of the running time,
+   so it takes the colour of the bar's hot end — the same red as the playhead it is moving. */
+.vp-overlay.tv .vp-seekdelta { margin-left: 12px; color: #e51f16; font-variant-numeric: tabular-nums; }
 
 /* ---- FOCUS IS A FILL, NOT A RING ----------------------------------------------------------
  * A 3px white outline is what the rest of the TV build uses, and in the control bar it is the
@@ -2941,7 +2973,11 @@
  * timeline's content is the information, so inverting it would erase what the viewer is reading.
  * It has no ring either any more — it lights its own bar up instead, for the reason given up at
  * the scrubber. */
-.vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):focus-visible {
+/* `.vp-epcard` is the second exception, and it is the same exception as the timeline's: the
+   card's content IS a picture, so filling it white paints over the still, the badge and the
+   episode title in one go and leaves a blank rectangle where the artwork was. It rings itself
+   instead — see the rail section at the foot of this file. */
+.vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):not(.vp-epcard):focus-visible {
   outline: none;
   background: #fff;
   color: #0b0b0b;
@@ -2977,6 +3013,24 @@
   padding: clamp(12px, 1.6vh, 18px) clamp(20px, 1.8vw, 32px);
   border-width: 2px;
 }
+
+/* ---- THE MENU DROPS DOWN, because its button is now in the top-right corner rather than at the
+   end of a row along the bottom. `.vp-menu` anchors itself to `bottom: 100%` — correct when it
+   had to open upwards out of the control bar, and off the top of the screen from up here. The
+   transform-origin has to follow, or the open animation scales out of a corner that is no longer
+   the one it is attached to. */
+.vp-overlay.tv .vp-top .vp-menu {
+  top: calc(100% + 12px);
+  bottom: auto;
+  transform-origin: top right;
+  transform: translateY(-8px) scale(.98);
+}
+.vp-overlay.tv .vp-top .vp-menu.open { transform: none; }
+/* Up here the cap is measured from the top of the screen, not the bottom, so it can be generous:
+   whatever the list's length, it now grows downwards into the picture rather than off-panel. */
+.vp-overlay.tv .vp-top .vp-menu { max-height: 76vh; }
+/* The corner group is two buttons at most now (audio, then ⋯), sitting beside the status text. */
+.vp-overlay.tv .vp-top-right { display: flex; align-items: center; gap: clamp(6px, .8vw, 14px); }
 
 /* ---- The gear menu. Wider, with taller rows, because every row is now a D-pad stop that has to
    be legible from a sofa. Capped at 60vh so a long subtitle list scrolls rather than running off
@@ -3030,3 +3084,392 @@
 .vp-overlay.tv .vp-center { cursor: default; width: clamp(90px, 11vh, 120px); height: clamp(90px, 11vh, 120px); }
 .vp-overlay.tv .vp-center svg { width: 40%; height: 40%; }
 .vp-overlay.tv { cursor: none; }
+
+/* ============================================================================
+   THE EPISODE RAIL — a shelf of stills under the scrubber, opened by pressing Down on it.
+   TV only; the web player keeps the right-hand slide-in panel styled in app.css.
+   ============================================================================ */
+
+/* ---- THE TRANSPORT ROW MOVES ABOVE THE TIMELINE, and this one declaration is what makes the
+   whole gesture possible.
+
+   In DOM order `.vp-bottom` is scrubber-then-buttons, which is right for a mouse: the pointer
+   arrives at the bar directly and the buttons sit under it, out of the way. It is wrong for a
+   D-pad the moment anything wants to live BELOW the bar, because the buttons are already there
+   — Down from the timeline lands on the play button, and the rail would need a third press in a
+   direction nobody would guess.
+
+   Reversing the column on the television puts the buttons on top and leaves the timeline as the
+   bottom-most control, which is where every set-top player puts it; Down from it is then
+   unambiguous, because there is nothing else underneath. `column-reverse` rather than reordering
+   the JSX, because the DOM order is also the tab order AND the order the control row's own
+   Left/Right walk uses (VideoPlayer reads `.vp-controls` children in DOM order) — both correct
+   as they stand, and neither should change to move a row visually on one build. */
+/* ---- ONE LINE: disc · elapsed · bar · duration.
+ *
+   The bottom used to be two stacked rows (scrubber, then a row of buttons) and briefly three
+   (times as well). It is one row now because the buttons are gone — skip and mute to the remote,
+   CC and Episodes to the menu and the shelf, settings to the top-right corner — and a single
+   line is what is left when a transport has nothing left to say. `align-items: center` is what
+   makes the disc, both clocks and the bar sit on one axis; `.vp-progress` takes the slack. */
+.vp-overlay.tv .vp-bottom {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 1.4vw, 26px);
+  transition: opacity .25s ease, transform var(--vp-rail-ease);
+  /* The scrim moves to a pseudo-element (below) that bleeds past the bar's bottom edge, and the
+     element's own gradient has to go or there would be two. `isolation` keeps that
+     pseudo-element's `z-index:-1` inside this box instead of dropping it behind the video. */
+  background: none;
+  position: relative;
+  isolation: isolate;
+}
+
+/* ---- THE BAR'S SCRIM FADES OUT AT BOTH ENDS, and that is what finally kills the seam.
+ *
+   First attempt was to switch the bar's background off while the shelf was up. It fixed the
+   static frame and not the motion: the class comes off the instant the rail starts closing, so
+   the gradient snapped back — hard edge and all — over a shelf that was still sliding down. Any
+   fix of that shape has the same defect, because it makes the seam a function of STATE, and the
+   seam is a function of POSITION.
+
+   So the bar simply never has a hard edge again. Its scrim overshoots the bar by a bleed and
+   fades to nothing there, exactly as it already fades to nothing at the top. Sitting at the
+   bottom of the screen the overshoot is off-panel and it reads as the gradient always did;
+   lifted 300px by the rail, the bottom fade is on screen and doing the work. No class, no state,
+   nothing to coordinate with an animation — there is no edge to reveal at any offset. */
+.vp-overlay.tv { --vp-bar-bleed: clamp(70px, 11vh, 130px); }
+.vp-overlay.tv .vp-bottom::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: calc(-1 * var(--vp-bar-bleed));
+  z-index: -1;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    rgba(0, 0, 0, .5) 32%,
+    rgba(0, 0, 0, .8) 60%,
+    rgba(0, 0, 0, .46) 82%,
+    transparent 100%);
+  pointer-events: none;
+}
+/* The control group is in the top-right corner on this build (VideoPlayer mounts it there), so
+   the row spacing it carried for its old home under the scrubber has to go. */
+.vp-overlay.tv .vp-controls { margin: 0; }
+
+/* ---- THE PLAY DISC. A filled white circle with a dark glyph, the one solid shape in the row —
+   which is what makes the line read as a transport rather than as a progress readout with a
+   symbol next to it. It is a <div>, not a button: see the note at its markup. */
+.vp-overlay.tv .vp-play-disc {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: clamp(44px, 5.6vh, 60px);
+  height: clamp(44px, 5.6vh, 60px);
+  border-radius: 50%;
+  background: #fff;
+  color: #0b0b0b;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, .45);
+}
+.vp-overlay.tv .vp-play-disc svg {
+  width: 42%;
+  height: 42%;
+  /* The play triangle is optically left-heavy inside a circle; nudging it right is the standard
+     correction and the pause bars, being symmetric, must not get it. */
+  margin-left: 6%;
+}
+.vp-overlay.tv .vp-play-disc.playing svg { margin-left: 0; }
+
+/* ---- The clocks, one at each end of the bar. Fixed-width so the bar's ends do not shuffle
+   sideways as the digits change — a scrubber that shifts every time 9:59 becomes 10:00 is the
+   kind of small wrongness that is hard to name and impossible to unsee. */
+.vp-overlay.tv .vp-t {
+  flex: none;
+  font-size: clamp(15px, 2vh, 21px);
+  color: rgba(255, 255, 255, .9);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.vp-overlay.tv .vp-t-dur { color: rgba(255, 255, 255, .62); }
+
+/* ---- The shelf. Its height is a variable because two boxes have to agree on it: the rail
+   itself, and the distance the control bar lifts to sit clear of it. */
+.vp-overlay.tv { --vp-rail-h: clamp(210px, 31vh, 330px); }
+
+.vp-overlay.tv .vp-eprail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1vh, 12px);
+  height: var(--vp-rail-h);
+  /* THE BOTTOM PADDING IS THE OVERSCAN MARGIN, and it is the same clamp the control bar uses at
+     the top of this file — not a smaller one chosen to save height. The shelf is now the piece of
+     chrome closest to the edge of the panel, so it inherits that obligation: a set that overscans
+     5% takes ~54px off the bottom of a 1080p frame, which is most of a card's synopsis. The rail
+     is made taller to pay for it rather than the cards being made shorter. */
+  padding: clamp(10px, 1.4vh, 18px) clamp(48px, 4.5vw, 92px) clamp(32px, 5vh, 58px);
+  transform: translateY(100%);
+  opacity: 0;
+  transition: transform var(--vp-rail-ease), opacity .24s ease;
+  pointer-events: none;
+}
+.vp-overlay.tv .vp-eprail.open { transform: none; opacity: 1; pointer-events: auto; }
+
+/* ---- ONE SCRIM FOR BOTH, and it has to be one.
+ *
+   The bar's half of this is solved where the bar is styled (`--vp-bar-bleed`, above): its scrim
+   now fades out below itself instead of ending on a hard edge, at every offset and in every
+   state. This is the shelf's half — a gradient that overhangs the rail upwards by a full
+   rail-height, so the darkening under the cards reaches the lifted bar and arrives there already
+   transparent. Two overhangs that both end in nothing, which is why there is no line left to see
+   whether the rail is up, down, or halfway between. */
+.vp-overlay.tv .vp-eprail::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: calc(-1 * var(--vp-rail-h));
+  z-index: 0;
+  background: linear-gradient(0deg,
+    rgba(0, 0, 0, .96) 0%,
+    rgba(0, 0, 0, .9) 28%,
+    rgba(0, 0, 0, .66) 52%,
+    rgba(0, 0, 0, .28) 76%,
+    transparent 100%);
+  pointer-events: none;
+}
+/* The scrim is a child, so the shelf's own content has to be lifted back above it. */
+.vp-overlay.tv .vp-eprail-head,
+.vp-overlay.tv .vp-eprail-track,
+.vp-overlay.tv .vp-eprail-empty { position: relative; z-index: 1; }
+
+/* The bar rides up out of the rail's way. Driven by a class on the overlay rather than `:has()`
+   — the TV WebViews this build ships to are pinned to Chromium builds that predate it, and a
+   selector that silently never matches would leave the bar sitting on top of the cards.
+
+   ONE EASING FOR BOTH. The bar and the shelf are two elements performing one movement, and they
+   were on separate curves — enough that the eye reads them as two things that happen to move at
+   the same time. `--vp-rail-ease` is shared, and the curve is a long, flat-tailed ease-out
+   (nothing at the end, all of it at the start), which is what makes a panel feel like it has
+   weight rather than like it was tweened. */
+.vp-overlay.tv { --vp-rail-ease: .42s cubic-bezier(.32, .72, 0, 1); }
+.vp-overlay.tv.tv-rail .vp-bottom { transform: translateY(calc(-1 * var(--vp-rail-h))); }
+
+.vp-overlay.tv .vp-eprail-head {
+  flex: none;
+  font-size: clamp(17px, 2.3vh, 26px);
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, .6);
+}
+.vp-overlay.tv .vp-eprail-empty { color: var(--text-muted); font-size: clamp(14px, 1.8vh, 19px); }
+
+/* CARDS ARE SIZED BY THE RAIL'S HEIGHT, NOT BY A WIDTH. `height:100%` plus `aspect-ratio` means
+   the one clamp on the shelf governs everything, and a 720p set and a 1080p set both get a strip
+   in proportion to the picture rather than one that is right on a single resolution. */
+/* The scrolling strip and the stationary selection frame share this box, so the frame can be
+   positioned against the strip's own left edge without scrolling away with it. */
+.vp-overlay.tv .vp-eprail-viewport { position: relative; flex: 1; min-height: 0; }
+
+.vp-overlay.tv .vp-eprail-track {
+  height: 100%;
+  display: flex;
+  gap: clamp(10px, 1vw, 18px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  /* THE SELECTED CARD LIVES IN THE FIRST SLOT. Left/Right do not move a highlight along a
+     stationary strip — they move the STRIP, and the card the remote is on is always the leftmost
+     one. That is how the app's own TV rows already behave, and on a shelf it matters more than on
+     a poster row: these cards are wide, so a highlight travelling rightwards ends up reading the
+     synopsis of a card at the far edge of a 55-inch screen.
+
+     `mandatory` rather than `proximity` because there is no free scrolling here to be proximate
+     to — every scroll is a D-pad press landing on exactly one card, and the strip should never
+     come to rest between two of them. */
+  scroll-snap-type: x mandatory;
+  /* No scrollbar on a television: there is no pointer to drag it, and it is one more line of
+     chrome painted over the picture. */
+  scrollbar-width: none;
+}
+.vp-overlay.tv .vp-eprail-track::-webkit-scrollbar { display: none; }
+
+/* THE STRIP CAN OVERSCROLL PAST ITS LAST CARD, and without this it cannot.
+   "Selected card sits in the first slot" is only true while there is enough strip left to push
+   under it. Measured on a 1920×1080 set: five cards fit, so from the ninth episode onward the
+   track is already at its maximum scroll and the selection starts drifting rightwards — the
+   episode playing landed 273px in rather than flush left, which is the case the shelf opens on
+   most often, since people watch from where they left off.
+
+   A trailing spacer wide enough to hold a screen of cards gives every card, including the last,
+   the room to reach the left edge. `82%` is one viewport of track minus roughly one card; the
+   exact figure does not matter as long as it is not short, because empty space beyond the last
+   card is only ever reachable once that card is snapped to the start — which is the position
+   this exists to make reachable. It carries no snap alignment, so the strip never rests on it. */
+.vp-overlay.tv .vp-eprail-track::after {
+  content: '';
+  flex: 0 0 82%;
+}
+
+.vp-overlay.tv .vp-epcard {
+  position: relative;
+  flex: 0 0 auto;
+  height: 100%;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-3);
+  text-align: left;
+  /* Snapped to its LEFT edge, flush with the slot the selection frame occupies. `scroll-margin`
+     is explicitly zero on every side: the snap area has to be the card's own box, or the strip
+     comes to rest that many pixels away from the frame it is supposed to land inside. */
+  scroll-snap-align: start;
+  scroll-margin: 0;
+}
+/* ---- THE STAGGERED ENTRANCE. The shelf itself slides up as one plate; on top of that, the
+   cards nearest the selection rise into place a beat apart rather than all landing together.
+
+   ONLY `transform` AND `opacity` ARE ANIMATED — both composite on the GPU and neither triggers
+   layout, which is what keeps this affordable on a television. In particular the translate is
+   VERTICAL ONLY: `scrollCardToSlot` positions the strip by reading `getBoundingClientRect().left`
+   at the moment the shelf opens, and a horizontal offset here would be measured as part of the
+   card's position and scroll the strip to the wrong place.
+
+   `backwards` is what makes the delay a delay: without it a card sits fully drawn until its turn
+   comes and only then jumps to the start of the animation. */
+@keyframes vp-epcard-in {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: none; }
+}
+.vp-overlay.tv .vp-eprail.open .vp-epcard.in {
+  animation: vp-epcard-in .38s cubic-bezier(.32, .72, 0, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 42ms);
+}
+
+.vp-overlay.tv .vp-epcard-art { position: absolute; inset: 0; }
+.vp-overlay.tv .vp-epcard-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: filter .18s ease;
+}
+.vp-overlay.tv .vp-epcard-ph {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(150deg, #140202, #000000);
+}
+.vp-overlay.tv .vp-epcard-ph::after {
+  content: attr(data-n);
+  font-family: var(--font-mono);
+  font-size: clamp(18px, 2.6vh, 30px);
+  color: rgba(var(--accent-rgb), .4);
+}
+.vp-overlay.tv .vp-epcard-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(0deg, rgba(0, 0, 0, .94) 0%, rgba(0, 0, 0, .6) 46%, rgba(0, 0, 0, .04) 100%);
+}
+.vp-overlay.tv .vp-epcard-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  padding: clamp(3px, .5vh, 6px) clamp(7px, .7vw, 11px);
+  border-radius: 0 0 7px 0;
+  background: #fff;
+  color: #0b0b0b;
+  font-size: clamp(9px, 1.1vh, 12px);
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.vp-overlay.tv .vp-epcard-meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: clamp(8px, 1.1vh, 14px) clamp(9px, .9vw, 15px);
+}
+.vp-overlay.tv .vp-epcard-show {
+  font-size: clamp(13px, 1.7vh, 19px);
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vp-overlay.tv .vp-epcard-num {
+  font-family: var(--font-mono);
+  font-size: clamp(10px, 1.3vh, 14px);
+  color: rgba(255, 255, 255, .8);
+}
+/* Three lines and then an ellipsis. A synopsis is the one thing on the card with no natural
+   length, and letting it run pushes the title off the bottom of a card whose height is fixed. */
+.vp-overlay.tv .vp-epcard-desc {
+  margin-top: 3px;
+  font-size: clamp(10px, 1.2vh, 13px);
+  line-height: 1.35;
+  color: rgba(255, 255, 255, .62);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---- THE SELECTION FRAME. Parked over the first slot and never moved: the strip scrolls the
+   chosen card into it. Sized off the viewport's height and the card aspect, so it is the same
+   box as a card by construction rather than by a number that has to be kept in step.
+
+   `aspect-ratio` on an absolutely positioned box needs one axis given and the other free — hence
+   top/bottom rather than `height:100%`, with `width` left to the ratio. */
+.vp-overlay.tv .vp-eprail-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  aspect-ratio: 16 / 9;
+  z-index: 3;
+  border: 3px solid rgba(255, 255, 255, .92);
+  border-radius: 10px;
+  pointer-events: none;
+  /* A frame drawn over artwork needs to survive a bright scene as well as a dark one; the outer
+     shadow is what keeps it from dissolving into a white sky. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 6px 22px rgba(0, 0, 0, .45);
+}
+/* Nothing is selected until the strip has something in it, and the frame should not sit over an
+   empty shelf while the seasons are still loading — `EpisodeRail` renders it only with items. */
+
+/* ---- FOCUS ON A CARD. The white inversion the rest of the bar uses is excluded for these (see
+   the note beside that rule) and the ring has moved out to the frame above, so what is left here
+   is the card's own response: it lifts its picture out of the scrim. That still matters — during
+   a scroll the frame is briefly over the outgoing card, and this is what says which one the
+   remote is actually on. */
+.vp-overlay.tv .vp-epcard:focus-visible { outline: none; }
+.vp-overlay.tv .vp-epcard:focus-visible .vp-epcard-art img { filter: brightness(1.16); }
+.vp-overlay.tv .vp-epcard:focus-visible .vp-epcard-desc { color: rgba(255, 255, 255, .84); }
+/* The episode playing keeps a permanent accent edge, so it stays findable in the strip once the
+   remote has walked six cards away from it. */
+.vp-overlay.tv .vp-epcard.now { box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), .9); }
+
+@media (prefers-reduced-motion: reduce) {
+  .vp-overlay.tv .vp-eprail,
+  .vp-overlay.tv .vp-bottom { transition: opacity .2s ease; }
+  .vp-overlay.tv .vp-eprail-track { scroll-behavior: auto; }
+  .vp-overlay.tv .vp-eprail.open .vp-epcard.in { animation: none; }
+}
