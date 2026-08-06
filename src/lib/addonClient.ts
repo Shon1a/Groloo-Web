@@ -17,7 +17,8 @@ import type { MediaItem } from './types';
  *   fetchAddonText        an AbortController and a 20-second budget. The core is pure and
  *                         never gains a network call — it is handed the bytes and answers.
  *   collectAddonStreams   a Promise.all fan-out with a per-add-on catch. Scheduling, not
- *   fetchAddonCatalog     protocol.
+ *   collectAddonSubtitles protocol.
+ *   fetchAddonCatalog
  *   langName              i18n. A rendered string is never an FFI crossing (plan 06 §3):
  *                         'Add-on' and 'English' are translatable words and the core has
  *                         no locale to translate them in.
@@ -509,6 +510,144 @@ export async function collectAddonStreams(videoId: string, type: 'movie' | 'seri
     } catch { return []; }
   }));
   return per.flat();
+}
+
+/* ── subtitles: the resource nobody was asking for ────────────────────────────────
+ *
+ * A subtitle add-on is a normal add-on that declares `subtitles` instead of `stream`,
+ * and answers `subtitles/{type}/{id}.json` with `{subtitles:[{id,url,lang}]}`. Until
+ * this function existed NOTHING in the app ever requested that path — `collectAddonStreams`
+ * filters to `hasResource(a,'stream',type)` and the player's list was built purely from
+ * the `subtitles` array a STREAM add-on happens to embed in a stream. So OpenSubtitles,
+ * SubSource et al installed correctly, listed correctly, synced correctly, and were never
+ * once asked a question. That is the bug this closes.
+ *
+ * THE LANGUAGE CODE IS THE WHOLE DIFFICULTY. Stream add-ons speak flags; subtitle add-ons
+ * speak, in the wild, all four of:
+ *
+ *   "en"       BCP-47 / ISO 639-1        — what the player's <track srcLang> wants
+ *   "eng"      ISO 639-2/B, the OpenSubtitles house style, and by far the most common
+ *   "pt-BR"    a base plus a region that is genuinely load-bearing (pt-BR ≠ pt-PT)
+ *   "English"  a rendered English NAME, which SubSource and several forks return
+ *
+ * All four are normalised to a 2-letter code here, because `settings.subLang` is 2-letter
+ * and the default-subtitle-language preference is matched with `startsWith`: an unmapped
+ * "eng" silently never matches a saved preference of "en", which looks exactly like the
+ * add-on returning nothing. An unrecognised code is kept AS ITSELF and labelled with
+ * `langName` — the same rule as `FLAG_LANG` above, and for the same reason: an add-on's
+ * language is never dropped just because this table has a gap.
+ *
+ * NOT FETCHED HERE: the subtitle FILE. This returns URLs only, and the player converts one
+ * to VTT at the moment it is chosen. OpenSubtitles answers a popular episode with 60+ rows;
+ * eagerly downloading and gunzipping all of them to build a menu nobody may open is 60
+ * requests to spend on a feature that needs one. */
+
+/** One subtitle track offered by an add-on, before it has been downloaded. */
+export interface AddonSubtitle {
+  /** the add-on's URL for the file — SRT, sometimes gzipped. Not playable as-is. */
+  url: string;
+  /** 2-letter code where it could be determined, else the add-on's own token. */
+  lang: string;
+  /** display label, already disambiguated ("Português (BR)", "English #2"). */
+  label: string;
+  /** which add-on offered it, shown as the row's second line. */
+  source: string;
+}
+
+/* ISO 639-2 (both /B and /T spellings) → the 639-1 code LANG_NAME and `settings.subLang`
+ * use. Covers what the public subtitle add-ons actually emit; anything missing falls
+ * through as itself rather than being discarded. */
+const ISO3_TO_1: Record<string, string> = {
+  eng: 'en', spa: 'es', fre: 'fr', fra: 'fr', ger: 'de', deu: 'de', ita: 'it', por: 'pt',
+  rus: 'ru', ukr: 'uk', geo: 'ka', kat: 'ka', jpn: 'ja', kor: 'ko', chi: 'zh', zho: 'zh',
+  ara: 'ar', hin: 'hi', tur: 'tr', pol: 'pl', dut: 'nl', nld: 'nl', swe: 'sv', dan: 'da',
+  nor: 'no', nob: 'no', fin: 'fi', cze: 'cs', ces: 'cs', gre: 'el', ell: 'el', rum: 'ro',
+  ron: 'ro', hun: 'hu', bul: 'bg', srp: 'sr', hrv: 'hr', heb: 'he', tha: 'th', vie: 'vi',
+  ind: 'id', may: 'ms', msa: 'ms', tgl: 'tl', fil: 'tl', per: 'fa', fas: 'fa', ben: 'bn',
+  tam: 'ta', tel: 'te', mal: 'ml', kan: 'kn', mar: 'mr', urd: 'ur', slo: 'sk', slk: 'sk',
+  slv: 'sl', est: 'et', lav: 'lv', lit: 'lt', alb: 'sq', sqi: 'sq', mac: 'mk', mkd: 'mk',
+  bos: 'bs', cat: 'ca', ice: 'is', isl: 'is', aze: 'az', kaz: 'kk', arm: 'hy', hye: 'hy',
+  mon: 'mn', nep: 'ne', sin: 'si', khm: 'km', bur: 'my', mya: 'my', swa: 'sw', afr: 'af',
+};
+
+/* The rendered English name → the same 2-letter code. Built once from LANG_NAME's own keys
+ * where the two agree, plus the names LANG_NAME renders natively (it holds 'ქართული', not
+ * 'Georgian', so those cannot be derived). */
+const NAME_TO_1: Record<string, string> = {
+  english: 'en', spanish: 'es', french: 'fr', german: 'de', italian: 'it',
+  portuguese: 'pt', brazilian: 'pt', russian: 'ru', ukrainian: 'uk', georgian: 'ka',
+  japanese: 'ja', korean: 'ko', chinese: 'zh', mandarin: 'zh', cantonese: 'zh',
+  arabic: 'ar', hindi: 'hi', turkish: 'tr', polish: 'pl', dutch: 'nl', swedish: 'sv',
+  danish: 'da', norwegian: 'no', finnish: 'fi', czech: 'cs', greek: 'el',
+  romanian: 'ro', hungarian: 'hu', bulgarian: 'bg', serbian: 'sr', croatian: 'hr',
+  hebrew: 'he', thai: 'th', vietnamese: 'vi', indonesian: 'id', malay: 'ms',
+  filipino: 'tl', tagalog: 'tl', persian: 'fa', farsi: 'fa', bengali: 'bn', tamil: 'ta',
+  telugu: 'te', malayalam: 'ml', kannada: 'kn', marathi: 'mr', urdu: 'ur', slovak: 'sk',
+  slovenian: 'sl', estonian: 'et', latvian: 'lv', lithuanian: 'lt', albanian: 'sq',
+  macedonian: 'mk', bosnian: 'bs', catalan: 'ca', icelandic: 'is',
+};
+
+/** One add-on's language token → `{ code, label }`.
+ *
+ *  The region is dropped from the CODE and kept in the LABEL: `pt-BR` matches a saved
+ *  preference of `pt` (which is what the user asked for) while still reading "Português
+ *  (BR)" in the menu, so a Brazilian and a European track are never two identical rows. */
+function normalizeSubLang(raw: string): { code: string; label: string } {
+  const t = String(raw || '').trim();
+  if (!t) return { code: '', label: 'Subtitle' };
+  const [base, region] = t.split(/[-_]/);
+  const k = base.toLowerCase();
+  const code = k.length === 2 ? k
+    : ISO3_TO_1[k] || NAME_TO_1[t.toLowerCase()] || NAME_TO_1[k] || k;
+  const suffix = region ? ` (${region.toUpperCase()})` : '';
+  return { code, label: langName(code) + suffix };
+}
+
+interface RawSubtitle { url?: string; lang?: string; id?: string }
+
+/** Ask every installed SUBTITLE add-on for this video's tracks, in parallel, in the browser.
+ *
+ *  Same shape as `collectAddonStreams` and the same division of labour: the fan-out, the
+ *  timeout and the per-add-on catch are the shell's; which add-ons are eligible
+ *  (`manifest_has_resource`) and where they are asked (`addon_base_url` +
+ *  `addon_resource_path`) are the core's. One add-on that is slow, down, or serving
+ *  something that is not JSON costs only itself. */
+export async function collectAddonSubtitles(videoId: string, type: 'movie' | 'series'): Promise<AddonSubtitle[]> {
+  if (!(await loadCore())) return [];
+  const addons = installed().filter((a) => hasResource(a, 'subtitles', type));
+  if (!addons.length) return [];
+  const path = resourcePath('subtitles', type, videoId);
+  const per = await Promise.all(addons.map(async (a) => {
+    const name = a.manifest?.name || 'Add-on';
+    try {
+      const data = JSON.parse(await fetchAddonText(addonBaseUrl(a.url), path)) as { subtitles?: RawSubtitle[] };
+      const seen = new Set<string>();
+      const out: AddonSubtitle[] = [];
+      for (const s of data.subtitles || []) {
+        const url = typeof s?.url === 'string' ? s.url : '';
+        // A row without a usable URL is not a track, and a URL repeated inside one
+        // response is one track — OpenSubtitles returns the same file under several ids.
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        const { code, label } = normalizeSubLang(s?.lang ?? '');
+        out.push({ url, lang: code, label, source: name });
+      }
+      return out;
+    } catch { return []; }
+  }));
+
+  /* Numbering the duplicates is not cosmetic. OpenSubtitles answers one episode with a
+   * dozen English files, all of which would otherwise render as a dozen rows reading
+   * "English / OpenSubtitles v3" — indistinguishable, so a user whose first pick is out of
+   * sync has no way to say "the other one". The suffix is what makes the second choice
+   * expressible. The FIRST of each group stays unnumbered, so the common case (one track
+   * per language) reads exactly as before. */
+  const count: Record<string, number> = {};
+  return per.flat().map((s) => {
+    const k = s.source + ' ' + s.label;
+    const n = (count[k] = (count[k] || 0) + 1);
+    return n > 1 ? { ...s, label: `${s.label} #${n}` } : s;
+  });
 }
 
 /* ── catalogs: ported ────────────────────────────────────────────────────────── */
