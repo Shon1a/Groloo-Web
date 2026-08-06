@@ -434,6 +434,13 @@ export default function DetailModal() {
     return { id: target.id, key, title, poster: meta?.poster || target.poster, year, type: target.type, genre: target.genre, rating, ep: ep ? `S${ep.season}E${ep.ep}` : undefined, season: ep?.season ?? null, episode: ep?.ep ?? null, lang: langTag || undefined };
   };
   const subsOf = (s: AddonStream) => s.subtitles?.map((x) => ({ lang: x.lang, label: x.lang || 'Subtitle', url: x.url }));
+  /* What the player will ask SUBTITLE add-ons for. Identical to the id the stream fan-out
+   * above uses (`tt…` / `tt…:season:episode`) and built from the same `meta.imdb`, because
+   * they are the same question asked of a different resource. Undefined without an IMDb id:
+   * an add-on cannot answer `subtitles/movie/undefined.json`, so there is nothing to ask. */
+  const subsQueryFor = (ep: Ep | null) => (meta?.imdb
+    ? { videoId: ep ? `${meta.imdb}:${ep.season}:${ep.ep}` : meta.imdb, type: (isTv ? 'series' : 'movie') as 'movie' | 'series' }
+    : undefined);
   // series context for the in-player episodes panel (only for a series episode)
   const seriesFor = (ep: Ep | null) => (ep && meta?.seasonList?.length
     ? { seasons: meta.seasonList, metaId: target.id, imdb: meta.imdb, season: ep.season, ep: ep.ep, title, playEp: (s: number, e: number) => { void playEpisode(s, e); } }
@@ -445,7 +452,7 @@ export default function DetailModal() {
     playSource({
       url: s.url, kind: s.kind, title, lang: chosen, langs: s.langs,
       subtitle: ep ? `S${ep.season} · E${ep.ep}` : undefined,
-      media: buildMediaFor(ep, chosen), subtitles: subsOf(s),
+      media: buildMediaFor(ep, chosen), subtitles: subsOf(s), subsQuery: subsQueryFor(ep),
       next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined,
       series: seriesFor(ep),
     });
@@ -461,7 +468,7 @@ export default function DetailModal() {
     const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want) || list[0];
     if (best) { playStreamFor(best, { season, ep }, want); return; }
     const nxt = nextEpOf({ season, ep });
-    playSource({ url: '/assets/demo.mp4', title, subtitle: `S${season} · E${ep}`, media: buildMediaFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
+    playSource({ url: '/assets/demo.mp4', title, subtitle: `S${season} · E${ep}`, media: buildMediaFor({ season, ep }), subsQuery: subsQueryFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
   };
   // language buckets (from the sources) + the sources for the picked language, sorted
   // best-quality first
