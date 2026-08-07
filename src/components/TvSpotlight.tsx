@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
-import { cardArt, imgW } from '../lib/img';
+import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
@@ -143,9 +143,7 @@ const warmed = new Set<string>();
  * row (~675px wide) and thumbs paint at ~228px — see the note in lib/hero.ts for why reaching
  * for `original` on a TV is fatal rather than merely wasteful. */
 const BILLBOARD_RENDITION = 'w780';
-/* Thumb rendition moved into `cardArt` (lib/img.ts). A tile now carries the billboard's own
- * backdrop cropped to 2:3, so it needs the same w780 the billboard does — w342 only ever
- * covered a 228px portrait because the source was a portrait. */
+const THUMB_RENDITION = 'w342';
 /** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
 const LOGO_RENDITION = 'w300';
 
@@ -606,12 +604,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * should be: one class name on the section. */
   const thumbs = useMemo(() => {
     const tile = (it: MediaItem, key: string) => {
-      /* `cardArt`, so this tile is the 2:3 crop of the very picture the billboard above it is
-         showing — `backdrop || poster` at w780, byte-identical to the non-enrich BILLBOARD URL
-         a few lines up. The strip used to prefer `poster`, which meant a row showed a title
-         twice as two different photographs. See lib/img.ts for what the crop costs and for the
-         rendition and focal-point arithmetic. */
-      const { url: src, objectPosition } = cardArt(it);
+      const src = imgW(it.poster || it.backdrop || '', THUMB_RENDITION);
       const res = resumeOf?.(it);
       return (
         <button
@@ -638,7 +631,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
             <img
               className="tv-spot-thumbimg"
               data-src={src}
-              style={objectPosition ? { objectPosition } : undefined}
               loading="lazy"
               decoding="async"
               alt=""
@@ -849,18 +841,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * two are one change. Without it every press waits out a cold fetch AND a decode of a 780px
    * JPEG, so the gate would trade a blink for a lag — the same defect wearing the other hat.
    *
-   * NOTHING WAS WARMING THIS, and it is now warmed twice over — keep both. The strip promotes
-   * its tiles nine cards ahead of the walk, and since `cardArt` those tiles are w780 off
-   * `backdrop || poster`, which is exactly this billboard's URL. So for an ordinary title the
-   * strip's own promotion already lands the bitmap and this prewarm is a no-op against a warm
-   * cache, which costs nothing.
-   *
-   * IT IS STILL LOAD-BEARING IN TWO CASES, which is why it does not get deleted as redundant:
-   * `enrich` rows pin `it.backdrop` alone rather than `backdrop || poster`, and the strip only
-   * promotes tiles near the walk — a row whose billboard runs ahead of its promoted span has
-   * nothing warming it. Before `cardArt` these were EVERY case: the strip fetched w342 off
-   * `poster` and the billboard w780 off `backdrop`, a different rendition of a different
-   * picture, so the billboard was the one bitmap on this row that was always cold.
+   * NOTHING WAS WARMING THIS. The strip promotes its tiles nine cards ahead of the walk, which
+   * looks like it should already cover the billboard and does not: those are THUMB_RENDITION
+   * (w342) off `poster || backdrop`, and the billboard is BILLBOARD_RENDITION (w780) off
+   * `backdrop || poster`. Different rendition of a different picture — a different URL, and so a
+   * different cache entry. The billboard was the one bitmap on this row that was always cold.
    *
    * ONE CARD EITHER WAY, matching the span the preview and `enrich` already use, and for the same
    * reason: one press of Left or Right is what happens next. The walk wraps, so the warm wraps.
