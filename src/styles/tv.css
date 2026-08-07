@@ -276,7 +276,18 @@
 }
 .tv-shell .tv-nav-item:focus-visible { outline: none; }
 
-.tv-nav-search { padding: 9px 12px; color: rgba(255,255,255,0.72); }
+/* THE SEARCH BUTTON IS PADDED TO THE TEXT ITEMS' HEIGHT, NOT TO ITS OWN COMFORT.
+   Its content is a 24px glyph where theirs is a 21px line, so at equal padding it came out 42px
+   against their 39 — and in a flex row that makes IT set the line height and leaves every text
+   item centred 1.5px lower. Two things went wrong with that. The travelling pill is placed from
+   the focused item's `offsetTop`, which is an integer, so a true 1.5px offset rounded to 2 and
+   left the pill half a pixel out however carefully it was measured. And the pill resized
+   vertically as it travelled between the icon and the words, which is a wobble on the one
+   element in the bar whose whole job is to glide.
+   7.5px of vertical padding puts the glyph's box at 39 as well: every item is now the same
+   height, every `offsetTop` is 0, and both problems stop existing rather than being corrected
+   for. Horizontal padding stays at 12 — the icon needs less side room than a word. */
+.tv-nav-search { padding: 7.5px 12px; color: rgba(255,255,255,0.72); }
 .tv-nav-search:hover { color: #fff; }
 
 /* ---- THE FEATURED BILLBOARD (TvHero) — the top of the home screen, and nothing else -------
