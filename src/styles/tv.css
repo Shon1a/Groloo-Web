@@ -230,7 +230,16 @@
   background: none;
   border: 0;
   border-radius: 999px;
-  padding: 9px 18px;
+  /* ASYMMETRIC BY HALF A PIXEL, TO CENTRE THE INK RATHER THAN THE LINE BOX.
+     `align-items: center` centres the LINE BOX, and a line box is ascent + descent — for Poppins
+     at 21px that is 22 above the baseline and 7 below. A nav label has no descenders ("Home",
+     "Series", "Movies"), so those 7px are reserved and never drawn, and centring the box that
+     contains them lifts the visible ink above the true centre. Measured against the pill: 14.6px
+     of white above the glyphs and 15.7px below.
+     The correction is half that difference, moved from the top padding to the bottom, so the
+     item's HEIGHT is unchanged — which matters because TvTopNav sizes the travelling pill from
+     this element's offsetHeight, and a taller item would simply move the problem into the pill. */
+  padding: 9.5px 18px 8.5px;
   cursor: pointer;
   display: inline-flex; align-items: center;
   transition: color .22s ease, background-color .22s ease;
