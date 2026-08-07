@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { MediaItem } from '../lib/types';
-import { imgW, hueBg, rateClass, rateText } from '../lib/img';
+import { cardArt, hueBg, rateClass, rateText } from '../lib/img';
 import { useT } from '../i18n/i18n';
 import { useBlocks, titleKey } from '../stores/blocks';
 
@@ -39,7 +39,7 @@ export default function Poster({ item, seed, onSelect, progress, onRemove }: Pos
   const blockedTitle = useBlocks((s) => s.blocked[titleKey(item.id)] !== undefined);
   const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
-  const img = imgW(item.poster || '', 'w342');
+  const { url: img, objectPosition } = cardArt(item);
   const isTv = item.type === 'tv' || item.type === 'series';
   const pct = progress && progress > 0.01 ? Math.max(0, Math.min(1, progress)) : 0;
 
@@ -71,9 +71,12 @@ export default function Poster({ item, seed, onSelect, progress, onRemove }: Pos
           <img
             className={loaded ? 'cov rdy' : 'cov'}
             src={img}
+            style={objectPosition ? { objectPosition } : undefined}
             loading="lazy"
             decoding="async"
-            alt={`${item.title} poster`}
+            /* Not "<title> poster" any more: since `cardArt` this is normally the backdrop,
+               cropped. The title alone is both accurate and what a screen reader wants. */
+            alt={item.title}
             /* `complete` AS WELL AS `onLoad`, and it is a real case rather than defensive noise: a
              * poster already in the cache can finish before React attaches the handler, so `load`
              * never fires for it and the tile stays at opacity 0 — a permanently blank card, and
