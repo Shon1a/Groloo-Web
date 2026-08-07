@@ -19,20 +19,24 @@
          the critical path, instead of inside the wait the viewer is actually sitting through.
          Harmless when no trailer is ever shown: an unused preconnect is dropped after ~10s. -->
     <link rel="preconnect" href="https://www.youtube-nocookie.com" crossorigin />
-    <!-- Groloo is the primary UI face, self-hosted in three weights; Inter covers Cyrillic and
+    <!-- Poppins is the primary UI face, self-hosted in six weights; Inter covers Cyrillic and
          BPG Nino Mtavruli (also self-hosted) covers ქართული. The full reasoning for that stack,
          and why Inter is still in it, is on --font in app.css.
 
-         ALL THREE WEIGHTS ARE PRELOADED, not just the body one. `font-display: swap` means every
-         face that has not arrived paints in the fallback first and re-renders when it lands — so
-         loading them piecemeal is not one flash of unstyled text but three, at whatever moment
-         each file happens to arrive. They are 21 kB each from our own origin, already-warm
-         connection, and between them they cover the first screen: Medium is the body, Light is
-         the display heading at the top of every page, and Bold is the hero title and every badge
-         on the home rows. -->
-    <link rel="preload" href="/assets/fonts/groloo-medium.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/assets/fonts/groloo-light.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/assets/fonts/groloo-bold.woff2" as="font" type="font/woff2" crossorigin />
+         FOUR OF THE SIX WEIGHTS ARE PRELOADED, and only the `latin` subset of each. `font-display:
+         swap` means a face that has not arrived paints in the fallback and re-renders when it
+         lands, so every weight left to load on its own is another moment the page reflows — but
+         preloading all twelve files would spend the first screen's bandwidth on faces it does not
+         use. These four are what actually paints above the fold on every route: 400 is the body,
+         600 the nav and section titles, 300 the page heading, 700 the badges and ratings.
+
+         800 (hero titles, home only) and every `latin-ext` file are deliberately left out: the
+         ext subset carries accented Latin, which most screens never show, and its unicode-range
+         means the browser will not fetch it unless a glyph needs it. -->
+    <link rel="preload" href="/assets/fonts/poppins-400-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/assets/fonts/poppins-600-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/assets/fonts/poppins-300-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/assets/fonts/poppins-700-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/assets/fonts/bpg-nino-mtavruli.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Georgian:wght@400;500;700&display=swap" media="print" onload="this.media='all'" />
     <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Georgian:wght@400;500;700&display=swap" /></noscript>

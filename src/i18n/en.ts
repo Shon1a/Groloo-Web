@@ -148,6 +148,14 @@ const SEED: Record<string, string> = {
   'modal.as': 'as {name}',
   'modal.you_may_like': 'You may like',
   'modal.pick_episode': 'Pick an episode to see sources.',
+  // The add-on fan-out, which is a different wait from the synopsis and used to borrow
+  // that string. Two of them because the fan-out reports in instalments now: nothing on
+  // screen yet, versus some sources listed and slower add-ons still answering.
+  'modal.searching_sources': 'Searching add-ons for sources…',
+  'modal.more_sources': 'Still searching for more sources…',
+  // Source kinds that don't behave like an ordinary file — see `sourceNote` in DetailModal.
+  'modal.source_needs_server': 'Torrent · needs the local streaming server',
+  'modal.source_opens_out': 'Opens outside the app',
   'modal.no_streams': 'No sources yet — install a streaming add-on to play.',
   // {codec} is a codec name ("Dolby Digital Plus", "DTS") — no browser can decode these.
   'modal.no_audio_codec': 'No sound in this browser · {codec} audio',
