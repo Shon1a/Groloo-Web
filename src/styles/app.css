@@ -7,50 +7,65 @@
      actually survived the subset — without it the browser would still consider this face for
      Latin and fetch it on pages with no Georgian at all. The family ships a single weight, so
      no font-weight constraint maps every CSS weight to this one file (700 is faux-bolded). */
-  /* ---- GROLOO — the brand face, self-hosted, three weights ---------------------------------
-     Supplied as TTF and shipped as woff2: 250 kB became 62 kB across the three, which is the
-     whole family for a quarter of what one of the originals cost. Converted with fontTools; the
-     glyph set is untouched, so re-running the conversion on a new TTF is the only step needed if
-     the family is ever updated.
+  /* ---- POPPINS — the UI face, self-hosted, six weights ---------------------------------------
+     Self-hosted rather than linked from the Google CDN, for the reason lib/heart.ts gives about
+     the wasm core: a third-party origin in the critical path is a dependency the TV build cannot
+     retry its way out of, and these are 6-8 kB files our own server already has an open
+     connection to. It also lets the primary face be PRELOADED, which a deferred stylesheet link
+     (the pattern Inter still uses below) cannot be.
 
-     WEIGHT RANGES, NOT SINGLE WEIGHTS, and that is what makes three files behave like a family.
-     The app already asks for 300, 400, 500, 700 and 800 in ~40 places. Declared as exact weights,
-     every request that missed (400, 600, 800) would be answered by the browser picking a
-     neighbour and SYNTHESISING the difference — smearing Medium into a fake bold at 800, which is
-     the blurry, uneven look that gives self-hosted fonts a bad name. A range per file maps every
-     weight the app can ask for onto a real drawn face:
+     REAL WEIGHTS, NOT RANGES. Poppins ships 300-800 as drawn faces, so every weight this app asks
+     for maps to one and nothing is synthesised. That is a straight improvement on the previous
+     face, which had three files and needed weight RANGES to cover six requests — and where the
+     boundary between Medium and Bold had to be argued about, because 600 (the most common weight
+     in this build, 30 rules) had no face of its own and rounded to a neighbour. Here 600 IS a
+     face, so the hierarchy the app was drawn with survives intact:
 
-       100-350 -> Light    the display headings (`.display` is font-weight:300)
-       351-650 -> Medium   body, labels, buttons, and the 600-weight UI chrome
-       651-900 -> Bold     badges, ratings, tags, hero titles, the TV focus states
+       300  display headings (`.display`)      600  UI chrome — nav items, section titles, names
+       400  body copy                          700  badges, ratings, tags
+       500  labels, card titles                800  hero titles
 
-     THE BOUNDARY SITS AT 650 BECAUSE OF WHERE THE APP'S WEIGHTS ACTUALLY ARE, and getting it
-     wrong the first time is instructive. Counted across both stylesheets: 600 is the single most
-     common weight in the build — 30 rules, more than 700 (22) and triple 500 (10). It is what
-     this design uses for UI chrome: the top-nav items, section titles, card names.
-
-     With the split at 550, all thirty of those landed on Bold — and so did the twenty-two at 700,
-     which means the two emphasis levels the design distinguishes rendered as ONE. Compared side
-     by side at nav size, 600 and 700 were pixel-identical and the bar read as shouting. Groloo
-     Bold is a display weight; asking it to carry a third of the interface is not what it is for.
-
-     At 650 the hierarchy the app was drawn with survives the reduction from Inter's five weights
-     to three: 600 is emphasis (Medium), 700/800 is strong emphasis (Bold), and they look
-     different again.
-
-     MEDIUM CARRIES THE BODY, which is a deliberate choice rather than an off-by-one. This UI is
-     white type on near-black, where a face optically thins out — the same weight that looks right
-     on white reads as spidery here. Medium is what Regular would have been on a light theme.
-
-     `font-display: swap` matches the Georgian face below: text paints immediately in the fallback
-     and re-renders when the file lands, which on a cold TV is the difference between a readable
-     screen and a blank one. */
-  @font-face{font-family:"Groloo";font-style:normal;font-display:swap;font-weight:100 350;
-    src:url("/assets/fonts/groloo-light.woff2") format("woff2");}
-  @font-face{font-family:"Groloo";font-style:normal;font-display:swap;font-weight:351 650;
-    src:url("/assets/fonts/groloo-medium.woff2") format("woff2");}
-  @font-face{font-family:"Groloo";font-style:normal;font-display:swap;font-weight:651 900;
-    src:url("/assets/fonts/groloo-bold.woff2") format("woff2");}
+     SPLIT latin / latin-ext, exactly as Google serves them: the unicode-range on each face means
+     a screen with no accented Latin never fetches the ext file at all. Devanagari is deliberately
+     not shipped — Poppins offers it, but this app has no Devanagari UI and such titles already
+     fall through to the system face today, so carrying six more files would change nothing but
+     the byte count. */
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:300;
+    src:url("/assets/fonts/poppins-300-latin-ext.woff2") format("woff2");
+    unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:300;
+    src:url("/assets/fonts/poppins-300-latin.woff2") format("woff2");
+    unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:400;
+    src:url("/assets/fonts/poppins-400-latin-ext.woff2") format("woff2");
+    unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:400;
+    src:url("/assets/fonts/poppins-400-latin.woff2") format("woff2");
+    unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:500;
+    src:url("/assets/fonts/poppins-500-latin-ext.woff2") format("woff2");
+    unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:500;
+    src:url("/assets/fonts/poppins-500-latin.woff2") format("woff2");
+    unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:600;
+    src:url("/assets/fonts/poppins-600-latin-ext.woff2") format("woff2");
+    unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:600;
+    src:url("/assets/fonts/poppins-600-latin.woff2") format("woff2");
+    unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:700;
+    src:url("/assets/fonts/poppins-700-latin-ext.woff2") format("woff2");
+    unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:700;
+    src:url("/assets/fonts/poppins-700-latin.woff2") format("woff2");
+    unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:800;
+    src:url("/assets/fonts/poppins-800-latin-ext.woff2") format("woff2");
+    unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+  @font-face{font-family:"Poppins";font-style:normal;font-display:swap;font-weight:800;
+    src:url("/assets/fonts/poppins-800-latin.woff2") format("woff2");
+    unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
 
   @font-face{font-family:"BPG Nino Mtavruli";font-style:normal;font-display:swap;
     src:url("/assets/fonts/bpg-nino-mtavruli.woff2") format("woff2");
@@ -80,26 +95,27 @@
     /* semantics — go/stop, unchanged */
     --success:#5cd2a0; --danger:#ea6479;
     /* ---- THE STACK, AND WHY INTER IS STILL IN IT ------------------------------------------
-       Groloo leads: it is the brand face and it covers Latin and Latin-ext.
+       Poppins leads: it is the UI face and it covers Latin and Latin-ext.
 
        IT DOES NOT COVER EVERYTHING, AND THAT IS THE WHOLE REASON THIS IS A STACK RATHER THAN A
-       SWAP. Measured on the supplied files: 431 glyphs, Latin and Latin-ext, NO Georgian and NO
-       Cyrillic. Both are load-bearing here — the app ships a ქართული UI (`ka`), and Russian
-       titles come back from the catalogue on every other row ("Дом Дракона", "Русский" in the
-       audio and subtitle lists). Dropping Inter would have handed all of that to whatever
-       `system-ui` resolves to, which on a webOS or Tizen set is not a promise anyone should make.
+       SWAP. Checked against what Google actually serves: Poppins is published as latin,
+       latin-ext and devanagari — NO Georgian and NO Cyrillic. Both are load-bearing here — the
+       app ships a ქართული UI (`ka`), and Russian titles come back from the catalogue on every
+       other row ("Дом Дракона", "Русский" in the audio and subtitle lists). Dropping Inter would
+       have handed all of that to whatever `system-ui` resolves to, which on a webOS or Tizen set
+       is not a promise anyone should make.
 
        So each face covers what it draws and nothing falls through to chance:
-         Groloo               Latin, Latin-ext, digits — i.e. the UI and most titles
-         Inter                Cyrillic, and any Latin-ext glyph Groloo happens to lack
+         Poppins              Latin, Latin-ext, digits — i.e. the UI and most titles
+         Inter                Cyrillic, and any Latin-ext glyph Poppins happens to lack
          BPG Nino Mtavruli    ქართული, subset to the Georgian blocks (see its @font-face)
          Noto Sans Georgian   the same, for anything BPG's subset missed
          system-ui …          last resort
 
        --font-mono shares the faces (it is used for letter-spaced labels, not true monospace), so
        it gets the same lead. A touch of tracking (--track) keeps small caps legible. */
-    --font:"Groloo","Inter","BPG Nino Mtavruli","Noto Sans Georgian",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    --font-mono:"Groloo","Inter","BPG Nino Mtavruli","Noto Sans Georgian",ui-monospace,"SF Mono","Cascadia Code","IBM Plex Mono","Courier New",monospace;
+    --font:"Poppins","Inter","BPG Nino Mtavruli","Noto Sans Georgian",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:"Poppins","Inter","BPG Nino Mtavruli","Noto Sans Georgian",ui-monospace,"SF Mono","Cascadia Code","IBM Plex Mono","Courier New",monospace;
     --track:.01em;
     /* left icon rail: always-visible collapsed width + hover-expanded width */
     --rail-w:74px; --rail-w-open:248px; --hero-rail-pull:0px;   /* 0px, NOT unitless 0 — calc(0 + Xpx) is invalid and voids the hero's margin shorthand → black side-borders on mobile */

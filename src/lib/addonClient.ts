@@ -48,12 +48,35 @@ import type { MediaItem } from './types';
  * synchronous entry point (listAddonCatalogs, called from a useMemo) answers [] until the
  * core is up, which is why stores/addons.ts republishes its list the moment it arrives. */
 
+/* HOW A SOURCE DELIVERS ITS BYTES — the four shapes the add-on protocol actually sends.
+ *
+ * `mapAddonStream` below reads ONE of them (`url`) and returns null for the rest, which is
+ * faithful to the twin the parity corpus pins and is why an add-on that works in Stremio
+ * could list nothing here. The protocol's own model is wider, and the core already has it
+ * (`stream.rs`'s `StreamSourceKind`, `Stream::source_kind`) — but the core's `map_addon_stream`
+ * is a PORT of the twin and drops the other three exactly as the twin does, so adopting
+ * `stream_parse` would not have fixed this. The reading is added here, beside the mapper it
+ * extends, and `mapAddonStream` itself is untouched.
+ *
+ *   'url' | 'hls'   a URL a <video> can be pointed at. What the twin already handled.
+ *   'torrent'       `infoHash` (+ `fileIdx`, `sources`). The single commonest shape on the
+ *                   public add-ons and the one whose absence looks most like a broken app:
+ *                   every torrent add-on used WITHOUT a debrid key sends only this. Playable
+ *                   through a local streaming server — see `torrentUrl` in streamingServer.ts.
+ *   'youtube'       `ytId`.
+ *   'external'      `externalUrl`. Not playable in the app by definition; it is a link, and
+ *                   rendering it as one is the whole of the support it needs. */
+export type StreamKind = 'hls' | 'url' | 'torrent' | 'youtube' | 'external';
+
 export interface AddonStream {
   source: string;
   label: string;
   quality: string;
   size: string | null;
-  kind: 'hls' | 'url';
+  kind: StreamKind;
+  /** For 'url'/'hls' the media URL; for 'youtube'/'external' the page to open. EMPTY for a
+   *  torrent, whose address does not exist until a streaming server is known — see
+   *  `torrentUrl`. Nothing may dereference this without checking `kind` first. */
   url: string;
   /** AUDIO languages. See `classifyStreamLangs` — the flags in a release title are very
    *  often the SUBTITLE list, and counting those here is what put a 🇷🇺 tab on a file
@@ -64,6 +87,18 @@ export interface AddonStream {
    *  are the difference between "no Russian here" and "Russian, but as subtitles". */
   subLangs?: string[];
   subtitles?: Array<{ url: string; lang: string }>;
+  /** torrent only — the hash, the file to play inside it, and the trackers the add-on
+   *  knows about. `fileIdx` absent means "the add-on did not say"; Stremio sends `-1` for
+   *  that and the server picks the largest video, which is what `torrentUrl` reproduces. */
+  infoHash?: string;
+  fileIdx?: number;
+  announce?: string[];
+  /** youtube only — the bare video id, kept beside the watch URL in `url`. */
+  ytId?: string;
+  /** `behaviorHints.notWebReady` — the add-on stating that a browser cannot play this
+   *  directly whatever the container looks like. Routed through the streaming server
+   *  unconditionally rather than probed, which is what Stremio does with it. */
+  notWebReady?: boolean;
 }
 
 /* Display name for a stream/audio language code. Falls back to the uppercased code
@@ -129,6 +164,31 @@ export function orderLangs(langs: string[]): string[] {
 const QRANK: Record<string, number> = { '4K': 4, '1080p': 3, '720p': 2, '480p': 1 };
 export const qualityRank = (q: string): number => QRANK[q] ?? 0;
 
+/* ── WHAT A SOURCE KIND MEANS FOR THE ROW THAT SHOWS IT ──────────────────────────────
+ *
+ * Both builds render source rows and both must say the same thing about them, so these live
+ * beside `AddonStream` rather than in either component. They are facts about the SOURCE, not
+ * about the modal.
+ *
+ * The rule is the one `langTabs` already states: rank and label, never hide. A torrent with
+ * no streaming server behind it is still the answer to "what does this add-on have", and
+ * dropping it from the list turns "you need the streaming server" into "this add-on is
+ * broken" — the wrong bug report, and the harder one to act on. */
+
+/** Can this source be started inside the app, on this device, right now? */
+export const canStartHere = (s: AddonStream): boolean => {
+  if (s.kind === 'external' || s.kind === 'youtube') return false; // opens a page, never plays here
+  if (s.kind === 'torrent') return streamingServerReady();
+  return true;
+};
+
+/** The extra line a row needs to explain itself, or null when it is an ordinary source. */
+export const sourceNote = (s: AddonStream): 'needs_server' | 'opens_out' | null => {
+  if (s.kind === 'torrent') return streamingServerReady() ? null : 'needs_server';
+  if (s.kind === 'external' || s.kind === 'youtube') return 'opens_out';
+  return null;
+};
+
 /* Every add-on the account has installed, MINUS the ones it has hidden.
  *
  * This is the one choke point both surfaces run through — listAddonCatalogs and
@@ -178,6 +238,71 @@ const hasResource = (a: AddonRecord, resource: string, type?: string): boolean =
     'manifest_has_resource',
     (c) => c.manifest_has_resource(JSON.stringify(a?.manifest ?? {}), resource, type ?? ''),
   ) ?? false;
+
+/* ── THE HALF OF RESOURCE MATCHING THE CORE DOES NOT MODEL YET ────────────────────────
+ *
+ * `manifest_has_resource` (`addon.rs:306`) is `resources.any(name == r) && types.contains(t)`
+ * — the manifest's TOP-LEVEL `types`, always. The protocol says otherwise, and Stremio
+ * implements otherwise (`stremio-core`'s `Manifest::is_supported`): a resource may be a
+ * STRING (`"stream"`) or an OBJECT, and the object form carries its own `types` and
+ * `idPrefixes` which OVERRIDE the manifest-level ones when present.
+ *
+ * Both halves of that cost real add-ons:
+ *
+ *   · `{"resources":[{"name":"stream","types":["movie","series"]}],"types":[]}` is a
+ *     perfectly ordinary manifest — the type list lives on the resource because that is
+ *     where the protocol allows it — and the core answers false for every type, so the
+ *     add-on is never asked for anything. It installs, it lists, it answers nothing.
+ *   · `idPrefixes` is the add-on saying WHICH IDS IT KNOWS. An anime add-on declaring
+ *     `["kitsu"]` cannot answer a `tt…` query and an IMDb-only add-on cannot answer a
+ *     `kitsu:` one. Asking anyway is not merely wasteful: with the fan-out now rendering
+ *     as it lands, a slow add-on that was never going to answer holds the "still searching"
+ *     line open long after the ones that could have answered are done.
+ *
+ * WHY IT IS HERE AND NOT IN THE CORE, which is where it belongs: this is a `rustc` change
+ * to `addon.rs` and `cargo` is not installed on this machine, so the vendored wasm cannot be
+ * rebuilt. It is written ADDITIVELY on purpose — `hasResource(...) || byResourceEntry(...)`
+ * — so the core stays authoritative for everything it does model and this only ever widens
+ * the answer, and the id gate is applied as a separate narrowing pass. When the toolchain is
+ * back, both move into `manifest_has_resource` and this block is deleted rather than left to
+ * become the twin that the whole parity apparatus exists to prevent. */
+interface ResourceEntry { name?: unknown; types?: unknown; idPrefixes?: unknown }
+const strList = (v: unknown): string[] | null =>
+  (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null);
+
+/** The `{name, types, idPrefixes}` entry for `resource`, when the manifest used that form. */
+const resourceEntry = (a: AddonRecord, resource: string): ResourceEntry | null => {
+  const list = Array.isArray(a?.manifest?.resources) ? a.manifest.resources : [];
+  const hit = list.find((r) => typeof r === 'object' && r !== null && (r as ResourceEntry).name === resource);
+  return (hit as ResourceEntry) ?? null;
+};
+
+/** Does the RESOURCE ENTRY's own `types` cover `type`? Only consulted when the core said no,
+ *  so this can widen the answer and never narrow it. */
+const byResourceEntry = (a: AddonRecord, resource: string, type?: string): boolean => {
+  const entry = resourceEntry(a, resource);
+  if (!entry) return false;
+  if (!type) return true;
+  const own = strList(entry.types);
+  return own ? own.includes(type) : false;
+};
+
+/** Can this add-on be asked about `id` at all?
+ *
+ *  The resource's own `idPrefixes` win over the manifest's, matching Stremio. NEITHER
+ *  declared is "no opinion" and the add-on is asked — the protocol's own default, and the
+ *  only safe reading: an add-on that forgot to declare its prefixes must not be silenced. */
+const knowsId = (a: AddonRecord, resource: string, id: string): boolean => {
+  const entry = resourceEntry(a, resource);
+  const prefixes = strList(entry?.idPrefixes) ?? strList((a?.manifest as { idPrefixes?: unknown })?.idPrefixes);
+  if (!prefixes || !prefixes.length) return true;
+  return prefixes.some((p) => id.startsWith(p));
+};
+
+/** The add-ons eligible to answer `resource` for this `type` AND this `id`. One place, so
+ *  the streams path, the subtitles path and the new meta path cannot drift on it. */
+const eligible = (resource: string, type: string, id: string): AddonRecord[] =>
+  installed().filter((a) => (hasResource(a, resource, type) || byResourceEntry(a, resource, type)) && knowsId(a, resource, id));
 
 /** Core #20. `stream/series/tt0903747%3A1%3A4.json`. Replaces the two hand-built path
  *  expressions that used to sit at the two fetch sites below — the same expression written
@@ -464,7 +589,15 @@ export function classifyStreamLangs(s: AddonStream): AddonStream {
   return { ...s, langs: [UNDETERMINED], subLangs: flags };
 }
 
-interface RawStream { name?: string; title?: string; description?: string; url?: string; behaviorHints?: { streamType?: string; lang?: string }; subtitles?: Array<{ url?: string; lang?: string }> }
+interface RawStream {
+  name?: string; title?: string; description?: string; url?: string;
+  /** the three source shapes `mapAddonStream` returns null for — see `mapSourceStream` */
+  ytId?: string; infoHash?: string; fileIdx?: number; externalUrl?: string;
+  /** trackers/DHT hints for a torrent, as `["tracker:udp://…", "dht:<hash>"]` */
+  sources?: string[];
+  behaviorHints?: { streamType?: string; lang?: string; notWebReady?: boolean; videoSize?: number };
+  subtitles?: Array<{ url?: string; lang?: string }>;
+}
 
 function mapAddonStream(s: RawStream, addonName: string): AddonStream | null {
   const label = [s.name, s.title, s.description].filter(Boolean).join('\n');
@@ -486,30 +619,107 @@ function mapAddonStream(s: RawStream, addonName: string): AddonStream | null {
   };
 }
 
+/** Human file size from `behaviorHints.videoSize`, which is a BYTE COUNT and the only size
+ *  a torrent usually states — its label is a release name and `extractSize` finds nothing in
+ *  it. Binary units, matching what the trackers the name came from quote. */
+function sizeFromBytes(bytes?: number): string | null {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return null;
+  const gb = bytes / 1024 ** 3;
+  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+/** The sources `mapAddonStream` returns null for: torrent, YouTube and external-link.
+ *
+ *  DELIBERATELY A SECOND FUNCTION rather than three more branches inside the mapper. That
+ *  mapper is pinned by `tests/parity/twins.mjs`'s STILL_ON_DISK — its declaration is re-read
+ *  and compared against PRE_PORT_REV on every parity run, and the corpus refuses to run if a
+ *  character of it has changed. Extending it would red the gate; extending BESIDE it is what
+ *  `classifyStreamLangs` already does one function down, for the same reason.
+ *
+ *  Returns null for a stream with no source of any kind — including `playerFrameUrl`, which
+ *  the core classifies but nothing in this app could render. Same contract as the mapper: an
+ *  unusable record costs itself and never the response. */
+function mapSourceStream(s: RawStream, addonName: string): AddonStream | null {
+  const label = [s.name, s.title, s.description].filter(Boolean).join('\n');
+  const bh = s.behaviorHints || {};
+  const flagLangs = parseStreamLangs(label);
+  const common = {
+    source: addonName,
+    label: label || 'Source',
+    quality: detectQuality(label),
+    size: extractSize(label) ?? sizeFromBytes(bh.videoSize),
+    langs: bh.lang ? [bh.lang] : (flagLangs.length ? flagLangs : ['en']),
+    subtitles: Array.isArray(s.subtitles)
+      ? s.subtitles.map((x) => ({ url: x.url || '', lang: x.lang || '' })).filter((x) => x.url)
+      : undefined,
+    notWebReady: bh.notWebReady === true,
+  };
+  // Same precedence as the core's `Stream::source_kind` — most-playable first — so the two
+  // agree on what a stream carrying more than one of these actually IS.
+  if (s.ytId) return { ...common, kind: 'youtube', url: `https://www.youtube.com/watch?v=${encodeURIComponent(s.ytId)}`, ytId: s.ytId };
+  if (s.infoHash) {
+    return {
+      ...common, kind: 'torrent', url: '',
+      infoHash: String(s.infoHash).toLowerCase(),
+      // `fileIdx: 0` is a real, meaningful index — the FIRST file — so this must test for
+      // absence and not for falsiness. Left undefined, `torrentUrl` sends Stremio's `-1`.
+      fileIdx: typeof s.fileIdx === 'number' ? s.fileIdx : undefined,
+      announce: Array.isArray(s.sources) ? s.sources.filter((x) => typeof x === 'string') : undefined,
+    };
+  }
+  if (s.externalUrl) return { ...common, kind: 'external', url: s.externalUrl };
+  return null;
+}
+
 /** Ask every installed stream add-on for its streams for one video id, in parallel,
  *  entirely in the browser. `videoId` is the IMDb id (or `tt…:season:episode`).
  *
  *  The fan-out, the timeout and the per-add-on catch are the shell's; which add-ons are
  *  asked (`manifest_has_resource`), where they are asked (`addon_base_url` +
- *  `addon_resource_path`) and — one decision away — what comes back are the core's. */
-export async function collectAddonStreams(videoId: string, type: 'movie' | 'series'): Promise<AddonStream[]> {
+ *  `addon_resource_path`) and — one decision away — what comes back are the core's.
+ *
+ *  `onPartial` IS WHY THIS FUNCTION NO LONGER MAKES THE USER WAIT FOR THE SLOWEST ADD-ON.
+ *  The returned promise still resolves only when every add-on has answered — `playEpisode`
+ *  awaits it to pick a source, and picking one before the candidates are all in would be a
+ *  worse answer — but the ROWS do not need that. A `Promise.all` with nothing but a final
+ *  resolve meant a Torrentio that spends twelve seconds scraping trackers held up the four
+ *  add-ons that answered in three hundred milliseconds, whose results were already sitting
+ *  in memory. Now each add-on publishes as it lands, and the wait the user sees is the
+ *  FIRST add-on's, not the last one's. A caller that passes no callback is unchanged.
+ *
+ *  ORDER IS THE ADD-ON'S, NOT THE RESPONSE'S. Each add-on owns a slot filled in place, so
+ *  every intermediate list — and the final one — is in installed order exactly as the
+ *  single-shot version was. A slow add-on's rows appear where they belong rather than
+ *  being appended, so the list grows without the rows already on screen changing places
+ *  relative to each other. */
+export async function collectAddonStreams(
+  videoId: string,
+  type: 'movie' | 'series',
+  onPartial?: (streams: AddonStream[]) => void,
+): Promise<AddonStream[]> {
   if (!(await loadCore())) return [];
-  const addons = installed().filter((a) => hasResource(a, 'stream', type));
+  const addons = eligible('stream', type, videoId);
   if (!addons.length) return [];
   const path = resourcePath('stream', type, videoId);
-  const per = await Promise.all(addons.map(async (a) => {
+  const slots: AddonStream[][] = addons.map(() => []);
+  await Promise.all(addons.map(async (a, i) => {
     try {
       const data = JSON.parse(await fetchAddonText(addonBaseUrl(a.url), path)) as { streams?: RawStream[] };
       /* `classifyStreamLangs` runs OUTSIDE `mapAddonStream` and only where the wire did
        * not state the language, so the mapper stays the byte-for-byte twin the parity
        * corpus pins and the add-on's own `behaviorHints.lang` is never second-guessed. */
-      return (data.streams || []).map((s) => {
-        const m = mapAddonStream(s, a.manifest?.name || 'Add-on');
+      slots[i] = (data.streams || []).map((s) => {
+        // The pinned mapper first, so a `url` stream is mapped by the exact twin the corpus
+        // compares; `mapSourceStream` picks up only what that returns null for.
+        const m = mapAddonStream(s, a.manifest?.name || 'Add-on') ?? mapSourceStream(s, a.manifest?.name || 'Add-on');
         return m && !s.behaviorHints?.lang ? classifyStreamLangs(m) : m;
       }).filter(Boolean) as AddonStream[];
-    } catch { return []; }
+    } catch { slots[i] = []; }
+    // Publishing from inside the per-add-on task, AFTER its catch, is what makes an
+    // add-on that fails cost only its own slot and still advance the visible list.
+    onPartial?.(slots.flat());
   }));
-  return per.flat();
+  return slots.flat();
 }
 
 /* ── subtitles: the resource nobody was asking for ────────────────────────────────
@@ -614,7 +824,7 @@ interface RawSubtitle { url?: string; lang?: string; id?: string }
  *  something that is not JSON costs only itself. */
 export async function collectAddonSubtitles(videoId: string, type: 'movie' | 'series'): Promise<AddonSubtitle[]> {
   if (!(await loadCore())) return [];
-  const addons = installed().filter((a) => hasResource(a, 'subtitles', type));
+  const addons = eligible('subtitles', type, videoId);
   if (!addons.length) return [];
   const path = resourcePath('subtitles', type, videoId);
   const per = await Promise.all(addons.map(async (a) => {
@@ -648,6 +858,165 @@ export async function collectAddonSubtitles(videoId: string, type: 'movie' | 'se
     const n = (count[k] = (count[k] || 0) + 1);
     return n > 1 ? { ...s, label: `${s.label} #${n}` } : s;
   });
+}
+
+/* ── meta: the resource that was never asked, and the reason add-on catalogs dead-ended ──
+ *
+ * An add-on catalog card keeps THE ADD-ON'S OWN ID — `map_catalog_meta` copies `m.id`
+ * through untouched, correctly, because that id is the only handle the add-on will answer
+ * to. The detail modal then looked that id up at `/api/meta/:id`, which understands exactly
+ * two vocabularies: a numeric TMDB id and `tt…` (server.js:1097-1129, whose comment states
+ * the assumption out loud — "Add-on catalog items arrive as IMDb ids, never numeric").
+ *
+ * So a card from Anime Kitsu (`kitsu:44081`), MyAnimeList (`mal:…`), or any add-on with its
+ * own namespace rendered a perfectly good ROW, and opening it 404'd at TMDB, produced no
+ * meta, and therefore produced no `imdb` — and the stream fan-out was keyed on `imdb`. The
+ * catalog worked and the streams did not, which is precisely the shape of the bug.
+ *
+ * Stremio never performs that conversion. It asks the ADD-ONS for the meta of the id it was
+ * given, and then asks for streams under the same id — and for a series, under the id of the
+ * chosen `videos[]` entry, which the add-on also supplied. This function is that path.
+ *
+ * FIRST USABLE ANSWER WINS, in installed order, which is Stremio's rule too. Meta is not a
+ * fan-in like streams: two add-ons describing one title do not merge into a better
+ * description, they disagree, and the user's own install order is the only ranking available.
+ * The `Promise.all` still asks everyone at once — a slow add-on must not delay a fast one
+ * that is earlier in the list — and the choice is made over the completed set. */
+
+/** One episode as an add-on described it. `id` is the whole point: it is what the add-on
+ *  will answer `stream/series/<id>.json` for, and it is NOT derivable from the season and
+ *  episode numbers — `kitsu:44081:5` and `tt0903747:1:4` are both real and only the add-on
+ *  knows which shape it uses. */
+export interface AddonEpisode {
+  id: string;
+  season: number;
+  episode: number;
+  name?: string;
+  overview?: string;
+  still?: string;
+  air_date?: string;
+}
+
+/** An add-on's `meta/{type}/{id}.json`, mapped to the fields the detail modal renders.
+ *  Deliberately the same field NAMES as `MetaDetail` so the modal can take either. */
+export interface AddonMeta {
+  id: string;
+  type: 'movie' | 'series';
+  title?: string;
+  titleLogo?: string;
+  poster?: string;
+  backdrop?: string;
+  plot?: string;
+  year?: string;
+  rating?: number;
+  runtime?: string;
+  genre?: string[];
+  cast?: Array<{ name: string }>;
+  director?: string;
+  /** present only when the add-on's own id IS an IMDb id — never invented */
+  imdb?: string;
+  episodes?: AddonEpisode[];
+  seasonList?: Array<{ season: number; episodes: number }>;
+}
+
+interface RawMetaVideo { id?: unknown; title?: unknown; name?: unknown; season?: unknown; episode?: unknown; number?: unknown; released?: unknown; thumbnail?: unknown; overview?: unknown; description?: unknown }
+interface RawMeta {
+  id?: unknown; type?: unknown; name?: unknown; poster?: unknown; background?: unknown; logo?: unknown;
+  description?: unknown; releaseInfo?: unknown; year?: unknown; imdbRating?: unknown; runtime?: unknown;
+  genres?: unknown; genre?: unknown; cast?: unknown; director?: unknown; videos?: unknown;
+}
+
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+const num = (v: unknown): number | undefined => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
+  return Number.isFinite(n) ? n : undefined;
+};
+/** `director` and `genres` are sent as a string by some add-ons and an array by others, and
+ *  `cast` arrives as names rather than the `{name, character}` records TMDB gives us. */
+const strArray = (v: unknown): string[] | undefined => {
+  if (Array.isArray(v)) { const l = v.filter((x): x is string => typeof x === 'string' && !!x); return l.length ? l : undefined; }
+  return typeof v === 'string' && v ? [v] : undefined;
+};
+
+function mapAddonMeta(raw: RawMeta, fallbackId: string, fallbackType: 'movie' | 'series'): AddonMeta | null {
+  const id = str(raw.id) || fallbackId;
+  if (!id) return null;
+  /* A meta document with NO NAME is how a 200-with-an-empty-body presents, and several
+   * add-ons answer that for an id they do not have rather than 404ing. Treating it as an
+   * answer would stop the search at the first add-on asked and show a blank detail page. */
+  const title = str(raw.name);
+  if (!title) return null;
+
+  const videos = Array.isArray(raw.videos) ? (raw.videos as RawMetaVideo[]) : [];
+  const episodes: AddonEpisode[] = [];
+  for (const v of videos) {
+    const vid = str(v?.id);
+    if (!vid) continue;
+    const episode = num(v?.episode) ?? num(v?.number);
+    if (episode == null) continue;
+    // Season 0 is "Specials" and is real; only a MISSING season defaults, and it defaults
+    // to 1 because a flat `videos` list with no seasons is one season of a show.
+    episodes.push({
+      id: vid,
+      season: num(v?.season) ?? 1,
+      episode,
+      name: str(v?.title) || str(v?.name),
+      overview: str(v?.overview) || str(v?.description),
+      still: str(v?.thumbnail),
+      air_date: str(v?.released),
+    });
+  }
+  episodes.sort((a, b) => (a.season - b.season) || (a.episode - b.episode));
+
+  const counts = new Map<number, number>();
+  for (const e of episodes) counts.set(e.season, (counts.get(e.season) ?? 0) + 1);
+
+  /* Only `movie` is a movie. Everything else an add-on declares — `series`, `tv`, `show`,
+   * `anime` — addresses its streams at `stream/series/…`, which is the same folding the
+   * core's `MediaKind::from_wire` does and the reason a show labelled `"tv"` used to be
+   * asked for as a film and answer nothing. An undeclared type falls back to the episode
+   * list, then to what the caller thought it was opening. */
+  const declared = str(raw.type);
+  const type: 'movie' | 'series' = declared === 'movie' ? 'movie'
+    : declared ? 'series'
+      : episodes.length ? 'series' : fallbackType;
+  return {
+    id,
+    type,
+    title,
+    titleLogo: str(raw.logo),
+    poster: str(raw.poster),
+    backdrop: str(raw.background),
+    plot: str(raw.description),
+    year: str(raw.releaseInfo) || str(raw.year),
+    rating: num(raw.imdbRating),
+    runtime: str(raw.runtime),
+    genre: strArray(raw.genres) || strArray(raw.genre),
+    cast: strArray(raw.cast)?.map((name) => ({ name })),
+    director: strArray(raw.director)?.[0],
+    // Never invented: only an id that IS an IMDb id yields one. Anything else and the modal
+    // must keep addressing this title by the add-on's own id, which is the point.
+    imdb: /^tt\d+$/.test(id) ? id : undefined,
+    episodes: episodes.length ? episodes : undefined,
+    seasonList: counts.size
+      ? [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([season, n]) => ({ season, episodes: n }))
+      : undefined,
+  };
+}
+
+/** Ask the installed add-ons to describe `id`. Null when none of them can. */
+export async function collectAddonMeta(id: string, type: 'movie' | 'series'): Promise<AddonMeta | null> {
+  if (!(await loadCore())) return null;
+  const addons = eligible('meta', type, id);
+  if (!addons.length) return null;
+  const path = resourcePath('meta', type, id);
+  const per = await Promise.all(addons.map(async (a) => {
+    try {
+      const body = JSON.parse(await fetchAddonText(addonBaseUrl(a.url), path)) as { meta?: RawMeta };
+      return body?.meta ? mapAddonMeta(body.meta, id, type) : null;
+    } catch { return null; }
+  }));
+  return per.find(Boolean) ?? null;
 }
 
 /* ── catalogs: ported ────────────────────────────────────────────────────────── */
