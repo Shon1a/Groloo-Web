@@ -3,7 +3,7 @@ import { useT } from '../i18n/i18n';
 import { useAddons, type AddonRecord } from '../stores/addons';
 import { useBlocks, addonKey } from '../stores/blocks';
 import { useReport } from '../stores/report';
-import { useHomeConfig } from '../stores/homeConfig';
+import { useHomeConfig, OFFICIAL_KEYS, type OfficialKey } from '../stores/homeConfig';
 import { useOfficial, type OfficialAddon } from '../stores/official';
 import { CATALOG_CATS, PROVIDER_CATS } from '../lib/home';
 import ConfigModal, { type ConfigTarget } from '../components/ConfigModal';
@@ -16,13 +16,114 @@ import PreviewModal from '../components/PreviewModal';
  * home-feature ids gate the home blocks (home-config store); any appended official
  * add-on shows as a default metadata provider. Community cards install by URL. */
 
-// the four protected home-feature ids and how catalog/providers map to a home block
-const PROTECTED = new Set(['catalog', 'providers', 'studios', 'upcoming']);
+/* The four protected home-feature ids and how catalog/providers map to a home block.
+ *
+ * DERIVED FROM THE STORE'S OWN LIST rather than written out again, and that stopped being
+ * cosmetic when the toggles started syncing: this set decides which cards get an
+ * Install/Remove button, and OFFICIAL_KEYS decides which ids are carried to
+ * /api/addon-state. A fifth id added to one and not the other is a card the user can toggle
+ * whose state silently never leaves the device — the exact bug the sync was wired up to fix,
+ * reintroduced for one add-on and invisible until somebody compares two televisions. */
+const PROTECTED = new Set<string>(OFFICIAL_KEYS);
 const CONFIG_MAP: Record<string, { block: 'catalogRows' | 'providerRows'; cats: string[] }> = {
   catalog: { block: 'catalogRows', cats: CATALOG_CATS },
   providers: { block: 'providerRows', cats: PROVIDER_CATS },
 };
-type OfficialKey = 'catalog' | 'providers' | 'studios' | 'upcoming';
+
+const IS_TV = import.meta.env.MODE === 'tv';
+
+/* ---- THE CARD IS THE FOCUS STOP ON A TELEVISION, AND THAT IS A NAVIGATION FIX ------------
+ *
+ * MEASURED, not assumed. A card is 1750px wide at 1080p and its only focusable parts are two
+ * or three ~120px buttons bunched at the far right (x≈1545-1810). TvSpatialNav's `pick()`
+ * disqualifies any candidate whose cross-axis drift exceeds its along-axis travel — the rule
+ * that stops focus sliding diagonally across a screen — so from the top bar (x≈850) the FIRST
+ * card's buttons sit ~645px sideways and only ~200px down, and are refused. Cards further down
+ * the page have more travel, so eventually one qualifies: pressing Down from the nav skipped
+ * every card on the page and landed on the LAST one's Hide button. Perverse, and exactly what
+ * the geometry says.
+ *
+ * A full-width stop fixes it at the root rather than by widening a global tolerance: the card
+ * spans the viewport, so its cross-axis gap is ZERO from anywhere above it and the nearest card
+ * wins on travel alone. It also fixes what made this page tiring even where it worked — the
+ * remote lived in a narrow gutter on the right while everything worth reading was on the left,
+ * and a 120px target on a 1920px screen was the only thing the focus ring ever drew around.
+ *
+ * TWO LEVELS, THE SAME SHAPE THE TITLE SCREEN USES: the card is where the D-pad walks, and its
+ * actions are a roving sub-level reached with OK or Right.
+ *
+ * THE ACTIONS ARE TAKEN OUT OF SPATIAL NAV ENTIRELY (`tabIndex: -1`, which `candidates()`
+ * filters) AND DRIVEN FROM HERE, because leaving them in produced two defects that geometry
+ * cannot fix from outside:
+ *
+ *   LEFT OUT OF A CARD WENT DIAGONALLY DOWN. `pick()` measures travel centre-to-centre, and a
+ *   card's centre is ~790px from a button parked at its right edge — while the NEXT card's
+ *   button is only ~126px to the left and one row down, which qualifies and scores less than
+ *   half. Pressing Left to back out of "Streaming Services" landed on "Studios ▸ Preview".
+ *
+ *   DOWN FROM A CARD WAS A COIN TOSS. A button sits INSIDE its card's horizontal span, so both
+ *   the next card and the next card's buttons score zero drift and near-identical travel; the
+ *   winner came down to which was reached first. Walking the list, the card level silently
+ *   evaporated after one press.
+ *
+ * With the buttons out of the pool, Up/Down always walks cards and Left/Right always walks the
+ * actions of the card you are on. Every key means one thing everywhere on the page.
+ *
+ * TV BUILD ONLY. On desktop these must not become focus stops — a Tab stop on every card would
+ * double the page's tab order for keyboard users to no purpose, since a pointer reaches the
+ * buttons directly and `.addon:hover` already says which card is which. */
+const cardActions = (card: HTMLElement) =>
+  [...card.querySelectorAll<HTMLButtonElement>('.acts button')];
+
+/** Spread onto every `.acts` button. Declared as a prop rather than stamped on the nodes from a
+ *  ref so React owns the attribute — the official cards swap Configure for Preview and back, and
+ *  a value written behind React's back would not survive that. */
+const actProps = IS_TV ? { tabIndex: -1 } : {};
+
+function useCardNav() {
+  return (name: string) => {
+    if (!IS_TV) return {};
+    return {
+      tabIndex: 0,
+      role: 'group' as const,
+      'aria-label': name,
+      onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+        const card = e.currentTarget;
+        const acts = cardActions(card);
+        if (!acts.length) return;   // only the disabled "Installed" chip — nothing to step into
+
+        /* ON THE CARD: OK or Right steps in. `stopPropagation` is what stops the step-in being
+         * undone — TvSpatialNav listens on `window`, so without it the same Right would also run
+         * a spatial move and overrule the button we just chose. */
+        if (e.target === card) {
+          if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'ArrowRight') return;
+          e.preventDefault(); e.stopPropagation();
+          acts[0].focus();
+          return;
+        }
+
+        const i = acts.indexOf(e.target as HTMLButtonElement);
+        if (i < 0) return;
+
+        /* INSIDE THE ACTIONS. Left/Right rove; Left off the first one backs out to the card. */
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault(); e.stopPropagation();
+          const next = e.key === 'ArrowRight'
+            ? acts[Math.min(i + 1, acts.length - 1)]
+            : (i === 0 ? card : acts[i - 1]);
+          next.focus();
+          return;
+        }
+
+        /* UP/DOWN LEAVE THE SUB-LEVEL, and deliberately do NOT consume the press: focus is
+         * handed back to the card and the event is allowed to reach TvSpatialNav, which then
+         * moves from the CARD's geometry — a full-width box with zero drift — rather than from
+         * a button in the right-hand gutter. One press, one row, no diagonal. */
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') card.focus();
+      },
+    };
+  };
+}
 
 /* The Groloo puzzle-piece icon — the vanilla mask-based pzPieceIc (a rounded square
  * with two additive + two subtractive circle bumps → a single jigsaw piece). Filled
@@ -78,6 +179,36 @@ export default function Addons() {
    * wrong one costs a confusing sentence rather than a mis-installed add-on. */
   const [relink, setRelink] = useState<string | null>(null);
   const urlRef = useRef<HTMLInputElement>(null);
+  const enterRef = useRef<HTMLButtonElement>(null);
+  const cardNav = useCardNav();
+
+  /* ---- THE ONE CONTROL A REMOTE COULD GET STUCK IN ------------------------------------------
+   * TvSpatialNav stands down for INPUT/TEXTAREA — it must, or typing in the search box would
+   * move the selection instead of the caret. The cost is that a text field is a ONE-WAY DOOR on
+   * a television: nothing else on the page moves focus, so once the remote is in this box every
+   * arrow press is swallowed by the field and the D-pad is dead until the user leaves the page
+   * with the Back key. It is reachable by accident too — `startRelink` focuses it outright, so
+   * pressing RELINK on an unlinked add-on was enough to strand someone.
+   *
+   * UP AND DOWN ARE THE EXIT; LEFT AND RIGHT ARE NOT. Left/Right have to stay with the caret or
+   * a URL cannot be corrected at all — and a manifest URL with a debrid key in it is the longest
+   * string anyone will ever type on a remote, so losing the caret is not a small thing.
+   *
+   * BOTH EXITS LAND ON INSTALL, which is one rule rather than two and makes the box a loop the
+   * remote can always get out of: the button sits beside the field, so LEFT from it comes back
+   * here, and UP from it reaches the cards above. Sending Up "somewhere above" instead would mean
+   * guessing at a neighbour this component cannot see; handing the remote to the one control it
+   * is certain about, and letting spatial nav take over from there, is the honest version.
+   *
+   * Kept as a plain keydown rather than gated on the TV build: on desktop Up/Down in a
+   * single-line input do nothing at all, so moving focus to the button beside it is a small
+   * improvement there and a rescue here. */
+  const onUrlKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { onInstall(); return; }
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    enterRef.current?.focus();
+  };
 
   const onInstall = async () => {
     if (!url.trim()) return;
@@ -166,7 +297,7 @@ export default function Addons() {
             const desc = tf('addon.' + a.id + '.desc', a.name);
             const tags = a.tags || [];
             return (
-              <div className={`addon${on ? ' installed' : ''}`} data-addon={a.id} key={a.id}>
+              <div className={`addon${on ? ' installed' : ''}`} data-addon={a.id} key={a.id} {...cardNav(a.name)}>
                 <PuzzleIcon />
                 <div className="body">
                   <div className="name">{a.name} <span className="ver">{ver}</span> <span className={`badge ${on ? 'ok' : 'muted'}`}>{on ? t('addons.installed_tag') : t('addons.available')}</span></div>
@@ -175,12 +306,12 @@ export default function Addons() {
                 </div>
                 <div className="acts">
                   {a.preview ? (
-                    <button className="minibtn" type="button" onClick={() => setPreview({ id: a.id, name: a.name })}>{t('addons.preview')}</button>
+                    <button className="minibtn" type="button" {...actProps} onClick={() => setPreview({ id: a.id, name: a.name })}>{t('addons.preview')}</button>
                   ) : on && cfgInfo ? (
-                    <button className="minibtn" type="button" onClick={() => setCfg({ block: cfgInfo.block, cats: cfgInfo.cats, title: a.name, kicker: t('catalog.modal_kicker') })}>{t('addons.configure')}</button>
+                    <button className="minibtn" type="button" {...actProps} onClick={() => setCfg({ block: cfgInfo.block, cats: cfgInfo.cats, title: a.name, kicker: t('catalog.modal_kicker') })}>{t('addons.configure')}</button>
                   ) : null}
                   {PROTECTED.has(a.id) ? (
-                    <button className={`minibtn ${on ? 'danger' : 'install'}`} type="button" onClick={() => setOfficial(a.id as OfficialKey, !on)}>
+                    <button className={`minibtn ${on ? 'danger' : 'install'}`} type="button" {...actProps} onClick={() => setOfficial(a.id as OfficialKey, !on)}>
                       {on ? t('addons.remove') : t('addons.install_short')}
                     </button>
                   ) : (
@@ -204,7 +335,7 @@ export default function Addons() {
         <p className="addon-sec-disclaimer">{t('addons.community_disclaimer')}</p>
         <div className="addon-grid" id="communityAddons">
           {installed.map((a) => (
-            <div className="addon installed" data-addon={a.id} key={a.id}>
+            <div className="addon installed" data-addon={a.id} key={a.id} {...cardNav(a.manifest.name)}>
               <PuzzleIcon />
               <div className="body">
                 <div className="name">{a.manifest.name} <span className="ver">{a.manifest.version || ''}</span> <span className="badge ok">{t('addons.installed_tag')}</span></div>
@@ -216,14 +347,14 @@ export default function Addons() {
                   * Hiding is the one a user reaching for "make this stop" usually wants:
                   * it is instant, undoable, and does not cost them the credentialed URL
                   * that Remove destroys and that this device may hold the only copy of. */}
-                <button className="minibtn" type="button" onClick={() => toggleBlockAddon(a)}>
+                <button className="minibtn" type="button" {...actProps} onClick={() => toggleBlockAddon(a)}>
                   {isBlocked(originKeyFor(a)) ? t('addons.unhide') : t('addons.hide')}
                 </button>
-                <button className="minibtn" type="button"
+                <button className="minibtn" type="button" {...actProps}
                         onClick={() => openReport({ kind: 'addon', targetKey: originOf(a), targetName: a.manifest.name, origin: originOf(a) })}>
                   {t('report.cta')}
                 </button>
-                <button className="minibtn danger" type="button" onClick={() => removeAddon(a.id)}>{t('addons.remove')}</button>
+                <button className="minibtn danger" type="button" {...actProps} onClick={() => removeAddon(a.id)}>{t('addons.remove')}</button>
               </div>
             </div>
           ))}
@@ -256,7 +387,7 @@ export default function Addons() {
                  * leads the description in mono the way the official cards lead with a
                  * type — "torrentio.strem.fun" is what tells the user which of their
                  * links to go and find, where the manifest name alone does not. */
-                <div className="addon" data-addon={a.id} key={a.id}>
+                <div className="addon" data-addon={a.id} key={a.id} {...cardNav(a.manifest.name)}>
                   <PuzzleIcon />
                   <div className="body">
                     <div className="name">
@@ -267,8 +398,8 @@ export default function Addons() {
                     </div>
                   </div>
                   <div className="acts">
-                    <button className="minibtn install" type="button" onClick={() => startRelink(a.manifest.name)}>{t('addons.unlinked_relink')}</button>
-                    <button className="minibtn danger" type="button" onClick={() => removeAddon(a.id)}>{t('addons.remove')}</button>
+                    <button className="minibtn install" type="button" {...actProps} onClick={() => startRelink(a.manifest.name)}>{t('addons.unlinked_relink')}</button>
+                    <button className="minibtn danger" type="button" {...actProps} onClick={() => removeAddon(a.id)}>{t('addons.remove')}</button>
                   </div>
                 </div>
               ))}
@@ -288,13 +419,21 @@ export default function Addons() {
         </div>
       )}
       <div className="install-box">
+        {/* `tabIndex` IS WHAT MAKES THE FIELD REACHABLE BY REMOTE, and it is one attribute rather
+            than a change to TvSpatialNav's selector on purpose. That selector deliberately omits
+            `input` — every text field in the app would otherwise become a focus stop the D-pad
+            can enter and, without an escape hatch of its own, not leave (the search box on
+            Explore is the one that would bite first). `[tabindex]` IS in the selector, so opting
+            this single field in is a local decision by the screen that has also given it a way
+            out, which is the pair that has to travel together. */}
         <input
           ref={urlRef}
+          tabIndex={0}
           placeholder="https://example.com/manifest.json" value={url}
           onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') onInstall(); }}
+          onKeyDown={onUrlKey}
         />
-        <button className="enter" style={{ border: '1px solid var(--accent)', borderRadius: 4 }} onClick={onInstall} disabled={busy}>
+        <button ref={enterRef} className="enter" style={{ border: '1px solid var(--accent)', borderRadius: 4 }} onClick={onInstall} disabled={busy}>
           {busy ? t('grid.loading') : t('addons.install_btn')}
         </button>
       </div>
