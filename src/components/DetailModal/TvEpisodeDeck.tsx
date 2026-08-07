@@ -191,9 +191,14 @@ export function seasonsOf(meta: MetaDetail): SeasonInfo[] {
   return [];
 }
 
-/** Whether TvDetail should give the panel over to the deck (and drop its own chrome for it). */
+/** Whether TvDetail should give the panel over to the deck (and drop its own chrome for it).
+ *
+ *  `imdb` OR `addonEpisodes`: the IMDb id is what makes the TMDB season fetch addressable,
+ *  and an add-on-described show brings its own episode list instead — see the note in
+ *  EpisodeChooser. Requiring the id alone is what kept the deck off every series that came
+ *  from a community catalog with its own ids. */
 export function hasEpisodeDeck(meta?: MetaDetail): boolean {
-  return !!meta && !!meta.imdb && seasonsOf(meta).length > 0;
+  return !!meta && (!!meta.imdb || !!meta.addonEpisodes) && seasonsOf(meta).length > 0;
 }
 
 interface CardProps {
@@ -328,8 +333,16 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
   const firstSeason = useMemo(() => (seasons.find((s) => s.season >= 1) || seasons[0])?.season, [seasons]);
   const [openSeason, setOpenSeason] = useState<number | undefined>(picked?.season ?? firstSeason);
   const season = openSeason ?? firstSeason;
-  const { data, isLoading } = useSeason(meta.id, season, meta.imdb);
-  const episodes: Episode[] = useMemo(() => data?.episodes ?? [], [data]);
+  // TMDB, or the add-on's own `videos[]` when this title is one TMDB cannot name. Mutually
+  // exclusive by construction — `addonEpisodes` is set only on a record `collectAddonMeta`
+  // built — so the season query is disabled rather than fired and discarded.
+  const fromAddon = meta.addonEpisodes;
+  const { data, isLoading } = useSeason(meta.id, fromAddon ? undefined : season, meta.imdb);
+  const episodes: Episode[] = useMemo(() => (fromAddon
+    ? fromAddon.filter((e) => e.season === season).map((e) => ({
+      episode: e.episode, name: e.name, overview: e.overview, still: e.still, air_date: e.air_date,
+    }))
+    : data?.episodes ?? []), [data, fromAddon, season]);
 
   const [active, setActive] = useState(0);
   /* Whether the remote is IN the deck. With the focus ring gone, the selected card's lift is the

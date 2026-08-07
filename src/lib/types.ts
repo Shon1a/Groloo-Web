@@ -87,7 +87,31 @@ export interface MetaDetail {
   providers?: WatchProvider[];
   /** JustWatch aggregate link for the title (fallback target). */
   watchLink?: string | null;
+  /* ---- present only when this record came from an ADD-ON's `meta` resource ----------
+   * /api/meta answers for TMDB and IMDb ids and nothing else, so a catalog card carrying an
+   * add-on's own id (`kitsu:44081`, `mal:…`) is described by the add-on that published it.
+   * See `collectAddonMeta`. The two sources are otherwise the same shape on purpose. */
+  /** The id to address add-ons by, when it is NOT an IMDb id. Mutually informative with
+   *  `imdb`: exactly one of the two is the handle a stream request should use. */
+  addonVideoId?: string;
+  /** The add-on's own `videos[]`, flattened. Carries each episode's OWN id, which is what
+   *  the add-on answers `stream/series/<id>.json` for and is not derivable from the season
+   *  and episode numbers. Present → the episode chooser reads this instead of /api/tv. */
+  addonEpisodes?: AddonEpisodeInfo[];
   [k: string]: unknown;
+}
+
+/** One episode as an add-on's `meta` resource described it. Mirrors `AddonEpisode` in
+ *  addonClient.ts — declared here too so `MetaDetail` does not have to import from a module
+ *  that imports the stores. */
+export interface AddonEpisodeInfo {
+  id: string;
+  season: number;
+  episode: number;
+  name?: string;
+  overview?: string;
+  still?: string;
+  air_date?: string;
 }
 
 export interface Episode {

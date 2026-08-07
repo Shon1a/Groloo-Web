@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
 import { imgW } from '../../lib/img';
-import { langName, type AddonStream } from '../../lib/addonClient';
+import { langName, sourceNote, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
 import { registerBackHandler } from '../../lib/tvKeys';
 import TvChipMenu from './TvChipMenu';

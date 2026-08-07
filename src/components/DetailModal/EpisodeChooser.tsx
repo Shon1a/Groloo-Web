@@ -37,12 +37,31 @@ export default function EpisodeChooser({ meta, initial, onEpisode }: { meta: Met
   const [activeSeason, setActiveSeason] = useState<number | undefined>(initial?.season ?? firstSeason);
   const [activeEp, setActiveEp] = useState<number | null>(initial?.episode ?? null);
 
+  /* WHERE THE EPISODES COME FROM — TMDB, or the add-on that published the show.
+   *
+   * `/api/tv/:id/season/:n` is a TMDB read and needs a numeric TMDB id, which a title
+   * described by an add-on does not have. `meta.addonEpisodes` is that add-on's own
+   * `videos[]`, already flattened and sorted, and it is present ONLY on records that came
+   * from `collectAddonMeta` — so the two paths are mutually exclusive by construction and
+   * the query is disabled rather than fired-and-ignored on the add-on path.
+   *
+   * This is also what lifted the `!meta.imdb` bail below. That guard was correct while TMDB
+   * was the only source: without an IMDb id the season fetch could not be numbered and the
+   * picked episode could not be addressed, so rendering a chooser would have produced
+   * episode buttons that led nowhere. An add-on-described show has neither problem — it
+   * brings its own episode list AND its own per-episode ids — so the condition is now "is
+   * there a list at all", which is what the guard was always standing in for. */
   const season = activeSeason ?? firstSeason;
-  const { data, isLoading } = useSeason(meta.id, season, meta.imdb);
+  const fromAddon = meta.addonEpisodes;
+  const { data, isLoading } = useSeason(meta.id, fromAddon ? undefined : season, meta.imdb);
 
-  if (!seasons.length || !meta.imdb) return null;
+  if (!seasons.length || (!meta.imdb && !fromAddon)) return null;
 
-  const episodes: Episode[] = data?.episodes ?? [];
+  const episodes: Episode[] = fromAddon
+    ? fromAddon.filter((e) => e.season === season).map((e) => ({
+      episode: e.episode, name: e.name, overview: e.overview, still: e.still, air_date: e.air_date,
+    }))
+    : data?.episodes ?? [];
 
   return (
     <div className="ep-chooser" id="epChooser">
@@ -61,7 +80,7 @@ export default function EpisodeChooser({ meta, initial, onEpisode }: { meta: Met
         ))}
       </div>
       <div className="ep-list ep-grid" id="epList">
-        {isLoading
+        {isLoading && !fromAddon
           ? Array.from({ length: 8 }).map((_, i) => <div className="ep-skel" key={i} />)
           : episodes.length
             ? episodes.map((e) => (
