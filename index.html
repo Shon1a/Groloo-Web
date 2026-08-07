@@ -19,7 +19,20 @@
          the critical path, instead of inside the wait the viewer is actually sitting through.
          Harmless when no trailer is ever shown: an unused preconnect is dropped after ~10s. -->
     <link rel="preconnect" href="https://www.youtube-nocookie.com" crossorigin />
-    <!-- Inter is the primary UI face; BPG Nino Mtavruli (self-hosted) covers ქართული. -->
+    <!-- Groloo is the primary UI face, self-hosted in three weights; Inter covers Cyrillic and
+         BPG Nino Mtavruli (also self-hosted) covers ქართული. The full reasoning for that stack,
+         and why Inter is still in it, is on --font in app.css.
+
+         ALL THREE WEIGHTS ARE PRELOADED, not just the body one. `font-display: swap` means every
+         face that has not arrived paints in the fallback first and re-renders when it lands — so
+         loading them piecemeal is not one flash of unstyled text but three, at whatever moment
+         each file happens to arrive. They are 21 kB each from our own origin, already-warm
+         connection, and between them they cover the first screen: Medium is the body, Light is
+         the display heading at the top of every page, and Bold is the hero title and every badge
+         on the home rows. -->
+    <link rel="preload" href="/assets/fonts/groloo-medium.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/assets/fonts/groloo-light.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/assets/fonts/groloo-bold.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/assets/fonts/bpg-nino-mtavruli.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Georgian:wght@400;500;700&display=swap" media="print" onload="this.media='all'" />
     <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Georgian:wght@400;500;700&display=swap" /></noscript>

@@ -7,6 +7,51 @@
      actually survived the subset — without it the browser would still consider this face for
      Latin and fetch it on pages with no Georgian at all. The family ships a single weight, so
      no font-weight constraint maps every CSS weight to this one file (700 is faux-bolded). */
+  /* ---- GROLOO — the brand face, self-hosted, three weights ---------------------------------
+     Supplied as TTF and shipped as woff2: 250 kB became 62 kB across the three, which is the
+     whole family for a quarter of what one of the originals cost. Converted with fontTools; the
+     glyph set is untouched, so re-running the conversion on a new TTF is the only step needed if
+     the family is ever updated.
+
+     WEIGHT RANGES, NOT SINGLE WEIGHTS, and that is what makes three files behave like a family.
+     The app already asks for 300, 400, 500, 700 and 800 in ~40 places. Declared as exact weights,
+     every request that missed (400, 600, 800) would be answered by the browser picking a
+     neighbour and SYNTHESISING the difference — smearing Medium into a fake bold at 800, which is
+     the blurry, uneven look that gives self-hosted fonts a bad name. A range per file maps every
+     weight the app can ask for onto a real drawn face:
+
+       100-350 -> Light    the display headings (`.display` is font-weight:300)
+       351-650 -> Medium   body, labels, buttons, and the 600-weight UI chrome
+       651-900 -> Bold     badges, ratings, tags, hero titles, the TV focus states
+
+     THE BOUNDARY SITS AT 650 BECAUSE OF WHERE THE APP'S WEIGHTS ACTUALLY ARE, and getting it
+     wrong the first time is instructive. Counted across both stylesheets: 600 is the single most
+     common weight in the build — 30 rules, more than 700 (22) and triple 500 (10). It is what
+     this design uses for UI chrome: the top-nav items, section titles, card names.
+
+     With the split at 550, all thirty of those landed on Bold — and so did the twenty-two at 700,
+     which means the two emphasis levels the design distinguishes rendered as ONE. Compared side
+     by side at nav size, 600 and 700 were pixel-identical and the bar read as shouting. Groloo
+     Bold is a display weight; asking it to carry a third of the interface is not what it is for.
+
+     At 650 the hierarchy the app was drawn with survives the reduction from Inter's five weights
+     to three: 600 is emphasis (Medium), 700/800 is strong emphasis (Bold), and they look
+     different again.
+
+     MEDIUM CARRIES THE BODY, which is a deliberate choice rather than an off-by-one. This UI is
+     white type on near-black, where a face optically thins out — the same weight that looks right
+     on white reads as spidery here. Medium is what Regular would have been on a light theme.
+
+     `font-display: swap` matches the Georgian face below: text paints immediately in the fallback
+     and re-renders when the file lands, which on a cold TV is the difference between a readable
+     screen and a blank one. */
+  @font-face{font-family:"Groloo";font-style:normal;font-display:swap;font-weight:100 350;
+    src:url("/assets/fonts/groloo-light.woff2") format("woff2");}
+  @font-face{font-family:"Groloo";font-style:normal;font-display:swap;font-weight:351 650;
+    src:url("/assets/fonts/groloo-medium.woff2") format("woff2");}
+  @font-face{font-family:"Groloo";font-style:normal;font-display:swap;font-weight:651 900;
+    src:url("/assets/fonts/groloo-bold.woff2") format("woff2");}
+
   @font-face{font-family:"BPG Nino Mtavruli";font-style:normal;font-display:swap;
     src:url("/assets/fonts/bpg-nino-mtavruli.woff2") format("woff2");
     unicode-range:U+10A0-10FF,U+1C90-1CBF,U+2D00-2D2F;}
@@ -34,12 +79,27 @@
     --grad:linear-gradient(120deg,#ffffff 0%,#cacaca 55%,#8b8b8b 100%);
     /* semantics — go/stop, unchanged */
     --success:#5cd2a0; --danger:#ea6479;
-    /* fonts: Inter (Google) is the primary UI face; BPG Nino Mtavruli the
-       ქართული (Georgian) face fills glyphs Inter lacks, then Noto Sans Georgian + system
-       fonts. --font-mono shares the same faces (used for letter-spaced labels, not true
-       monospace). A touch of tracking (--track) keeps small caps legible. */
-    --font:"Inter","BPG Nino Mtavruli","Noto Sans Georgian",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    --font-mono:"Inter","BPG Nino Mtavruli","Noto Sans Georgian",ui-monospace,"SF Mono","Cascadia Code","IBM Plex Mono","Courier New",monospace;
+    /* ---- THE STACK, AND WHY INTER IS STILL IN IT ------------------------------------------
+       Groloo leads: it is the brand face and it covers Latin and Latin-ext.
+
+       IT DOES NOT COVER EVERYTHING, AND THAT IS THE WHOLE REASON THIS IS A STACK RATHER THAN A
+       SWAP. Measured on the supplied files: 431 glyphs, Latin and Latin-ext, NO Georgian and NO
+       Cyrillic. Both are load-bearing here — the app ships a ქართული UI (`ka`), and Russian
+       titles come back from the catalogue on every other row ("Дом Дракона", "Русский" in the
+       audio and subtitle lists). Dropping Inter would have handed all of that to whatever
+       `system-ui` resolves to, which on a webOS or Tizen set is not a promise anyone should make.
+
+       So each face covers what it draws and nothing falls through to chance:
+         Groloo               Latin, Latin-ext, digits — i.e. the UI and most titles
+         Inter                Cyrillic, and any Latin-ext glyph Groloo happens to lack
+         BPG Nino Mtavruli    ქართული, subset to the Georgian blocks (see its @font-face)
+         Noto Sans Georgian   the same, for anything BPG's subset missed
+         system-ui …          last resort
+
+       --font-mono shares the faces (it is used for letter-spaced labels, not true monospace), so
+       it gets the same lead. A touch of tracking (--track) keeps small caps legible. */
+    --font:"Groloo","Inter","BPG Nino Mtavruli","Noto Sans Georgian",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:"Groloo","Inter","BPG Nino Mtavruli","Noto Sans Georgian",ui-monospace,"SF Mono","Cascadia Code","IBM Plex Mono","Courier New",monospace;
     --track:.01em;
     /* left icon rail: always-visible collapsed width + hover-expanded width */
     --rail-w:74px; --rail-w-open:248px; --hero-rail-pull:0px;   /* 0px, NOT unitless 0 — calc(0 + Xpx) is invalid and voids the hero's margin shorthand → black side-borders on mobile */
