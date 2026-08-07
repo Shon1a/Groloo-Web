@@ -86,7 +86,7 @@ export default function TvTopNav() {
    * on the first press; `armed` turns the transition on one frame after it is first placed, and
    * both reset when focus leaves the bar so the next arrival is a fresh placement rather than a
    * slide from wherever the remote left it. */
-  const [mark, setMark] = useState<{ left: number; width: number; height: number } | null>(null);
+  const [mark, setMark] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [armed, setArmed] = useState(false);
 
   useEffect(() => {
@@ -95,13 +95,26 @@ export default function TvTopNav() {
     return () => cancelAnimationFrame(id);
   }, [mark, armed]);
 
-  /* offsetLeft/offsetWidth are measured against the group (it is position:relative, so it is the
-     offsetParent) and are LAYOUT values — unaffected by the `scale(1.08)` the group is wearing at
-     the moment focus arrives, which is exactly what we want: the pill is placed in the group's
-     own untransformed coordinates and then scales with it, rather than being measured through the
-     transform and landing 8% wrong. */
+  /* offsetLeft/offsetTop/offsetWidth/offsetHeight are measured against the group (it is
+     position:relative, so it is the offsetParent) and are LAYOUT values — unaffected by the
+     `scale(1.08)` the group is wearing at the moment focus arrives, which is exactly what we want:
+     the pill is placed in the group's own untransformed coordinates and then scales with it,
+     rather than being measured through the transform and landing 8% wrong.
+
+     `offsetTop` IS IN HERE BECAUSE THE ITEMS DO NOT ALL START AT THE TOP OF THE GROUP. The pill
+     used to be pinned to `top: 0` and given a height, on the assumption that every item begins at
+     the group's top edge. They do not: the search button is an ICON, so its line box is the 24px
+     glyph rather than the 21px text line, and at equal padding it comes out 42px tall against the
+     text items' 39. The group is a flex row, so the shorter items are centred against the taller
+     one and sit 1.5px lower — and the pill, anchored at 0, was drawn 1.5px above whatever it was
+     supposed to be wrapping.
+
+     At rest that is invisible; on the white pill it is not, because it puts the label off-centre
+     inside the brightest shape on the screen. Measured on the focused Home item: 6.7px of white
+     above the glyphs and 3.46px below. Measuring the item's own top is the fix, and it stays
+     correct if any future item introduces a third height. */
   const place = (el: HTMLElement) =>
-    setMark({ left: el.offsetLeft, width: el.offsetWidth, height: el.offsetHeight });
+    setMark({ left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight });
 
   // Same sign-in gate the rail uses: My space (and the other gated routes) bounce to the
   // auth modal until there's a session, then land on the page.
@@ -154,7 +167,7 @@ export default function TvTopNav() {
           className="tv-nav-mark"
           aria-hidden="true"
           style={mark
-            ? { transform: `translateX(${mark.left}px)`, width: `${mark.width}px`, height: `${mark.height}px`, opacity: 1 }
+            ? { transform: `translate(${mark.left}px, ${mark.top}px)`, width: `${mark.width}px`, height: `${mark.height}px`, opacity: 1 }
             : undefined}
         />
         <button

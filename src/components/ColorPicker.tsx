@@ -23,6 +23,14 @@ import { useT } from '../i18n/i18n';
  * two SV ranges are 1px/opacity:0 rather than display:none so they stay focusable;
  * .set-color-sv:focus-within paints the ring. */
 
+const IS_TV = import.meta.env.MODE === 'tv';
+
+/* The TV build's whole palette — see the note at the render branch. Broadcast captioning's own
+ * set, in the order a viewer scans them: the default first, then the two high-contrast standards,
+ * then the rest. Every one of them is legible over arbitrary video, which is the only requirement
+ * a subtitle colour actually has. */
+const TV_SWATCHES = ['#ffffff', '#ffff00', '#00ffff', '#00ff00', '#ff8800', '#000000'];
+
 type Hsv = { h: number; s: number; v: number };
 
 /* Pinned by .set-color-panel's width/height (border-box) so flip/clamp is pure
@@ -171,6 +179,43 @@ export default function ColorPicker({ value, onChange, label }: { value: string;
 
   // Seed HSV from the prop on the way open — the one and only hex->HSV conversion.
   const toggle = () => { if (!open) { setHsv(hexToHsv(value)); place(); } setOpen((o) => !o); };
+
+  /* ---- ON A TELEVISION THIS IS A ROW OF SWATCHES, NOT AN HSV FIELD -------------------------
+   * The picker below is three `<input type=range>`s over a saturation/brightness plane, driven by
+   * a pointer. A remote has neither: the ranges are not in TvSpatialNav's candidate selector, so
+   * on the running TV build all six of them (two pickers) were unreachable — the pill opened a
+   * panel that nothing could then touch.
+   *
+   * Making them focusable would not have rescued it. A focused range swallows every arrow — Left
+   * and Right change the value and so do Up and Down — so a remote that entered one could not
+   * leave, and picking a colour on a continuous 2-D plane with a D-pad is a chore even when the
+   * keys work.
+   *
+   * SUBTITLE COLOUR HAS ABOUT SIX SENSIBLE ANSWERS, which is the observation that makes the whole
+   * control unnecessary here. These are the shades broadcast captioning has used for decades and
+   * they are all legible over video; a viewer who wants #7A3B12 is not sitting in front of a
+   * television. Each swatch is a real `<button>`, so it is a focus stop with no new mechanism at
+   * all — no trap to escape, no panel to dismiss, and OK sets the colour outright.
+   *
+   * The web build is untouched: it keeps the full picker below, where a pointer makes it good. */
+  if (IS_TV) {
+    return (
+      <div className="set-color is-tv" ref={ref}>
+        <span className="sr-only">{`${label}, ${hex}`}</span>
+        {TV_SWATCHES.map((c) => (
+          <button
+            key={c}
+            type="button"
+            className={`set-color-chip${c.toLowerCase() === String(value).toLowerCase() ? ' on' : ''}`}
+            style={{ background: c }}
+            aria-label={`${label}: ${c}`}
+            aria-pressed={c.toLowerCase() === String(value).toLowerCase()}
+            onClick={() => onChange(c)}
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className={`set-color${open ? ' open' : ''}`} ref={ref}>

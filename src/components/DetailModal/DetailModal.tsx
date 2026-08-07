@@ -6,7 +6,7 @@ import { useLibrary } from '../../stores/library';
 import { useAuth } from '../../stores/auth';
 import { useHistory } from '../../stores/history';
 import { useReport } from '../../stores/report';
-import { useMeta } from '../../lib/queries';
+import { useMeta, useAddonMeta } from '../../lib/queries';
 import { useT, useGenre } from '../../i18n/i18n';
 import { hueBg } from '../../lib/img';
 import type { MetaDetail, MediaItem, CastMember } from '../../lib/types';
@@ -14,9 +14,9 @@ import { useTrailer } from './useTrailer';
 import EpisodeChooser from './EpisodeChooser';
 import StreamLangSelect from './StreamLangSelect';
 import SourceSelect from './SourceSelect';
-import { collectAddonStreams, orderLangs, qualityRank, isSingleAudioTrack, namedAudioLangs, primaryAudioLang, langName, UNDETERMINED, type AddonStream } from '../../lib/addonClient';
+import { collectAddonStreams, orderLangs, qualityRank, isSingleAudioTrack, namedAudioLangs, primaryAudioLang, langName, canStartHere, sourceNote, UNDETERMINED, type AddonStream } from '../../lib/addonClient';
 import { audioPlayability, silentCodecName } from '../../lib/codecs';
-import { hasStreamingServer, streamingServerReady } from '../../lib/streamingServer';
+import { hasStreamingServer, streamingServerReady, torrentUrl } from '../../lib/streamingServer';
 import { pickWatchServices } from '../../lib/watchProviders';
 import { mediaUrl, syncAddressBar, type MediaAddress } from '../../lib/launchIntent';
 import TvDetail from './TvDetail';
@@ -100,7 +100,10 @@ const canDeliver = (s: AddonStream, want: string): boolean => {
  * play the chosen language come first; the rest stay listed and carry a label saying what
  * they will really play. The sort is stable, so quality still decides inside each tier. */
 const forRender = (list: AddonStream[], want: string): AddonStream[] =>
-  [...list].sort((a, b) => (audible(b) - audible(a)) || (deliverability(b, want) - deliverability(a, want)));
+  [...list].sort((a, b) => (startable(b) - startable(a)) || (audible(b) - audible(a)) || (deliverability(b, want) - deliverability(a, want)));
+
+/** `canStartHere` as a sort key. Both builds' row lists and `bestFor` share it. */
+const startable = (s: AddonStream): number => (canStartHere(s) ? 1 : 0);
 
 /** For a row under the `want` tab: the language it will REALLY play, or null when `want`
  *  is what plays (or nothing can be said). Drives the per-row warning. */
@@ -121,10 +124,16 @@ const audible = (s: AddonStream): number => (audioPlayability(s.label) === false
 /** The one to start for `want`: deliverable only, audible first, then best quality. Falls
  *  back to the plain best if nothing can deliver, so ▶ is never a dead button. */
 const bestFor = (list: AddonStream[], want: string): AddonStream | undefined => {
-  const rank = (a: AddonStream, b: AddonStream) => (audible(b) - audible(a))
+  // `startable` leads: ▶ must never land on a link that opens a browser tab, or on a torrent
+  // with no server behind it, while an ordinary playable source is sitting in the same list.
+  const rank = (a: AddonStream, b: AddonStream) => (startable(b) - startable(a))
+    || (audible(b) - audible(a))
     || (deliverability(b, want) - deliverability(a, want))
     || (qualityRank(b.quality) - qualityRank(a.quality));
-  return [...list.filter((s) => canDeliver(s, want))].sort(rank)[0] ?? [...list].sort(rank)[0];
+  const best = [...list.filter((s) => canDeliver(s, want))].sort(rank)[0] ?? [...list].sort(rank)[0];
+  // Nothing startable at all is not an answer — better no auto-play than opening a tab the
+  // user did not ask for. The rows are still listed and still clickable.
+  return best && startable(best) ? best : undefined;
 };
 
 /* The TV build renders a different SHAPE for the same data — one screen, no page scroll, the
@@ -263,7 +272,20 @@ export default function DetailModal() {
   const [srcTab, setSrcTab] = useState<'services' | 'addons'>('services');
 
   const isTv = target?.type === 'tv' || target?.type === 'series';
-  const { data: meta, isError: metaError } = useMeta(target?.id, target?.type);
+  /* TWO SOURCES FOR ONE RECORD, asked in parallel, first usable answer rendered.
+   *
+   * `/api/meta` describes a TMDB or IMDb id. An add-on catalog card carries the add-on's own
+   * id, and for those the endpoint is a guaranteed 404 — which used to be the end of the
+   * story: no meta, therefore no `imdb`, therefore no stream fan-out, therefore an add-on
+   * whose catalog row rendered perfectly and whose sources never appeared.
+   *
+   * `useAddonMeta` fires IMMEDIATELY for an id that is not ours (not after /api/meta has
+   * failed), so the two run side by side and an add-on title costs one round trip rather than
+   * two. For an id that IS ours it stays idle unless /api/meta actually fails, in which case
+   * it is a free second chance at a title TMDB has never heard of. */
+  const { data: apiMeta, isError: metaError } = useMeta(target?.id, target?.type);
+  const { data: addonMeta, isFetching: addonMetaFetching } = useAddonMeta(target?.id, target?.type, metaError);
+  const meta = apiMeta ?? addonMeta ?? undefined;
   // While the player is open on top, drop the trailer key so useTrailer tears the
   // autoplaying YouTube iframe down (it kept streaming a whole second video behind the
   // player). The modal's `target` stays set, so closing the player restores it — and
@@ -290,21 +312,84 @@ export default function DetailModal() {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [target?.id, target?.resumeEp?.season, target?.resumeEp?.episode]);
 
+  /* THE ID THE ADD-ONS ARE ASKED UNDER, PREFERRING THE SEED'S OVER THE DETAIL FETCH'S.
+   *
+   * This effect used to be keyed on `meta.imdb` alone, which made the two round trips
+   * STRICTLY SEQUENTIAL: nothing was asked of any add-on until /api/meta had returned, and
+   * /api/meta is the expensive one (TMDB with credits, videos, external_ids, images,
+   * recommendations and watch/providers appended, plus a second English fetch whenever the
+   * localized synopsis came back empty). The user waited for the sum of the two.
+   *
+   * A catalog card already knows the answer. The backend attaches `imdb` to every card it
+   * lets through and DROPS the ones with no IMDb id, precisely because no stream add-on
+   * could be asked about them — so for a film opened from a row the fan-out can start on
+   * the click and overlap the detail fetch entirely.
+   *
+   * `meta.imdb` STILL WINS once it lands, and the fallback order is what makes that free:
+   * when the two agree — the overwhelmingly common case — this expression does not change
+   * identity, the effect does not re-run, and nothing is fetched twice. When they disagree
+   * the add-ons are re-asked under the authoritative id, which is the old behaviour.
+   *
+   * A SERIES IS UNAFFECTED and deliberately so: `pickedEp` comes out of `meta.seasonList`,
+   * so there is genuinely nothing to ask for until meta has landed. Deep links and Continue
+   * Watching carry no seed id either and fall back to exactly what they did before.
+   *
+   * `addonVideoId` IS THE THIRD OPTION AND THE ONE THAT WAS MISSING. A title described by an
+   * add-on rather than by TMDB has no IMDb id to convert to — `kitsu:44081` is the only name
+   * it has — and asking add-ons under an id nobody published is how a working catalog ended
+   * up with no sources. It sorts last because when a title HAS an IMDb id that is the id the
+   * most add-ons will recognise. */
+  const streamBaseId = meta?.imdb || target?.imdb || meta?.addonVideoId;
+
+  /* THE ID FOR ONE EPISODE, which is not `${base}:${season}:${episode}` in general.
+   *
+   * That formula is Cinemeta's convention and it is right for every IMDb-numbered show, which
+   * is why it worked for as long as those were the only shows reachable. An add-on that
+   * publishes its own catalog publishes its own episode ids with it — `kitsu:44081:5` has one
+   * colon-separated number, not two — and the add-on's `videos[]` is the only place that
+   * mapping exists. So the add-on's own id wins when there is one, and the formula stays as
+   * the fallback for everything else. */
+  const videoIdFor = (ep: { season: number; ep: number } | null): string | undefined => {
+    if (!isTv) return streamBaseId;
+    if (!ep) return undefined;
+    const own = meta?.addonEpisodes?.find((v) => v.season === ep.season && v.episode === ep.ep)?.id;
+    return own ?? (streamBaseId ? `${streamBaseId}:${ep.season}:${ep.ep}` : undefined);
+  };
+  const streamVideoId = videoIdFor(pickedEp);
+
   // client-direct add-on streams: ask every installed stream add-on for this title's
-  // sources (movie → tt…; series → tt…:season:episode, once an episode is picked)
+  // sources (movie → tt…; series → the picked episode's own id, once one is picked)
   useEffect(() => {
-    const imdb = meta?.imdb;
-    if (!imdb) { setStreams([]); return; }
-    if (isTv && !pickedEp) { setStreams([]); return; }
-    const videoId = isTv && pickedEp ? `${imdb}:${pickedEp.season}:${pickedEp.ep}` : imdb;
+    if (!streamVideoId) { setStreams([]); return; }
+    const videoId = streamVideoId;
     const type = isTv ? 'series' : 'movie';
     let alive = true;
     setStreamsLoading(true); setStreams([]);
-    collectAddonStreams(videoId, type)
+    /* Render each add-on's sources AS THEY LAND rather than at the end. The fan-out is only
+     * as fast as its slowest member, and the slowest member is routinely an order of
+     * magnitude behind the rest — a debrid-backed add-on checking cache per hash against
+     * one that answers from a static index. Holding the fast answers back bought nothing;
+     * the final list is identical either way, and `collectAddonStreams` fills add-on-order
+     * slots so the rows do not reshuffle as it grows. */
+    collectAddonStreams(videoId, type, (partial) => { if (alive) setStreams(partial); })
       .then((s) => { if (alive) setStreams(s); })
       .finally(() => { if (alive) setStreamsLoading(false); });
     return () => { alive = false; };
-  }, [meta?.imdb, isTv, pickedEp]);
+  }, [streamVideoId, isTv]);
+
+  /* The last value THIS EFFECT chose, so a default can be told apart from a decision.
+   *
+   * It matters now that `streams` arrives in instalments. The rule below keeps `cur` when
+   * it is still offered, which was unambiguous when the whole fan-out landed at once and is
+   * not any more: whichever add-on answered FIRST would otherwise decide the default tab
+   * for good, so a title whose Russian source came back in 200 ms and whose English one
+   * took four seconds would open on Русский and stay there — the opposite of what
+   * `langTabs`/`orderLangs` exist to express. Comparing against this ref makes the sticky
+   * branch apply to a tab the USER picked (or one carried in from the title they were just
+   * looking at) and not to one we filled in ourselves, so the default keeps converging as
+   * the slower add-ons report and settles on exactly the value the single-shot version
+   * would have computed. */
+  const autoLang = useRef<string>('');
 
   // default the language bucket when the sources change: keep the current pick if it's
   // still offered, else prefer the language the user was last watching (so RESUME plays
@@ -319,9 +404,10 @@ export default function DetailModal() {
     const rkey = target ? (pickedEp ? `${target.id}:S${pickedEp.season}E${pickedEp.ep}` : String(target.id)) : '';
     const savedLang = signedIn && rkey ? getResume(rkey)?.lang : undefined;
     setLang((cur) => {
-      if (cur && langs.includes(cur)) return cur;
-      if (savedLang && langs.includes(savedLang)) return savedLang;
-      return langs[0] || '';
+      if (cur && cur !== autoLang.current && langs.includes(cur)) return cur;
+      const next = savedLang && langs.includes(savedLang) ? savedLang : (langs[0] || '');
+      autoLang.current = next;
+      return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streams]);
@@ -391,11 +477,13 @@ export default function DetailModal() {
   const year = meta?.year ?? target.year;
   const genreChips = meta?.genre ?? (target.genre ? [target.genre] : []);
   const plot = meta ? (meta.plot || meta.tagline || t('modal.no_synopsis')) : t('modal.loading_synopsis');
-  // Hold the reveal until /api/meta lands so the overlay opens already-populated
-  // (backdrop, logo, all genres, synopsis, cast, sources) instead of flashing the
-  // seeded/partial card data. Fall back to seeded content if the fetch errors so it
-  // can never spin forever.
-  const ready = !!meta || metaError;
+  /* Hold the reveal until a description lands so the overlay opens already-populated
+   * (backdrop, logo, all genres, synopsis, cast, sources) instead of flashing the
+   * seeded/partial card data. Falls back to seeded content once BOTH sources are out —
+   * `metaError` alone is no longer enough, because for an add-on id it goes true almost
+   * at once and the add-on lookup that is going to answer is still in flight. Revealing on
+   * it would show an empty modal and then repaint it a moment later. */
+  const ready = !!meta || (metaError && !addonMetaFetching);
 
   const epTotal = (meta?.seasonList ?? []).reduce((a, s) => a + (s.episodes || 0), 0);
   const added = mylist.some((m) => String(m.id) === String(target.id));
@@ -434,23 +522,46 @@ export default function DetailModal() {
     return { id: target.id, key, title, poster: meta?.poster || target.poster, year, type: target.type, genre: target.genre, rating, ep: ep ? `S${ep.season}E${ep.ep}` : undefined, season: ep?.season ?? null, episode: ep?.ep ?? null, lang: langTag || undefined };
   };
   const subsOf = (s: AddonStream) => s.subtitles?.map((x) => ({ lang: x.lang, label: x.lang || 'Subtitle', url: x.url }));
-  /* What the player will ask SUBTITLE add-ons for. Identical to the id the stream fan-out
-   * above uses (`tt…` / `tt…:season:episode`) and built from the same `meta.imdb`, because
-   * they are the same question asked of a different resource. Undefined without an IMDb id:
-   * an add-on cannot answer `subtitles/movie/undefined.json`, so there is nothing to ask. */
-  const subsQueryFor = (ep: Ep | null) => (meta?.imdb
-    ? { videoId: ep ? `${meta.imdb}:${ep.season}:${ep.ep}` : meta.imdb, type: (isTv ? 'series' : 'movie') as 'movie' | 'series' }
-    : undefined);
+  /* What the player will ask SUBTITLE add-ons for. THE SAME id the stream fan-out uses, via
+   * the same `videoIdFor`, because they are the same question asked of a different resource
+   * — and because the two rebuilding it separately is precisely how the subtitles path came
+   * to be limited to IMDb titles while the streams path was not. Undefined when there is no
+   * id at all: an add-on cannot answer `subtitles/movie/undefined.json`. */
+  const subsQueryFor = (ep: Ep | null) => {
+    const videoId = videoIdFor(ep);
+    return videoId ? { videoId, type: (isTv ? 'series' : 'movie') as 'movie' | 'series' } : undefined;
+  };
   // series context for the in-player episodes panel (only for a series episode)
   const seriesFor = (ep: Ep | null) => (ep && meta?.seasonList?.length
     ? { seasons: meta.seasonList, metaId: target.id, imdb: meta.imdb, season: ep.season, ep: ep.ep, title, playEp: (s: number, e: number) => { void playEpisode(s, e); } }
     : undefined);
   const playStreamFor = (s: AddonStream, ep: Ep | null, langTag?: string) => {
+    /* A LINK IS NOT A STREAM. `externalUrl` sources exist to be opened elsewhere — a
+     * broadcaster's own player, a shop page — and `ytId` ones are YouTube embeds this
+     * player has no path for (its whole surface is a <video> element; the trailer hero is
+     * an iframe and a separate thing entirely). Opening them out of the app is the honest
+     * support: strictly better than the previous behaviour, which was to drop them before
+     * anyone could see they existed. */
+    if (s.kind === 'external' || s.kind === 'youtube') {
+      if (s.url) window.open(s.url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    /* A torrent has no address until a streaming server is known — `torrentUrl` builds
+     * Stremio's `/<infoHash>/<fileIdx>?tr=…`, or answers null when none is reachable. The
+     * row is already labelled in that case (see `needsServer` in the list), so this is the
+     * belt to that braces rather than the place the user finds out. */
+    const url = s.kind === 'torrent' ? torrentUrl(s) : s.url;
+    if (!url) return;
     const nxt = nextEpOf(ep);
     // the language this playback represents, so resume can pick the same one later
     const chosen = langTag ?? (lang && s.langs.includes(lang) ? lang : s.langs[0]);
     playSource({
-      url: s.url, kind: s.kind, title, lang: chosen, langs: s.langs,
+      url,
+      // 'torrent' is not a player concept: what comes back from the server is an ordinary
+      // range-supporting progressive file, which is exactly what 'url' means here.
+      kind: s.kind === 'hls' ? 'hls' : 'url',
+      notWebReady: s.notWebReady,
+      title, lang: chosen, langs: s.langs,
       subtitle: ep ? `S${ep.season} · E${ep.ep}` : undefined,
       media: buildMediaFor(ep, chosen), subtitles: subsOf(s), subsQuery: subsQueryFor(ep),
       next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined,
@@ -460,12 +571,12 @@ export default function DetailModal() {
   const playStream = (s: AddonStream) => playStreamFor(s, pickedEp);
   // switch to a specific episode, fetch its sources, and play the best one (auto-next)
   const playEpisode = async (season: number, ep: number) => {
-    const imdb = meta?.imdb; if (!imdb) return;
+    const videoId = videoIdFor({ season, ep }); if (!videoId) return;
     setPickedEp({ season, ep });
-    const list = await collectAddonStreams(`${imdb}:${season}:${ep}`, 'series');
+    const list = await collectAddonStreams(videoId, 'series');
     const langs = langTabs(list);
     const want = langs.includes(lang) ? lang : langs[0];
-    const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want) || list[0];
+    const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want) ?? bestFor(list, '');
     if (best) { playStreamFor(best, { season, ep }, want); return; }
     const nxt = nextEpOf({ season, ep });
     playSource({ url: '/assets/demo.mp4', title, subtitle: `S${season} · E${ep}`, media: buildMediaFor({ season, ep }), subsQuery: subsQueryFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
@@ -493,9 +604,11 @@ export default function DetailModal() {
   // seeks to any saved resume position itself (VideoPlayer reads getResume), so
   // "continue watching" needs no extra wiring here.
   const playBest = () => {
-    const pick = bestFor(shownStreams, lang);
+    // The second call widens from the chosen language bucket to everything; both go through
+    // `bestFor`, so neither can hand back a link-out or a serverless torrent. The old
+    // `streams[0]` fallback could, and would have opened a tab from the RESUME button.
+    const pick = bestFor(shownStreams, lang) ?? bestFor(streams, '');
     if (pick) playStreamFor(pick, pickedEp);
-    else if (streams.length) playStreamFor(streams[0], pickedEp);
   };
 
   // Saved resume position for the current title (movie) or picked episode — only
@@ -666,10 +779,14 @@ export default function DetailModal() {
                     </div>
                   ) : isTv && !pickedEp ? (
                     <div className="demo-note">{t('modal.pick_episode')}</div>
-                  ) : streamsLoading ? (
-                    <div className="stream-source-label">{t('modal.loading_synopsis')}</div>
                   ) : rowStreams.length ? (
-                    rowStreams.map((s, i) => (
+                    /* SOURCES BEFORE STILL-LOADING, which is the whole point of the
+                     * instalments: this branch used to sit BELOW `streamsLoading`, so a
+                     * list that already had rows in it rendered as a loading note until
+                     * the last add-on answered. The note moves to the end and says what it
+                     * now means — some sources are here, more may follow. */
+                    <>
+                    {rowStreams.map((s, i) => (
                       <button className={`addon-stream${silentCodecName(s.label) ? ' no-audio' : ''}`} type="button" key={i} aria-label={streamTitle} onClick={() => playStream(s)}>
                         <span className={`quality-badge ${qualClass(s.quality)}`}>{s.quality || 'SD'}</span>
                         <span className="stream-info">
@@ -691,10 +808,27 @@ export default function DetailModal() {
                                 : t('modal.secondary_track', { want: langName(lang) })}
                             </span>
                           )}
+                          {/* What KIND of source this is, when that changes what pressing it
+                              does. A torrent with no streaming server behind it, and a link
+                              that leaves the app, both look exactly like an ordinary row
+                              until they are pressed — which is the moment it is least
+                              useful to find out. */}
+                          {sourceNote(s) && (
+                            <span className="stream-warn">{t(`modal.source_${sourceNote(s)}`)}</span>
+                          )}
                         </span>
                         <span className="addon-stream-chevron" aria-hidden="true">›</span>
                       </button>
-                    ))
+                    ))}
+                    {streamsLoading && <div className="stream-source-label" role="status">{t('modal.more_sources')}</div>}
+                    </>
+                  ) : streamsLoading ? (
+                    /* NOT `modal.loading_synopsis`, which is what this said for as long as
+                     * the branch existed. The synopsis is a different fetch that finished
+                     * before this list was ever mounted; the string was borrowed for its
+                     * spinner-ish shape and then read, by everyone including us, as the
+                     * synopsis being what the wait was for. */
+                    <div className="stream-source-label" role="status">{t('modal.searching_sources')}</div>
                   ) : (
                     <div className="demo-note">{t('modal.no_streams')}</div>
                   )}

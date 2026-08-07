@@ -230,7 +230,16 @@
   background: none;
   border: 0;
   border-radius: 999px;
-  padding: 9px 18px;
+  /* ASYMMETRIC BY HALF A PIXEL, TO CENTRE THE INK RATHER THAN THE LINE BOX.
+     `align-items: center` centres the LINE BOX, and a line box is ascent + descent — for Poppins
+     at 21px that is 22 above the baseline and 7 below. A nav label has no descenders ("Home",
+     "Series", "Movies"), so those 7px are reserved and never drawn, and centring the box that
+     contains them lifts the visible ink above the true centre. Measured against the pill: 14.6px
+     of white above the glyphs and 15.7px below.
+     The correction is half that difference, moved from the top padding to the bottom, so the
+     item's HEIGHT is unchanged — which matters because TvTopNav sizes the travelling pill from
+     this element's offsetHeight, and a taller item would simply move the problem into the pill. */
+  padding: 9.5px 18px 8.5px;
   cursor: pointer;
   display: inline-flex; align-items: center;
   transition: color .22s ease, background-color .22s ease;
@@ -267,7 +276,18 @@
 }
 .tv-shell .tv-nav-item:focus-visible { outline: none; }
 
-.tv-nav-search { padding: 9px 12px; color: rgba(255,255,255,0.72); }
+/* THE SEARCH BUTTON IS PADDED TO THE TEXT ITEMS' HEIGHT, NOT TO ITS OWN COMFORT.
+   Its content is a 24px glyph where theirs is a 21px line, so at equal padding it came out 42px
+   against their 39 — and in a flex row that makes IT set the line height and leaves every text
+   item centred 1.5px lower. Two things went wrong with that. The travelling pill is placed from
+   the focused item's `offsetTop`, which is an integer, so a true 1.5px offset rounded to 2 and
+   left the pill half a pixel out however carefully it was measured. And the pill resized
+   vertically as it travelled between the icon and the words, which is a wobble on the one
+   element in the bar whose whole job is to glide.
+   7.5px of vertical padding puts the glyph's box at 39 as well: every item is now the same
+   height, every `offsetTop` is 0, and both problems stop existing rather than being corrected
+   for. Horizontal padding stays at 12 — the icon needs less side room than a word. */
+.tv-nav-search { padding: 7.5px 12px; color: rgba(255,255,255,0.72); }
 .tv-nav-search:hover { color: #fff; }
 
 /* ---- THE FEATURED BILLBOARD (TvHero) — the top of the home screen, and nothing else -------
@@ -2286,8 +2306,18 @@
   pointer-events: none;
 }
 
+/* THE BOTTOM IS EXPLICITLY 0, AND THAT ZERO IS LOAD-BEARING RATHER THAN LAZY.
+   This was a two-value shorthand, which sets block-START and block-END — so every focusable in
+   the TV build has been declaring `calc(var(--tv-topnav-h) + 20px)` of BOTTOM margin as well.
+   Nothing ever read it: TvSpatialNav's downward nudge used a hard-coded 24px. The moment that
+   function started honouring `scroll-margin-bottom` (it does now — see scrollMarginBottom there),
+   this line would have quadrupled the resting clearance under every tile, button and poster on
+   every TV surface at once, as a side effect of a fix to one page.
+   A margin nobody has ever seen the effect of is not an intention to inherit. The bottom is
+   pinned to 0 — which TvSpatialNav floors back to its original 24px — so each surface opts in to
+   a bottom margin deliberately, the way #addons does. */
 .tv-shell :is(.tv-nav-item, .tv-nav-profile, .tv-spot-hero, .tv-spot-thumb, .poster, a, button) {
-  scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px;
+  scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px 0;
 }
 /* The row billboard needs MORE than the bar's height: TvSpatialNav parks a row with `start`, and
    the row's TITLE sits above this element, so clearing only the bar would tuck the title under
@@ -3473,3 +3503,761 @@
   .vp-overlay.tv .vp-eprail-track { scroll-behavior: auto; }
   .vp-overlay.tv .vp-eprail.open .vp-epcard.in { animation: none; }
 }
+
+/* ============================================================================
+   Stage 12: THE ADD-ONS PAGE ON A REMOTE.
+
+   This screen shipped with no TV rules at all, so it rendered the desktop layout on a
+   television and inherited exactly one piece of D-pad feedback: the generic 3px ring from
+   stage 5, drawn around a 13.5px button. Everything that tells a mouse user where they are
+   lives on `.addon:hover`, and a remote cannot produce a hover — so from a sofa, moving down
+   a list of add-ons lit a small outline somewhere on the right of the screen and left the
+   CARD it belonged to looking identical to the eleven others. "Which add-on am I about to
+   remove" was not answerable from the picture.
+
+   THE FIX IS TO GIVE FOCUS WHAT HOVER GETS, not to make hover work. `:focus-within` is the
+   whole mechanism: the ACTS buttons are the focus stops, and the card they sit in is what the
+   viewer is actually reading, so the card responds when anything inside it is focused. No JS,
+   no new focus targets, and it costs the desktop build nothing — this file is only imported
+   in the tv build.
+   ============================================================================ */
+
+/* THE HOVER INVERSION IS TURNED OFF HERE, AND NOT ONLY BECAUSE THERE IS NO POINTER.
+   Several TV remotes DO carry one — LG's Magic Remote puts a real cursor on screen — so
+   `:hover` genuinely fires on this platform, and when it does it flips the card to white with
+   its content inverted to dark. Stage 5's focus ring is rgba(255,255,255,.72). A white ring on
+   a white card is invisible, so waving the pointer over the row the D-pad was on would erase
+   the only indication of where the remote is. One card treatment, driven by focus. */
+.tv-shell .addon:hover {
+  border-color: var(--border);
+  background: var(--surface);
+  transform: none;
+  box-shadow: none;
+}
+.tv-shell .addon:hover :is(.name, .ver) { color: var(--text); }
+.tv-shell .addon:hover :is(.desc, .desc .mono) { color: var(--text-muted); }
+.tv-shell .addon:hover .ic.puzzle .pzPieceIc rect[data-fill] { fill: var(--accent); }
+.tv-shell .addon:hover .tag { background: rgba(var(--accent-rgb), .07); color: var(--text-muted); }
+.tv-shell .addon:hover .badge.muted { background: rgba(255, 255, 255, .06); color: var(--text-muted); }
+.tv-shell .addon:hover .minibtn { color: var(--text-muted); border-color: var(--border); }
+.tv-shell .addon:hover .minibtn.install { color: var(--accent); border-color: rgba(var(--accent-rgb), .55); }
+.tv-shell .addon:hover .minibtn.danger { color: var(--danger); border-color: rgba(234, 100, 121, .4); }
+
+/* ---- THE CARD THE REMOTE IS ON GOES WHITE ---------------------------------------------------
+   The desktop's hover treatment, taken over wholesale for focus: the card fills white and its
+   contents invert to dark ink. It is the strongest state this design already owns, and on a wall
+   of near-identical dark rows it is the only one that answers "which add-on is this" from the far
+   side of a room — a wash plus a ring is a lit rectangle among dark rectangles, which still asks
+   the eye to compare.
+
+   THE RING IS GONE WITH IT, and that is a consequence rather than a separate preference. Stage 5
+   rings `[tabindex]:focus-visible` in rgba(255,255,255,.72); around a white card that draws a
+   dim grey halo one pixel off a bright white edge, which reads as a rendering artefact. The card
+   IS the indicator now, so it needs nothing drawn around it — `outline: none` has to be stated
+   for both the card's own focus and the focus-within case, or stage 5's rule keeps applying.
+
+   The lift stays small. app.css uses `scale(1.03)` on hover, which on a 1750px card is +52px of
+   width; these are full-bleed rows 12px apart, so they would collide with their neighbours and
+   overhang the page gutter. */
+.tv-shell #addons .addon:focus-within {
+  background: #fff;
+  border-color: #fff;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .6);
+  transform: scale(1.012);
+  outline: none;
+}
+.tv-shell #addons .addon:focus-visible { outline: none; }
+
+/* EVERY CHILD HAS TO BE RE-INKED, and app.css's hover block cannot be reused for it: those rules
+   are keyed to `:hover`, which a remote never produces. Same values, same reasoning, keyed to
+   focus — the name and version take the dark ink, the description takes #2b2b2b (softer than the
+   title, so the hierarchy survives the inversion), and the puzzle piece flips to ink. */
+.tv-shell #addons .addon:focus-within :is(.name, .ver) { color: var(--ink); }
+.tv-shell #addons .addon:focus-within :is(.desc, .desc .mono) { color: #2b2b2b; }
+.tv-shell #addons .addon:focus-within .ic.puzzle .pzPieceIc rect[data-fill] { fill: var(--ink); }
+/* The icon plate is `rgba(255,255,255,.1)` — invisible on white. A light-dark plate keeps the
+   piece sitting on something rather than floating in the corner of the card. */
+.tv-shell #addons .addon:focus-within .ic { background: rgba(0, 0, 0, .07); }
+/* The status pills carry their own translucent backgrounds, tuned for a dark surface: `Installed ✓`
+   is a 13%-alpha green wash that vanishes on white, and `Available` is a white wash on white.
+   Both get an opaque light-dark plate so the badge stays a badge. */
+.tv-shell #addons .addon:focus-within .badge.ok { background: rgba(45, 160, 115, .16); color: #1b7a55; }
+.tv-shell #addons .addon:focus-within .badge.muted { background: rgba(0, 0, 0, .07); color: #444; }
+
+/* ---- THE CARD IS RESTACKED: ACTIONS BELOW THE TEXT, NOT IN A RIGHT-HAND GUTTER --------------
+   The desktop card is one flex ROW — icon, body, actions — which puts the controls at the far
+   right of a 1750px card while everything you read is on the left. That split is what made the
+   page tiring on a remote even after the navigation was fixed: the eye is on the left, the focus
+   ring is 1500px away, and the two never meet. It is also why the actions had to be lifted out
+   of spatial nav (see Addons.tsx) — they were geometrically nowhere near the thing they act on.
+
+   As a grid the card reads top-to-bottom the way it is actually used: what is this, then what
+   can I do about it. The actions start at the card's left edge, under the icon rather than
+   indented to the body, so the button you want is the first thing at the bottom-left corner
+   instead of the last thing on the right.
+
+   `grid-template-areas` rather than explicit row/column on each child, because the three parts
+   are already there in the markup in this order and naming them is what keeps the desktop's flex
+   layout readable beside it. */
+.tv-shell #addons .addon {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "ic   body"
+    "acts acts";
+  align-items: start;
+  gap: clamp(12px, 1.7vh, 20px) clamp(14px, 1.3vw, 22px);
+  padding: clamp(16px, 2vh, 26px) clamp(18px, 1.7vw, 28px);
+  border-radius: 14px;
+  /* A CARD HAS TO LOOK LIKE A CARD BEFORE THE REMOTE REACHES IT. `--border` is fully transparent
+     across this app by design — the web look is deliberately borderless — and `--surface` sits a
+     hair off the page black, so at 3m an unfocused list read as one continuous slab of text with
+     a lit rectangle somewhere in it. You could see where the remote WAS and not what it was
+     moving between. Stated here rather than by changing the variable, which would repaint every
+     surface in the build. */
+  background: rgba(255, 255, 255, .045);
+  border-color: rgba(255, 255, 255, .10);
+}
+.tv-shell #addons .addon .ic { grid-area: ic; }
+.tv-shell #addons .addon .body { grid-area: body; }
+.tv-shell #addons .addon .acts { grid-area: acts; justify-content: flex-start; }
+
+/* The puzzle piece scales with the card. It is the only colour on a card and the only thing that
+   distinguishes one from another at a glance while the eye is still travelling. */
+.tv-shell #addons .addon .ic {
+  width: clamp(52px, 6vh, 68px);
+  height: clamp(52px, 6vh, 68px);
+  border-radius: 14px;
+}
+.tv-shell #addons .addon .ic.puzzle .pzPieceIc { width: 55%; height: 55%; }
+
+/* Text at viewing distance. The description is the line that decides whether an add-on is the
+   one you meant, so it is the one that must not stay at 14px. */
+.tv-shell #addons .addon .name { font-size: clamp(19px, 2.3vh, 26px); gap: 12px; }
+.tv-shell #addons .addon .desc { font-size: clamp(14px, 1.7vh, 19px); line-height: 1.55; }
+.tv-shell #addons .addon-sec-title { font-size: clamp(20px, 2.4vh, 27px); }
+.tv-shell #addons .addon-sec-disclaimer { font-size: clamp(14px, 1.6vh, 18px); }
+
+/* THE PAGE INTRO RUNS THE FULL WIDTH. `.section-sub` is capped at 560px in app.css, which is a
+   sensible reading measure on a desktop and wrong here for a reason particular to a television:
+   the cap is a fraction of a 1920px screen, so the paragraph broke into five short lines in the
+   top-left corner with the other two-thirds of the row empty — and vertical space is the scarce
+   axis on this page, since it is what decides how many cards are on screen. Full width turns five
+   lines into two and hands three lines back to the list.
+
+   The measure argument does not survive the viewing distance either: a long line is tiring to
+   read when the eye has to track back to the start of the next one, and at 3m across a 16:9 panel
+   that saccade is a glance rather than a head movement. Scoped to this page rather than fixed in
+   app.css, which every surface shares. */
+.tv-shell #addons .section-sub { max-width: none; font-size: clamp(15px, 1.8vh, 20px); }
+
+/* THE TAG CHIPS ARE DROPPED, and they are redundant rather than sacrificed: every card renders
+   its resources twice, once as `Catalog · Metadata —` leading the description and again as the
+   chips underneath it. Two lines of the same fact is a line of card height, and on this layout
+   height is what decides how many add-ons fit on a screen. The description keeps the copy that
+   is actually a sentence. */
+.tv-shell #addons .addon .tags { display: none; }
+
+/* ---- THE ACTIONS -------------------------------------------------------------------------
+   Sized as real TV buttons rather than the mouse targets they were: 13.5px type in a 7px-tall
+   box is a smudge at 3m, and it was the thing the focus ring had to draw around. A floor on the
+   width keeps a two-word label and a one-word label the same size, so a row of them reads as a
+   set of choices instead of a ragged line of text. */
+.tv-shell #addons .addon .acts { gap: clamp(10px, 1.1vw, 16px); }
+.tv-shell #addons .addon .minibtn {
+  min-width: clamp(132px, 11vw, 184px);
+  padding: clamp(11px, 1.5vh, 17px) clamp(18px, 1.7vw, 26px);
+  font-size: clamp(14px, 1.7vh, 18px);
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  border-radius: 9px;
+  border-width: 2px;
+  /* AND A BUTTON HAS TO LOOK LIKE A BUTTON. Same cause as the card above: `.minibtn` inherits the
+     transparent `--border`, so on the desktop it is a word that grows an edge on hover. With no
+     pointer there is no hover, and CONFIGURE / PREVIEW / HIDE rendered as loose capitals floating
+     under the description — indistinguishable from the labels around them until the remote landed
+     on one. Only REMOVE looked like a control, because its danger colour gave it one. */
+  border-color: rgba(255, 255, 255, .24);
+  color: var(--text);
+}
+/* RESTATED AT THIS SPECIFICITY OR THE COLOURED ACTIONS GO GREY, which is not a hypothetical —
+   it happened. The rule above is `.tv-shell #addons .addon .minibtn` (0,3,0) and app.css states
+   the danger and install colours on `.minibtn.danger` (0,2,0), so giving every button a neutral
+   edge silently repainted REMOVE as an ordinary control. On this page REMOVE is the only
+   irreversible action there is — it destroys a credentialed manifest URL this device may hold the
+   only copy of — so it losing the one thing that marks it as destructive is the worst possible
+   thing for a neutral-edge rule to do by accident. Both colours are restated with a slightly
+   stronger edge than the desktop's, because a 1px .4-alpha border is a suggestion at 3m. */
+.tv-shell #addons .addon .minibtn.danger {
+  color: var(--danger);
+  border-color: rgba(234, 100, 121, .58);
+}
+.tv-shell #addons .addon .minibtn.install {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), .6);
+}
+
+/* FOCUS IS A SOLID FILL, WHICH IS THIS BUILD'S WORD FOR IT ALREADY — the top bar's travelling
+   pill and the profile avatar both answer the remote by going white with `#0b0b0b` ink, and the
+   season menu does the same. Reusing it here means the add-ons page needs no new vocabulary, and
+   it beats an outline for the reason it does up there: at this size a ring is a thin line at the
+   edge of a control while a fill is the whole control.
+
+   The outline is dropped WITH the fill rather than left underneath it. Stage 5's ring is
+   rgba(255,255,255,.72) and the fill is #fff, so keeping both would draw a dim grey halo just
+   outside a bright white pill — the halo reads as a rendering artefact rather than as emphasis. */
+.tv-shell #addons .addon .minibtn:focus-visible {
+  outline: none;
+  border-radius: 9px;
+  background: #fff;
+  border-color: #fff;
+  color: #0b0b0b;
+}
+/* A DESTRUCTIVE ACTION MUST NOT LOOK LIKE A SAFE ONE WHEN IT IS THE ONE UNDER THE REMOTE.
+   Same grammar — solid fill means focused — in the colour the control already carries, so REMOVE
+   answers the D-pad as unmistakably as PREVIEW does without the two becoming the same button at
+   the moment it matters. Same reasoning for INSTALL, which is the accent action. */
+.tv-shell #addons .addon .minibtn.danger:focus-visible {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.tv-shell #addons .addon .minibtn.install:focus-visible {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0b0b;
+}
+/* The chip on a non-toggleable official add-on is a label, not a control (it has no `button`
+   element and takes no focus). Dashed and unfilled so it never reads as a button that is simply
+   not focused right now. */
+.tv-shell #addons .addon .minibtn.is-default { min-width: 0; border-width: 1px; }
+
+/* ---- THE SAME BUTTONS, ON A CARD THAT HAS GONE WHITE ---------------------------------------
+   Everything above is drawn for a dark card: light borders, light text, and a WHITE fill to mean
+   focused. On the focused card all three of those are white-on-white, so the row of actions would
+   disappear at exactly the moment it becomes the thing the user is reaching for. Each is restated
+   inverted, at a specificity that beats the dark-card rules by the `:focus-within` on the card.
+
+   THE FILL FLIPS TO DARK RATHER THAN GOING AWAY. "Solid fill means focused" is the grammar the
+   top bar established and the whole page now uses; on a light surface the solid is #0b0b0b and
+   the ink is white. Same sentence, opposite polarity. */
+.tv-shell #addons .addon:focus-within .minibtn {
+  color: #222;
+  border-color: rgba(0, 0, 0, .28);
+}
+.tv-shell #addons .addon:focus-within .minibtn:focus-visible {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+/* Red on white is the one colour that needs no adjustment, so REMOVE keeps its identity in both
+   polarities — outlined at rest, filled when the remote is on it, white ink either way. */
+.tv-shell #addons .addon:focus-within .minibtn.danger {
+  color: var(--danger);
+  border-color: rgba(234, 100, 121, .65);
+}
+.tv-shell #addons .addon:focus-within .minibtn.danger:focus-visible {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+/* INSTALL IS DELIBERATELY *NOT* FILLED WITH THE ACCENT HERE. The accent is user-chosen (see the
+   colour picker in Settings) and its default is very nearly white, so an accent fill on a white
+   card is an invisible button — a failure that depends on a preference, which is the kind that
+   ships. The dark fill above is inherited and the accent survives as the edge and the rest-state
+   ink, where it has a dark-on-light contrast that holds for any hue the picker can produce. */
+.tv-shell #addons .addon:focus-within .minibtn.install {
+  color: #1c1c1c;
+  border-color: rgba(0, 0, 0, .4);
+}
+/* AND ITS FOCUSED STATE HAS TO BE SPELT OUT, because the two rules that would otherwise decide it
+   TIE. `…:focus-within .minibtn:focus-visible` and `…:focus-within .minibtn.install` are both
+   (1,5,0), so source order wins and the rest-state `.install` colour — dark ink, correct on a
+   white card — was landing on top of the dark FILL from the focus rule. INSTALL focused rendered
+   as near-black text on a near-black button: the one control on the card, invisible at the moment
+   it was selected. Restated at (1,6,0) so the pairing is decided by the cascade rather than by
+   which line happens to come last. The same tie exists for `.danger`, which is why its focused
+   state is spelt out too. */
+.tv-shell #addons .addon:focus-within .minibtn.install:focus-visible {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+.tv-shell #addons .addon:focus-within .minibtn.is-default {
+  color: #555;
+  border-color: rgba(0, 0, 0, .25);
+}
+
+/* A section head is not a focus stop, so nothing scrolls it into view on its own — it arrives
+   only as the space above the first card of its section. `scroll-margin` on the CARD is what
+   keeps that space on screen: stage 5 gives every `button` the margin, but the button is INSIDE
+   the card, so parking it clears the top bar by the button's own height and leaves the card's
+   name and heading tucked behind the bar. The card is what has to clear it.
+
+   THE BOTTOM VALUE IS STATED SEPARATELY, and it is not the same number. A two-value shorthand
+   would give the foot of the screen the top bar's height, which is meaningless down there — there
+   is no bottom bar to clear, only the question of how much of the NEXT card should be showing
+   when the remote lands on this one. Enough that the list plainly continues; not so much that
+   every press scrolls half a screen. (TvSpatialNav reads both edges now; until it did, this
+   bottom value was declared and discarded.)
+
+   THE TOP VALUE IS MEASURED, NOT ESTIMATED. It was 34px, which was a guess and was 23px short:
+   the section head's box top sits 45px above its first card's top (a 31px heading plus its
+   margin), so parking the card at bar+34 left the heading tucked behind the bar — the exact
+   failure this margin exists to prevent. 57px is that 45px plus a little air, so the heading
+   lands just clear of the bar rather than touching it. */
+.tv-shell #addons .addon { scroll-margin: calc(var(--tv-topnav-h) + 57px) 44px clamp(30px, 5.5vh, 72px); }
+
+/* ---- THE INSTALL BOX ----------------------------------------------------------------------
+   The field is a focus stop on this screen only (see the note on its `tabIndex` in Addons.tsx),
+   which makes two things load-bearing that were free while it was unreachable.
+
+   IT NEEDS A VISIBLE FOCUS STATE. `.install-box input` is `border: none; outline: none` — drawn
+   as part of the box rather than as a control — so with the remote inside it nothing on screen
+   said so, and a caret is a single hairline at 3m.
+
+   AND IT NEEDS SCROLL MARGIN. Stage 5's `scroll-margin` list covers `a, button, .poster` and the
+   TV chrome; `[tabindex]` is not in it, so the one element on this page that is focusable by
+   attribute alone would park flush against the top of the viewport — behind a 76px fixed top
+   bar. The field would take focus and disappear. */
+.tv-shell .install-box { padding: clamp(12px, 1.5vh, 18px); border-radius: 10px; }
+.tv-shell .install-box input {
+  font-size: clamp(15px, 1.8vh, 20px);
+  scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px;
+}
+.tv-shell .install-box:focus-within {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), .07);
+}
+/* The FIELD carries the ring itself rather than leaving it to the box: `:focus-within` is also
+   true while the INSTALL button beside it is focused, and a box that looked identical either way
+   could not say which of the two the remote is on. */
+.tv-shell .install-box input:focus-visible {
+  outline: 3px solid var(--tv-ring);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+.tv-shell .install-box .enter {
+  font-size: clamp(15px, 1.7vh, 19px);
+  padding: clamp(9px, 1.2vh, 14px) clamp(18px, 1.8vw, 28px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-shell .addon:focus-within { transform: none; }
+}
+
+/* ---- THE SHEET IS SIZED FOR A TELEVISION -----------------------------------------------------
+   `.auth-card` is `width: min(420px, 100%)`, which is a phone-shaped column — right for the
+   sign-in card it was written for, and a postage stamp on a 1920px panel viewed from a sofa. It
+   forced the two things in the screenshot: a home preview too narrow to show a whole home row,
+   and a studios rail clipped after two and a half logos, with a horizontal scrollbar as the way
+   out — and a scrollbar is a mouse affordance no remote can reach.
+
+   WIDTH, NOT MAX-WIDTH, and that is the whole reason PreviewModal's inline `maxWidth: 560` never
+   did anything: `width: min(420px, 100%)` already fixes the box at 420, so a larger max-width has
+   nothing to widen. Overriding `width` is what actually moves it — and because the inline style
+   only ever set max-width, this needs no `!important` to win.
+
+   92vw rather than a flat number so the sheet still fits a 1280x720 panel, where 860px would
+   otherwise crowd the screen edge to edge. */
+.tv-shell .auth-card { width: min(860px, 92vw); }
+
+/* ---- THE CONFIGURE SHEET IS TWO COLUMNS: PREVIEW LEFT, PICKER RIGHT -------------------------
+   Stacked, it could not do its job. The preview is a scrolling box, so with six or seven rows
+   selected only the first two and a half were ever visible — and the part that made that fatal
+   rather than untidy is that NOTHING INSIDE IT IS FOCUSABLE, so a remote cannot scroll it. On a
+   television those rows were not merely below the fold; they were unreachable. A viewer picking
+   rows could not see the effect of the picking, which is the entire premise of the sheet.
+
+   Side by side, the preview gets the full height of the card instead of a 372px slot, and the
+   picker — six or seven short rows — sits comfortably beside it. The scroll goes away rather
+   than being made reachable, which is the better fix: a list that fits needs no mechanism.
+
+   THE PREVIEW COLUMN IS THE WIDER OF THE TWO because it is a scale model of a 16:9 screen and the
+   picker is a column of short labels; giving them equal halves would squeeze the model and waste
+   the labels' half. `minmax(0, …)` on both tracks so a long row title cannot push a column past
+   its share — grid items default to `min-width: auto`, which is exactly the overflow that would
+   otherwise put the picker off the card's right edge. */
+.tv-shell .auth-card.cfg-wide {
+  width: min(1180px, 94vw);
+  /* A LAST RESORT, NOT THE PLAN. At 1080p everything fits and this never engages. At 720p seven
+     rows plus the sheet's own chrome genuinely exceed the screen — measured, the card ran 21px
+     off the top — and of the two ways to lose, a card that scrolls beats a card whose title and
+     close button are above the viewport. The right column's rows are focus stops, so moving the
+     remote down them scrolls the card back into range; the left column still cannot be reached
+     that way, which is why this is the fallback and the tightening below is the actual fix. */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+.tv-shell .cfg-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 26px;
+  align-items: start;
+}
+
+/* ---- A 720p PANEL HAS ~360 FEWER PIXELS OF HEIGHT, AND THE CHROME IS WHERE THEY COME FROM ----
+   Shrinking the rows alone cannot pay for it: at seven rows the clamp bottoms out at 44px and the
+   sheet still overflowed, because the fixed costs — the card's 38/28 padding, the title block, the
+   preview frame's own margins — do not scale with the panel and add up to ~250px whatever the
+   screen is. Taking a third of that back is what lets the rows stay legible instead of being
+   ground down to pay for padding that nobody is looking at.
+
+   Keyed on HEIGHT, not width: this is a vertical-budget problem, and a 1280x1024 monitor has the
+   room while a 1920x720 panel does not. */
+/* ============================================================================
+   Stage 13: MY SPACE, SETTINGS AND SEARCH.
+
+   Three pages that shipped with no TV rules at all, and two of them were not merely small — they
+   were inoperable. Measured on the running build:
+
+     SETTINGS   4 controls reachable by remote, 18 not: nine `<select>`, three switches, six
+                colour sliders. Every dropdown and every toggle on the page was decoration.
+     SEARCH     the search field itself unreachable — a search page a remote cannot type into.
+     MY SPACE   reachable, but My List was a poster grid, which is a pointer layout (see the
+                note in Library.tsx); it renders as a home row now.
+
+   The component fixes are in TvSelect.tsx, Settings.tsx's Toggle, ColorPicker.tsx and
+   Explore.tsx. What is left here is making the results readable from a sofa and giving the newly
+   focusable things a focus state, using the vocabulary the rest of this file already established:
+   a solid white fill with #0b0b0b ink means "the remote is here".
+   ============================================================================ */
+
+/* ---- THE CHIP MENU, OUTSIDE THE TITLE SCREEN ------------------------------------------------
+   `TvChipMenu`'s own rules are unscoped and work anywhere, with two exceptions: its focus
+   treatment and its option focus are written as `.tv-det .tv-chipmenu …` because they exist to
+   outrank the blanket ring at the foot of this file, and that ring is `.tv-shell …` (0,3,0). Used
+   on Settings the chip would have inherited the blanket ring instead of its own fill — a grey
+   outline around a pill that is supposed to go white. Restated at the same specificity for this
+   shell; the values are copied deliberately so the two contexts cannot drift into different
+   controls. */
+.tv-shell .tv-chipmenu .tv-chipmenu-btn:focus-visible {
+  outline: none;
+  border-radius: 999px;
+  transform: scale(1.04);
+  background: #fff;
+  border-color: #fff;
+  color: #0b0b0b;
+}
+.tv-shell .tv-chipmenu .tv-chipmenu-opt:focus {
+  outline: none;
+  border-radius: 10px;
+  color: #0b0b0b;
+}
+
+/* ---- MY SPACE -------------------------------------------------------------------------------
+   The hub tiles are the page. They were 4 small cards in a 760px column on a 1920px screen with
+   13px descriptions; at viewing distance the icon was doing all the work. */
+.tv-shell #myspace .section-sub { max-width: none; font-size: clamp(15px, 1.8vh, 20px); }
+/* TWO COLUMNS, PINNED. app.css lays these out `auto-fit, minmax(280px, 1fr)`, which at TV width
+   fits all four across — and four narrow columns is worse than two wide ones here, because the
+   tile is mostly its description and 280px broke "Install and manage streaming sources" into four
+   lines while leaving the row half empty. Two columns is also the shape the page already had on a
+   desktop, so the TV is not a third layout to reason about. */
+.tv-shell #myspace .ms-grid {
+  max-width: min(1180px, 92vw);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.tv-shell #myspace .ms-tile {
+  padding: clamp(16px, 2vh, 26px) clamp(18px, 1.6vw, 26px);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .045);
+  border-color: rgba(255, 255, 255, .10);
+}
+.tv-shell #myspace .ms-tile-title { font-size: clamp(17px, 2.1vh, 23px); }
+.tv-shell #myspace .ms-tile-desc { font-size: clamp(13px, 1.6vh, 17px); }
+.tv-shell #myspace .ms-tile-ic { width: clamp(44px, 5vh, 58px); height: clamp(44px, 5vh, 58px); border-radius: 12px; }
+/* The tiles and the account actions answer focus the way every other TV surface does. */
+.tv-shell #myspace .ms-tile:focus-visible,
+.tv-shell #myspace .set-action:focus-visible {
+  outline: none;
+  background: #fff;
+  border-color: #fff;
+  color: #0b0b0b;
+}
+.tv-shell #myspace .ms-tile:focus-visible :is(.ms-tile-title, .ms-tile-desc, .ms-tile-arrow) { color: #0b0b0b; }
+.tv-shell #myspace .ms-tile:focus-visible .ms-tile-ic { background: rgba(0, 0, 0, .08); color: #0b0b0b; }
+/* Danger keeps its identity when filled, exactly as REMOVE does on the add-ons page. */
+.tv-shell #myspace .set-action-danger:focus-visible { background: var(--danger); border-color: var(--danger); color: #fff; }
+.tv-shell #myspace .set-action { font-size: clamp(14px, 1.7vh, 18px); padding: clamp(10px, 1.4vh, 15px) clamp(16px, 1.5vw, 24px); }
+/* The row draws its own heading (TvSpotlight's `.tv-spot-rowtitle`), so the rail label above it
+   would be the same words twice. */
+.tv-shell #myspace .ms-list-label { display: none; }
+
+/* ---- SETTINGS -------------------------------------------------------------------------------
+   Three columns of small cards is a desktop layout reading a dense page at arm's length. On a TV
+   the cards get room and the rows get height, because every row is now a focus stop. */
+.tv-shell #settings .section-sub { max-width: none; font-size: clamp(15px, 1.8vh, 20px); }
+.tv-shell #settings .set-card { border-radius: 14px; }
+.tv-shell #settings .set-card-title { font-size: clamp(15px, 1.8vh, 19px); }
+.tv-shell #settings .set-card-desc { font-size: clamp(12px, 1.5vh, 16px); }
+/* THE ROW WRAPS. A settings card is a narrow column (~380px in a three-up grid) holding a label
+   and a control, and the TV build makes both bigger — so a row like "Subtitles outline color",
+   whose control is now six swatches AND a width chip, cannot fit on one line at any sane size.
+   Measured before this: the control group laid out 414px wide inside a 336px row and simply hung
+   over the card, where `.set-card{overflow:hidden}` cut the last two swatches off — focusable
+   colours that could not be seen.
+   Wrapping puts the control under its label instead of squeezing it, which is the right answer on
+   a screen with vertical room to spare, and it is what makes the `min-width: 0` releases below
+   able to do their job rather than shrinking a group that had already overflowed. */
+.tv-shell #settings .setting-row { padding: clamp(11px, 1.5vh, 17px) 0; gap: 10px 14px; flex-wrap: wrap; }
+.tv-shell #settings .setting-row > label { flex: 1 1 100%; }
+.tv-shell #settings .setting-row > label { font-size: clamp(14px, 1.7vh, 18px); }
+
+/* THE SWITCH IS THE FOCUS STOP NOW (see Settings.tsx), so it needs to look like one. It is a
+   track, not a box, so the ring is the right indicator here rather than a fill — a filled track
+   would read as the switch being ON. */
+.tv-shell #settings .sw { border-radius: 999px; }
+.tv-shell #settings .sw:focus-visible {
+  outline: 3px solid var(--tv-ring);
+  outline-offset: 4px;
+  border-radius: 999px;
+}
+/* Sized up: the track is the whole control at this distance. */
+.tv-shell #settings .sw .sw-track { transform: scale(1.15); transform-origin: left center; }
+
+/* The colour swatches the TV build shows instead of the HSV panel (see ColorPicker.tsx). Real
+   buttons, so the only thing needed here is a size worth aiming at and a state worth reading:
+   `.on` is the colour currently set, the ring is where the remote is. */
+/* `min-width: 0` IS WHAT MAKES `flex-wrap` DO ANYTHING HERE. This sits inside `.setting-row`,
+   which is itself a flex row, and a flex item defaults to `min-width: auto` — it refuses to
+   shrink below its content. So the wrap container was never narrower than its six chips laid in a
+   line, `wrap` had nothing to wrap at, and the last swatch ran 65px past the card, where
+   `.set-card{overflow:hidden}` cut it off: a colour the remote could focus and nobody could see.
+   The same trap the `minmax(0, …)` tracks on the configure sheet avoid. */
+.tv-shell .set-color.is-tv {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tv-shell .set-color-chip {
+  width: clamp(38px, 4.4vh, 50px);
+  height: clamp(28px, 3.2vh, 38px);
+  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, .28);
+  padding: 0;
+  cursor: pointer;
+}
+/* AND THE LAYER ABOVE IT NEEDS THE SAME. The outline row nests the swatches inside `.ctl-group`
+   alongside the width chip, so there are TWO flex ancestors between the wrap container and its
+   space — fixing only the inner one left this row's last two swatches still clipped, which is
+   how the same bug survived its own fix once. Any flex ancestor that must let a wrapping child
+   shrink needs the release, not just the nearest. */
+/* `flex: 1 1 100%` AND NOT JUST `min-width: 0` — app.css gives `.ctl-group` `flex: 0 0 auto`,
+   which forbids shrinking outright, so a min-width release on its own was inert and the group
+   went on laying out 414px wide inside a 336px row. Now the label owns one line and the control
+   group owns the next, which is the only arrangement that fits six swatches and a width chip in
+   a column this narrow. */
+.tv-shell #settings .ctl-group { flex: 1 1 100%; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
+.tv-shell .set-color-chip.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .35); }
+.tv-shell .set-color-chip:focus-visible {
+  outline: 3px solid var(--tv-ring);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+/* ---- SEARCH ---------------------------------------------------------------------------------
+   The field is a focus stop on this page only (see Explore.tsx), which makes a visible focus
+   state load-bearing: `.search input` is borderless by design, so with the remote inside it
+   nothing on screen said so. */
+.tv-shell #explore .search { max-width: min(1100px, 92vw); }
+.tv-shell #explore .search input {
+  font-size: clamp(16px, 2vh, 22px);
+  scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px 0;
+}
+.tv-shell #explore .search input:focus-visible {
+  outline: 3px solid var(--tv-ring);
+  outline-offset: 6px;
+  border-radius: 8px;
+}
+.tv-shell #explore .pill-btn { font-size: clamp(13px, 1.6vh, 17px); padding: clamp(8px, 1.1vh, 12px) clamp(14px, 1.3vw, 20px); }
+.tv-shell #explore .pill-btn:focus-visible { outline: none; background: #fff; border-color: #fff; color: #0b0b0b; }
+
+/* THE SLIDER ROW IS THE FOCUS STOP, NOT THE SLIDER (see Explore.tsx). The ring goes on the row so
+   it reads as "Left and Right change this", and the range inside keeps its own appearance. */
+.tv-shell #explore .fp-slider { border-radius: 10px; padding: 6px 10px; }
+.tv-shell #explore .fp-slider:focus-visible {
+  outline: 3px solid var(--tv-ring);
+  outline-offset: 2px;
+  background: rgba(255, 255, 255, .08);
+}
+.tv-shell #explore .fp-out { font-size: clamp(13px, 1.6vh, 17px); }
+
+@media (max-height: 820px) {
+  .tv-shell .auth-card.cfg-wide { padding: 24px 26px 20px; }
+  .tv-shell .cfg-wide .auth-kicker { margin-bottom: 4px; }
+  .tv-shell .cfg-wide .cfg-preview { margin: 10px 0 4px; }
+  .tv-shell .cfg-wide .cfg-preview-bar { padding: 5px 12px; }
+  .tv-shell .cfg-wide .cfg-preview-screen.is-tv { padding: 10px 12px 6px; }
+  .tv-shell .cfg-wide .cfg-tvrow { margin-bottom: 9px; }
+  .tv-shell .cfg-wide .cfg-tvrow-title { margin-bottom: 4px; }
+  .tv-shell .cfg-wide .optrow { padding: 8px 12px; }
+  .tv-shell .cfg-wide .optrow-list { gap: 6px; }
+}
+
+/* ---- THE OFFICIAL ADD-ON SHEETS (Configure / Preview) --------------------------------------
+   Two fixes that are really one: the sheet has to SHOW what a television will get, and it has to
+   let a remote CHANGE it. Neither was true — the preview drew the website's poster rails, and of
+   everything in the modal only the ✕ and DONE could be focused, so the six row toggles it exists
+   for could not be reached at all.
+
+   THE BROWSER CHROME GOES ON TV. `.cfg-preview-bar` draws three traffic-light dots — a window
+   metaphor for a device that has no windows, sitting directly above a preview whose whole job is
+   to say "this is your television". The label stays, because it is the caption; the dots do not. */
+.tv-shell .cfg-preview-bar .pvdot { display: none; }
+.tv-shell .cfg-preview-bar .pv-label { margin-left: 0; }
+
+/* The preview screen is taller here than the web's 226px: one TV row is a billboard plus a strip
+   rather than a band of posters, so at the same height barely one row would fit and the sheet
+   would imply the add-on adds one thing. */
+/* NO MAX-HEIGHT AND NO SCROLL. The web preview caps itself at 226px and scrolls, which is right
+   for a pointer and wrong here for the reason the two-column note gives: nothing inside this box
+   can take focus, so a remote has no way to reach what the cap hides. Every selected row renders,
+   and the row height below is what keeps them all on screen. */
+.tv-shell .cfg-preview-screen.is-tv {
+  max-height: none;
+  overflow: visible;
+  padding: 16px 16px 10px;
+}
+
+/* ---- THE STUDIOS RAIL --------------------------------------------------------------------
+   The one preview that is NOT redrawn for TV, because StudioRow renders identically on both (see
+   PreviewModal) — but it still has to fit the sheet. At 106px a card, the old 420px column showed
+   two and a half logos and left the rest behind a horizontal scrollbar, which is exactly the
+   affordance a remote cannot use. Wider cards in a wider sheet put the whole point of the add-on
+   — that these are recognisable studio marks — on screen at once.
+
+   The scrollbar is hidden rather than restyled: with the sheet this wide the rail no longer needs
+   to scroll, and leaving a scrollbar under a row nothing can scroll is an invitation to try. */
+.tv-shell .cfg-studio-row { overflow-x: hidden; padding-bottom: 0; scrollbar-width: none; }
+.tv-shell .cfg-studio-row::-webkit-scrollbar { display: none; }
+.tv-shell .cfg-studio-card { width: 152px; height: 90px; border-radius: 10px; }
+.tv-shell .cfg-studio-card img { max-width: 118px; max-height: 54px; }
+
+/* ---- ONE ROW, AS TvSpotlight DRAWS IT -------------------------------------------------------
+   `--cfgspot-h` is this preview's answer to tv.css's own `--spot-h`, and the two derived widths
+   are the SAME arithmetic the real row uses: 16/9 of the height for the billboard, 0.6 of it for
+   a poster. Written as a variable for the reason the real one is — change the height and the row
+   keeps its proportions instead of needing three numbers re-tuned by hand. */
+/* ---- THE ROW HEIGHT IS WHAT DECIDES WHETHER THEY ALL FIT ------------------------------------
+   One variable drives it — billboard and poster are both derived from this height, exactly as the
+   real row derives both from `--spot-h` — so fitting the sheet is one number rather than three
+   re-tuned by hand.
+
+   SIZED AGAINST THE WORST CASE, which is Streaming Services at SEVEN rows (Catalog Rows has six).
+   A row costs its title, its height, and its bottom margin. At 1080p `5.6vh` is ~60px, so a row
+   is ~60 + 23 + 14 = 97px and seven of them are ~680px — which is what is left of a 1080p screen
+   once the overlay's padding, the card's own padding, the sheet's title block and the preview
+   frame are taken out. `vh` rather than a fixed px for the same reason: on a 720p panel the same
+   arithmetic yields ~40px rows and seven still fit, where a fixed 104px would have overflowed a
+   card that cannot scroll.
+
+   The floor matters as much as the ceiling. Below ~44px the wordmark on the billboard stops being
+   legible and the preview stops answering the question it exists for, so the clamp bottoms out
+   there and a hypothetical eight-row block would overflow rather than degrade into mush — a
+   visible failure being much easier to notice than an illegible one. */
+.tv-shell .cfg-tvrow { --cfgspot-h: clamp(44px, 5.6vh, 84px); margin-bottom: 14px; }
+.tv-shell .cfg-tvrow-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; letter-spacing: .13em; font-weight: 500;
+  color: var(--text); margin-bottom: 7px;
+}
+/* The accent tick the web preview's row label carries, kept so the two previews are recognisably
+   the same component at different scales. */
+.tv-shell .cfg-tvrow-title::before {
+  content: ""; width: 3px; height: 11px; border-radius: 2px;
+  background: var(--accent); flex: 0 0 auto;
+}
+.tv-shell .cfg-tvrow-stage { display: flex; gap: 6px; overflow: hidden; }
+
+/* THE BILLBOARD. `background-size: cover` rather than an <img>, matching `.tv-spot-art`, so a
+   backdrop whose aspect is not exactly 16:9 crops instead of letterboxing. */
+.tv-shell .cfg-tvrow-hero {
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(var(--cfgspot-h) * 16 / 9);
+  height: var(--cfgspot-h);
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(155deg, hsl(0 0% 14%), hsl(0 0% 6%));
+  background-size: cover;
+  background-position: center;
+}
+/* The title plate — the same bottom-up scrim as `.tv-spot-card-in`, at a scale where it is a
+   gradient rather than a panel. */
+.tv-shell .cfg-tvrow-plate {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 4px 6px;
+  text-align: left;
+  background: linear-gradient(0deg, rgba(0,0,0,.85) 0%, rgba(0,0,0,.25) 62%, transparent 100%);
+}
+/* THE PLATE'S TYPE IS DERIVED FROM THE BILLBOARD, not fixed. These were absolute pixels tuned
+   against a 104px row; the moment the height became a clamp that resolves anywhere from 44 to
+   84px, a fixed 13px wordmark would have overflowed the plate at the small end and looked lost
+   at the large one. Ratios taken from the tuned values, with a floor so nothing collapses into
+   an unreadable smear on a 720p panel. */
+.tv-shell .cfg-tvrow-tag {
+  display: block;
+  font-size: clamp(5px, calc(var(--cfgspot-h) * .085), 9px);
+  font-weight: 800; letter-spacing: .18em;
+  text-transform: uppercase; color: rgba(255,255,255,.82);
+  margin-bottom: 1px;
+}
+.tv-shell .cfg-tvrow-logo {
+  display: block; max-width: 62%;
+  max-height: calc(var(--cfgspot-h) * .3);
+  object-fit: contain;
+}
+/* The wordmark's fallback. Clamped to one line: a long title wrapping to three lines inside the
+   billboard would bury the picture it is captioning. */
+.tv-shell .cfg-tvrow-name {
+  display: block;
+  font-size: clamp(8px, calc(var(--cfgspot-h) * .13), 15px);
+  font-weight: 800; color: #fff; line-height: 1.15;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* THE STRIP. Portrait tiles at the billboard's own height, which is what makes the two read as
+   one row rather than as a picture next to some thumbnails. */
+.tv-shell .cfg-tvrow-strip { display: flex; gap: 5px; overflow: hidden; }
+.tv-shell .cfg-tvrow-tile {
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(var(--cfgspot-h) * 0.6);
+  height: var(--cfgspot-h);
+  border-radius: 4px;
+  overflow: hidden;
+  background: linear-gradient(155deg, hsl(0 0% 13%), hsl(0 0% 6%));
+}
+.tv-shell .cfg-tvrow-tile img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+
+/* ---- THE ROW TOGGLES, NOW THAT A REMOTE CAN LAND ON THEM -----------------------------------
+   The label is the focus stop (see ConfigModal), so it needs to look like one — and it needs to
+   be worth aiming at: on the web this is a 16px checkbox with a word beside it, which is a mouse
+   target. The row gets height, a resting plate, and the build's own "solid fill means focused"
+   answer. */
+.tv-shell .optrow {
+  padding: clamp(9px, 1.3vh, 14px) 14px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .045);
+  font-size: clamp(14px, 1.7vh, 18px);
+}
+.tv-shell .optrow:focus-visible {
+  outline: none;
+  background: #fff;
+  color: #0b0b0b;
+}
+/* The tick has to survive the inversion: it is `accent-color`-driven, and the accent is very
+   nearly white by default, so a checked box on a white row would read as an empty one — which is
+   the single piece of state this control exists to report. */
+.tv-shell .optrow:focus-visible input[type="checkbox"] { accent-color: #0b0b0b; }
+.tv-shell .optrow input[type="checkbox"] { width: 19px; height: 19px; flex: 0 0 auto; }

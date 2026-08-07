@@ -366,7 +366,7 @@ export default function VideoPlayer() {
     const ctrl = new AbortController();
     let alive = true;
     setPlaySrc(null); setLoading(true); setErrKind(null); setSilent(false); setDemuxBlocker(null);
-    resolvePlayback(source.url, source.kind, ctrl.signal)
+    resolvePlayback(source.url, source.kind, ctrl.signal, source.notWebReady)
       .then((r) => { if (alive) setPlaySrc(r); })
       .catch(() => { if (alive) setPlaySrc({ url: source.url, kind: source.kind || 'url', via: false }); });
     return () => { alive = false; ctrl.abort(); };

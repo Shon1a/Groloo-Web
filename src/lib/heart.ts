@@ -744,18 +744,29 @@ export function coreConstants(): CoreConstants | null {
   return constants;
 }
 
-/* U1 — the one unplanned divergence the differential harness found, recorded here
- * because this is the file that decides what the shell is allowed to call.
+/* U1 — CLOSED, and closed twice over: the core settled it and the shell now has the caller
+ * whose absence was the reason to defer it. Recorded here because this is the file that
+ * decides what the shell is allowed to call.
  *
- * `reconcile_install_state` decides remote-presence as `remote != null`, where the old
- * core decided it as `!map.is_empty()`. A newer remote carrying an EMPTY install map is
- * therefore ADOPTED by the new core and IGNORED by the old one.
+ * THE DIVERGENCE WAS: `reconcile_install_state` decided remote-presence as `remote != null`,
+ * where 0.1.0 decided it as `!map.is_empty()` — so a newer remote carrying an EMPTY install
+ * map was adopted by one and ignored by the other. It was left open on the grounds that the
+ * function had no caller: install state was `groloo.homeconfig` in localStorage, device-local
+ * and never synced, and `/api/addon-state` had zero clients.
  *
- * DECISION: it changes nothing, because the function has no caller and is not given
- * one in this phase. Install state is `groloo.homeconfig` in localStorage — device
- * local, never synced — and `/api/addon-state` has zero clients (`grep -r addon-state
- * src/` is empty). The divergence becomes reachable the day someone wires install-state
- * sync, and that day it needs deciding on its merits: "the server explicitly says you
- * have nothing installed" and "the server has never heard of you" are genuinely
- * different states and the new reading is arguably the correct one. It is not this
- * phase's call to make. The export above is intentionally listed but never invoked. */
+ * BOTH HALVES OF THAT HAVE CHANGED.
+ *
+ *   THE CORE PICKED 0.1.0's READING, and the vendored build has it — api.rs tests presence as
+ *   `!r.map.is_empty()`, with `reconcile_uploads_when_the_remote_map_is_empty` pinning it.
+ *   The two candidate states are genuinely different ("the server says you have nothing" vs
+ *   "the server has never heard of you"), but the two ERRORS are not symmetrical: adopting an
+ *   empty remote erases the device's configuration AND moves the clock past it, which no later
+ *   sync can undo, while ignoring one costs a redundant PUT. A first sync, an unwritten row and
+ *   a failed migration all read as empty, so the recoverable error is the one to prefer.
+ *
+ *   THE SHELL WIRED THE CALLER. stores/homeConfig.ts reconciles the official add-on toggles
+ *   through this export on sign-in, so `/api/addon-state` is no longer clientless and
+ *   `groloo.homeconfig` is no longer device-local — it is namespaced per account and synced.
+ *
+ * Anyone re-pinning the core must re-check that test rather than assume: this is now a rule
+ * with a live caller and a user-visible failure mode, not a dormant one. */
