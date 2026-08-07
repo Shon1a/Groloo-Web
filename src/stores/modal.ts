@@ -14,6 +14,14 @@ export interface ModalTarget {
   genre?: string;
   poster?: string;
   seed?: number;
+  /** IMDb id, when the card that was clicked already carried one (`MediaItem.imdb` — the
+   *  backend attaches it to every catalog card it lets through). Carried here PURELY so the
+   *  add-on stream fan-out can start on the click instead of after /api/meta returns: it is
+   *  the only field of the detail payload that request exists to supply which the row
+   *  already knows. `meta.imdb` still wins once it lands — see the fan-out effect in
+   *  DetailModal. Absent on a deep link and on Continue Watching, both of which fall back
+   *  to the old behaviour rather than getting it wrong. */
+  imdb?: string;
   /** when reopened from Continue Watching for a series, the episode to resume */
   resumeEp?: { season: number; episode: number };
 }
@@ -40,6 +48,7 @@ export function openItem(item: MediaItem, seed = 0): ModalTarget {
     rating: item.rating,
     genre: item.genre,
     poster: item.poster,
+    imdb: typeof item.imdb === 'string' ? item.imdb : undefined,
     seed,
   };
 }

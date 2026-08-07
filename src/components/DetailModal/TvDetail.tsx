@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
 import { imgW } from '../../lib/img';
-import { langName, type AddonStream } from '../../lib/addonClient';
+import { langName, sourceNote, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
 import { registerBackHandler } from '../../lib/tvKeys';
 import TvChipMenu from './TvChipMenu';
@@ -595,19 +595,27 @@ export default function TvDetail(p: TvDetailProps) {
             <span>{t('modal.signin_addon')}</span>
             <button type="button" className="tv-det-pill tv-det-signin" onClick={() => openAuth()}>{t('auth.signin')}</button>
           </div>
-        ) : streamsLoading ? (
-          <div className="tv-det-note">{t('modal.loading_synopsis')}</div>
         ) : shownStreams.length ? (
-          shownStreams.map((s, i) => (
+          /* Rows outrank the still-loading note — see the same reordering in DetailModal.
+           * It is worth more here than on the web: the panel beside the synopsis IS the
+           * screen a TV viewer came for, and a remote has nothing to do while it says
+           * "loading". The note follows the rows so the focus ring lands on something
+           * pressable the moment the first add-on answers. */
+          <>
+          {shownStreams.map((s, i) => (
             <button className="tv-det-row" type="button" key={i} aria-label={streamTitle} onClick={() => playStream(s)}>
               <span className={`quality-badge ${qualClass(s.quality)}`}>{s.quality || 'SD'}</span>
               <span className="tv-det-rowtitle">
                 {s.label || streamTitle}
-                <span className="tv-det-rowsub">{[s.size, s.source].filter(Boolean).join(' · ')}</span>
+                <span className="tv-det-rowsub">{[s.size, s.source, sourceNote(s) && t(`modal.source_${sourceNote(s)}`)].filter(Boolean).join(' · ')}</span>
               </span>
               <span className="tv-det-chev" aria-hidden="true">›</span>
             </button>
-          ))
+          ))}
+          {streamsLoading && <div className="tv-det-note" role="status">{t('modal.more_sources')}</div>}
+          </>
+        ) : streamsLoading ? (
+          <div className="tv-det-note" role="status">{t('modal.searching_sources')}</div>
         ) : <div className="tv-det-note">{t('modal.no_streams')}</div>}
       </div>
       </div>

@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
+import { collectAddonMeta } from './addonClient';
 import type { HomePayload, MediaItem, MetaDetail, SeasonEpisodes } from './types';
 import { useLang } from '../i18n/i18n';
 import { usePlayer } from '../stores/player';
@@ -63,6 +64,72 @@ export function useMeta(id: string | number | undefined, type?: MediaItem['type'
     ...metaQuery(id, type, lang),
     enabled: id != null && id !== '',
     refetchOnWindowFocus: refetchFocusUnlessPlaying,
+  });
+}
+
+/* ---- THE DETAIL OF A TITLE OUR OWN API CANNOT DESCRIBE --------------------------------------
+ *
+ * `/api/meta/:id` resolves a numeric TMDB id and a `tt…` IMDb id. An add-on catalog card
+ * carries whatever id the add-on publishes — `kitsu:44081`, `mal:1535`, anything — and for
+ * those the endpoint 404s, which is why such a card opened to an empty modal and, because the
+ * stream fan-out was keyed on `meta.imdb`, to no sources at all. `collectAddonMeta` asks the
+ * add-ons instead, which is what Stremio does and the only thing that CAN answer.
+ *
+ * TWO CONDITIONS, and the second matters as much as the first:
+ *
+ *   · the id is not one of ours — ask the add-ons FIRST, in parallel with nothing, because
+ *     /api/meta is a certain 404 and waiting for it would put a full round trip in front of
+ *     every add-on title;
+ *   · the id IS one of ours and /api/meta failed anyway — a title TMDB has never heard of, or
+ *     an outage. Falling back is free and is the difference between a dead modal and a
+ *     working one.
+ *
+ * NOT cached for as long as /api/meta: these are third-party responses of unknown freshness
+ * and an episode list is the part most likely to have grown since. Ten minutes is long enough
+ * that walking in and out of a title costs nothing. */
+export const isOurId = (id: string | number | undefined): boolean =>
+  id != null && /^(\d+|tt\d+)$/.test(String(id));
+
+export function useAddonMeta(
+  id: string | number | undefined,
+  type: MediaItem['type'],
+  apiFailed: boolean,
+) {
+  const wire: 'movie' | 'series' = type === 'tv' || type === 'series' ? 'series' : 'movie';
+  const enabled = id != null && id !== '' && (!isOurId(id) || apiFailed);
+  return useQuery({
+    queryKey: ['addon-meta', String(id), wire],
+    queryFn: async (): Promise<MetaDetail | null> => {
+      const m = await collectAddonMeta(String(id), wire);
+      if (!m) return null;
+      /* Mapped to `MetaDetail` HERE rather than at the call site so the modal never has to
+       * know which of the two sources answered. The two extra fields are the ones that carry
+       * the add-on's own vocabulary: `addonVideoId` is the handle to ask for streams under
+       * when there is no IMDb id, and `addonEpisodes` is the episode list with each entry's
+       * OWN id — the thing /api/tv cannot supply because it does not know this title. */
+      return {
+        id: m.id,
+        title: m.title,
+        titleLogo: m.titleLogo,
+        poster: m.poster,
+        backdrop: m.backdrop,
+        plot: m.plot,
+        year: m.year,
+        rating: m.rating,
+        runtime: m.runtime,
+        genre: m.genre,
+        cast: m.cast,
+        director: m.director,
+        imdb: m.imdb,
+        seasons: m.seasonList?.length,
+        seasonList: m.seasonList,
+        addonVideoId: m.imdb ? undefined : m.id,
+        addonEpisodes: m.episodes,
+      };
+    },
+    enabled,
+    staleTime: 10 * 60 * 1000,
+    retry: false,
   });
 }
 

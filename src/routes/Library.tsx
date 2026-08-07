@@ -5,6 +5,7 @@ import { useLibrary } from '../stores/library';
 import { useAuth } from '../stores/auth';
 import { useModal, openItem } from '../stores/modal';
 import Poster from '../components/Poster';
+import Row from '../components/Row';
 import type { MediaItem } from '../lib/types';
 
 /* My Space — the account hub: quick-nav tiles (My List / New & Popular / Add-ons /
@@ -116,8 +117,27 @@ export default function Library() {
         </div>
       </div>
 
-      <h4 className="m-rail-label" ref={listRef} style={{ padding: '0 var(--page-pad)', marginTop: 28 }}>{t('myspace.my_list')}</h4>
-      {mylist.length ? (
+      {/* ---- MY LIST IS A HOME ROW ON A TELEVISION, NOT A GRID -------------------------------
+        * A wall of posters is a pointer layout: it assumes an eye that can jump to any tile and a
+        * cursor that can reach it in one move. On a remote it is the worst shape there is —
+        * reaching the eleventh title is ten presses through a shape that gives no reason to stop
+        * anywhere, and the grid says nothing about any title beyond its poster.
+        *
+        * `Row` is the same component every home rail uses, and on TV it returns `TvSpotlight`: a
+        * billboard for the title you are on, its wordmark and synopsis, and the rest of the list
+        * as a strip beside it. So My List becomes the thing the home screen already taught the
+        * viewer to operate, rather than a second browsing model that exists on one page.
+        *
+        * NO `cat`, DELIBERATELY. `TvSpotlight` spends a category on an end card that opens the
+        * full browse grid, and My List has no such page — it IS the whole list. Passing an empty
+        * one leaves `canSeeAll` false and the strip simply ends, which is correct here.
+        *
+        * The heading stays for the web build's rail label and is hidden on TV, where the row
+        * draws its own title. */}
+      <h4 className="m-rail-label ms-list-label" ref={listRef} style={{ padding: '0 var(--page-pad)', marginTop: 28 }}>{t('myspace.my_list')}</h4>
+      {mylist.length ? (IS_TV ? (
+        <Row cat="" title={t('myspace.my_list')} items={mylist as MediaItem[]} onSelect={onSelect} />
+      ) : (
         <div className="grid" id="catGrid">
           {mylist.map((m, i) => (
             <div className="gcard" key={`${m.id}-${i}`}>
@@ -129,7 +149,7 @@ export default function Library() {
             </div>
           ))}
         </div>
-      ) : (
+      )) : (
         <p style={{ color: 'var(--text-muted)', fontSize: 17, padding: '10px var(--page-pad) 30px' }}>{t('mylist.empty')}</p>
       )}
     </section>

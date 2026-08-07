@@ -186,6 +186,40 @@ export async function hlsFor(mediaURL: string, maxAudioChannels = 2): Promise<st
   return `${serverBase()}/hlsv2/${sessionId()}/master.m3u8?${hlsQuery(mediaURL, maxAudioChannels)}`;
 }
 
+/* ── TORRENTS ────────────────────────────────────────────────────────────────────────
+ *
+ * The streaming server does more than transcode: it is a torrent client with an HTTP face,
+ * and `GET /<infoHash>/<fileIdx>` is a plain progressive-download URL for one file inside
+ * one torrent. That single endpoint is the whole of what an `infoHash` stream needs, and
+ * it is why every torrent add-on works in Stremio and listed nothing here.
+ *
+ * THE URL SHAPE IS STREMIO'S, not invented: `stremio-core`'s deep-link builder joins the
+ * hex hash and the file index as two path segments and appends one `tr` query parameter per
+ * entry of the stream's `sources` array, verbatim — including the `tracker:` / `dht:`
+ * prefixes, which the server parses itself. `-1` for an absent `fileIdx` is also its
+ * convention and means "pick the largest video in the torrent".
+ *
+ * THE POSTURE IS UNCHANGED, and that is the reason this is acceptable where a server-side
+ * fetch would not be. The peer traffic, the disk and the seeding all happen on the machine
+ * that is already watching, through a server the viewer installed and runs; groloo hands
+ * over a URL and never touches a byte. That is the same line `hlsFor` above already draws
+ * and the same one the module header argues from. */
+
+/** Play URL for a torrent source, or null when no streaming server is reachable.
+ *
+ *  `<video>` is not subject to CORS, so this plays even against a server that sends no
+ *  cross-origin headers — which is why it works against Stremio's own :11470 and does not
+ *  depend on the helper. The helper still matters for everything that must be READ rather
+ *  than played (probing, demuxing, subtitle sync), which is why it proxies these paths too. */
+export function torrentUrl(t: { infoHash?: string; fileIdx?: number; announce?: string[] }): string | null {
+  if (!streamingServerReady() || !t.infoHash) return null;
+  const idx = typeof t.fileIdx === 'number' ? t.fileIdx : -1;
+  const q = new URLSearchParams();
+  for (const a of t.announce ?? []) q.append('tr', a);
+  const tail = q.toString();
+  return `${serverBase()}/${encodeURIComponent(t.infoHash.toLowerCase())}/${idx}${tail ? `?${tail}` : ''}`;
+}
+
 /** Decide how to play `url`. Returns the URL to actually load and whether it is HLS.
  *
  *  Falls back to the original URL on every failure path — no server, probe refused,
@@ -194,12 +228,18 @@ export async function resolvePlayback(
   url: string,
   kind: 'hls' | 'url' | undefined,
   signal?: AbortSignal,
+  /** `behaviorHints.notWebReady` — the add-on stating outright that a browser cannot play
+   *  this. Routed through the server without consulting the probe, because the probe answers
+   *  what the CONTAINER holds and this is a claim about something else (a codec profile the
+   *  panel refuses, a server that needs the referer, an MKV Chrome will not open at all).
+   *  Stremio treats the flag the same way: it is the add-on's word, not a hint to weigh. */
+  forceServer = false,
 ): Promise<{ url: string; kind: 'hls' | 'url'; via: boolean }> {
   const direct = { url, kind: (kind || 'url') as 'hls' | 'url', via: false };
   if (kind === 'hls') return direct;                       // already switchable
   if (!(await hasStreamingServer())) return direct;
   const probe = await probeMedia(url, signal);
-  if (!probe || !needsServer(probe)) return direct;
+  if (!forceServer && (!probe || !needsServer(probe))) return direct;
   const hls = await hlsFor(url);
   return hls ? { url: hls, kind: 'hls', via: true } : direct;
 }
