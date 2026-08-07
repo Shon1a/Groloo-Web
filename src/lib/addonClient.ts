@@ -1,4 +1,5 @@
 import { loadCore, callData } from './heart';
+import { streamingServerReady } from './streamingServer';
 import { useAddons, type AddonRecord } from '../stores/addons';
 import { useBlocks, addonKey } from '../stores/blocks';
 import type { MediaItem } from './types';
