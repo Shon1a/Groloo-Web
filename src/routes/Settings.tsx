@@ -5,9 +5,11 @@ import { useSettings, type Settings as S } from '../stores/settings';
 import { useAuth } from '../stores/auth';
 import { useAddons } from '../stores/addons';
 import { useBlocks } from '../stores/blocks';
+import { useHomeConfig } from '../stores/homeConfig';
 import { api, errorMessage } from '../lib/api';
 import { coreStatus, coreSummary, coreStatusRevision, subscribeCoreStatus, type CoreSummary } from '../lib/heart';
 import ColorPicker from '../components/ColorPicker';
+import TvSelect from '../components/TvSelect';
 
 /* Settings — faithful port of the vanilla #settings: a 6-card .settings-grid
  * (Interface / Auto-play / Player·Subtitles / Playback preferences / Advanced /
@@ -45,8 +47,46 @@ function Card({ icon, head, desc, children }: { icon: React.ReactNode; head: str
   );
 }
 
+/* THE SWITCH IS THE `<span>`, AND ON A TELEVISION THAT IS WHY IT WAS DEAD. The state lives in a
+ * visually-hidden `<input type=checkbox>` and the thing you see is the track beside it — so the
+ * only focusable part is an element TvSpatialNav's selector does not list, and all three switches
+ * on this page were unreachable by remote along with the nine dropdowns.
+ *
+ * The wrapper takes the focus instead. It is the full control as drawn, `[tabindex]` is already in
+ * the selector, and OK has to be wired by hand because a keypress on a span — unlike a click on a
+ * label — reaches no input. `role`/`aria-checked` come with it: once the span is the control, the
+ * span is what a screen reader has to be told about, and the input it wraps is hidden from the
+ * tree so the state is not announced twice.
+ *
+ * TV ONLY. On the web the checkbox is already a tab stop and already announces itself; adding a
+ * second focusable wrapper in front of it would double every switch in the tab order. */
+const IS_TV_CTL = import.meta.env.MODE === 'tv';
+
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
-  return <span className="sw"><input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} aria-label={label} /><span className="sw-track" /></span>;
+  const tv = IS_TV_CTL
+    ? {
+      tabIndex: 0,
+      role: 'switch' as const,
+      'aria-checked': checked,
+      'aria-label': label,
+      onKeyDown: (e: React.KeyboardEvent<HTMLSpanElement>) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        // Space would scroll the page behind the switch it just flipped.
+        e.preventDefault();
+        onChange(!checked);
+      },
+    }
+    : {};
+  return (
+    <span className="sw" {...tv}>
+      <input
+        type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)}
+        aria-label={label}
+        {...(IS_TV_CTL ? { tabIndex: -1, 'aria-hidden': true } : {})}
+      />
+      <span className="sw-track" />
+    </span>
+  );
 }
 
 /* Tone → the colour of the status dot. app.css owns no rule for this card, so the mapping
@@ -142,6 +182,7 @@ export default function Settings() {
   const openLink = useAuth((s) => s.openLink);
   const clearAddons = useAddons((s) => s.clear);
   const clearBlocks = useBlocks((s) => s.clear);
+  const clearHomeConfig = useHomeConfig((s) => s.clear);
   // Deletion is irreversible and there is no undo on the server, so the destructive
   // button never fires on first press: it swaps itself for an explicit confirm/cancel
   // pair. A typed confirmation would be the stronger gate on desktop, but this screen
@@ -166,6 +207,9 @@ export default function Settings() {
       // Same rule, same reason — see the block store's clear(): what a person chose to
       // hide is their own record and must not survive the account on a shared device.
       clearBlocks();
+      // And the home layout, keyed by the signed-in email too now that it syncs — a deleted
+      // account must not leave its home screen configured for the next person on this device.
+      clearHomeConfig();
       // The server has already destroyed every session for this user, so the logout
       // POST will 401 — it is called anyway because it is the one place that clears the
       // mirrored localStorage token and the in-memory user, and it swallows its own
@@ -198,9 +242,9 @@ export default function Settings() {
         <Card icon={icons.interface} head={t('settings.interface_head')} desc={t('settings.interface_desc')}>
           <div className="setting-row">
             <label>{t('settings.website_language')}</label>
-            <select value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Language">
+            <TvSelect value={lang} onChange={(v) => setLang(v)} ariaLabel="Language">
               {languages.map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
-            </select>
+            </TvSelect>
           </div>
           <div className="setting-row">
             <label>{t('settings.blur_unwatched')}</label>
@@ -226,9 +270,9 @@ export default function Settings() {
           <div className="setting-row">
             <label>{t('settings.next_popup')}</label>
             <div className="ctl-group">
-              <select value={settings.nextPopup} onChange={(e) => update({ nextPopup: +e.target.value })} aria-label={t('settings.next_popup')}>
+              <TvSelect value={settings.nextPopup} onChange={(v) => update({ nextPopup: +v })} ariaLabel={t('settings.next_popup')}>
                 {[5, 10, 15, 20, 30, 35, 45, 60].map((n) => <option key={n} value={n}>{n} seconds</option>)}
-              </select>
+              </TvSelect>
               <span className="clock-ring" aria-hidden="true" />
             </div>
           </div>
@@ -238,12 +282,12 @@ export default function Settings() {
           <div className="set-subhead">{t('settings.group_subtitles')}</div>
           <div className="setting-row">
             <label>{t('settings.sub_lang')}</label>
-            <select value={settings.subLang} onChange={(e) => update({ subLang: e.target.value as S['subLang'] })} aria-label={t('settings.sub_lang')}>
+            <TvSelect value={settings.subLang} onChange={(v) => update({ subLang: v as S['subLang'] })} ariaLabel={t('settings.sub_lang')}>
               <option value="off">{t('settings.sub_off')}</option>
               <option value="en">{t('settings.opt_english')}</option>
               <option value="ka">ქართული</option>
               <option value="ru">Русский</option>
-            </select>
+            </TvSelect>
           </div>
 
           <div className="set-subhead">{t('settings.group_appearance')}</div>
@@ -259,9 +303,9 @@ export default function Settings() {
           <div className="set-subhead">{t('settings.group_controls')}</div>
           <div className="setting-row">
             <label>{t('settings.sub_size')}</label>
-            <select value={settings.subSize} onChange={(e) => update({ subSize: +e.target.value })} aria-label={t('settings.sub_size')}>
+            <TvSelect value={settings.subSize} onChange={(v) => update({ subSize: +v })} ariaLabel={t('settings.sub_size')}>
               {[75, 90, 100, 115, 130, 150, 175, 200].map((n) => <option key={n} value={n}>{n}%</option>)}
-            </select>
+            </TvSelect>
           </div>
           <div className="setting-row">
             <label>{t('settings.sub_color')}</label>
@@ -271,21 +315,21 @@ export default function Settings() {
             <label>{t('settings.sub_bg')}</label>
             <div className="ctl-group">
               <span className="swatch" style={{ background: settings.subBg }} aria-hidden="true" />
-              <select value={settings.subBg} onChange={(e) => update({ subBg: e.target.value })} aria-label={t('settings.sub_bg')}>
+              <TvSelect value={settings.subBg} onChange={(v) => update({ subBg: v })} ariaLabel={t('settings.sub_bg')}>
                 <option value="transparent">{t('settings.transparent')}</option>
                 <option value="rgba(0,0,0,.6)">{t('settings.bg_dim')}</option>
                 <option value="#000000">{t('settings.bg_black')}</option>
                 <option value="#ffffff">{t('settings.bg_white')}</option>
-              </select>
+              </TvSelect>
             </div>
           </div>
           <div className="setting-row">
             <label>{t('settings.sub_outline')}</label>
             <div className="ctl-group">
               <ColorPicker value={settings.subOutline} onChange={set('subOutline')} label={t('settings.sub_outline')} />
-              <select className="set-outline-w" value={settings.subOutlineW} onChange={(e) => update({ subOutlineW: +e.target.value })} aria-label={t('settings.sub_outline_w')}>
+              <TvSelect className="set-outline-w" value={settings.subOutlineW} onChange={(v) => update({ subOutlineW: +v })} ariaLabel={t('settings.sub_outline_w')}>
                 {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
+              </TvSelect>
             </div>
           </div>
         </Card>
@@ -293,18 +337,18 @@ export default function Settings() {
         <Card icon={icons.playback} head={t('settings.playback_head')} desc={t('settings.playback_desc')}>
           <div className="setting-row">
             <label>{t('settings.auto_quality')}</label>
-            <select className="sel-signal" value={settings.autoQuality} onChange={(e) => update({ autoQuality: e.target.value as S['autoQuality'] })}>
+            <TvSelect className="sel-signal" value={settings.autoQuality} onChange={(v) => update({ autoQuality: v as S['autoQuality'] })} ariaLabel={t('settings.auto_quality')}>
               <option value="best">{t('settings.opt_best')}</option>
               <option value="4k">{t('settings.opt_4k')}</option>
               <option value="1080">{t('settings.opt_1080')}</option>
-            </select>
+            </TvSelect>
           </div>
           <div className="setting-row">
             <label>{t('settings.language')}</label>
-            <select value={settings.audioLang} onChange={(e) => update({ audioLang: e.target.value as S['audioLang'] })}>
+            <TvSelect value={settings.audioLang} onChange={(v) => update({ audioLang: v as S['audioLang'] })} ariaLabel={t('settings.language')}>
               <option value="en">{t('settings.opt_english')}</option>
               <option value="original">{t('settings.opt_original')}</option>
-            </select>
+            </TvSelect>
           </div>
           <div className="set-note">
             <svg className="note-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
@@ -315,13 +359,13 @@ export default function Settings() {
         <Card icon={icons.advanced} head={t('settings.advanced_head')} desc={t('settings.advanced_desc')}>
           <div className="setting-row">
             <label>{t('settings.external_player')}</label>
-            <select value={settings.externalPlayer} onChange={(e) => update({ externalPlayer: e.target.value as S['externalPlayer'] })} aria-label={t('settings.external_player')}>
+            <TvSelect value={settings.externalPlayer} onChange={(v) => update({ externalPlayer: v as S['externalPlayer'] })} ariaLabel={t('settings.external_player')}>
               <option value="disabled">{t('settings.disabled')}</option>
               <option value="vlc">VLC</option>
               <option value="infuse">Infuse</option>
               <option value="outplayer">Outplayer</option>
               <option value="nplayer">nPlayer</option>
-            </select>
+            </TvSelect>
           </div>
         </Card>
 

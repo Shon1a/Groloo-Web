@@ -229,6 +229,28 @@ function scrollMarginTop(el: HTMLElement) {
   return Number.isFinite(v) ? v : 0;
 }
 
+/* THE SAME QUESTION FOR THE OTHER EDGE, AND IT WAS BEING ANSWERED WITH A CONSTANT.
+ *
+ * The nudge-into-view below read `scroll-margin-top` for the top and used a hard-coded 24px for
+ * the bottom — so an element the remote moved DOWN onto came to rest 24px off the foot of the
+ * screen no matter what it had asked for. On the add-ons page that is a card jammed against the
+ * bottom edge with its shadow cut off and nothing of the next one showing, which reads as the end
+ * of the list rather than as a list that scrolls.
+ *
+ * The intent was already written down and simply never read: stage 5 in tv.css sets
+ * `scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px` on every focusable, and a two-value
+ * shorthand sets BLOCK-START AND BLOCK-END — so a bottom margin has been declared for every tile
+ * and button in the TV build since that rule was written, and thrown away here.
+ *
+ * FLOORED AT THE OLD CONSTANT rather than swapped for the computed value, so this can only ever
+ * add clearance. An element with no scroll-margin (or an explicit 0) keeps the 24px it has always
+ * had, which means no surface that was tuned against the old behaviour moves. */
+const NUDGE_PAD = 24;
+function scrollMarginBottom(el: HTMLElement) {
+  const v = parseFloat(getComputedStyle(el).scrollMarginBottom);
+  return Math.max(NUDGE_PAD, Number.isFinite(v) ? v : 0);
+}
+
 export default function TvSpatialNav() {
   useEffect(() => {
     /* Read once — the query does not change mid-session, and reading it per keypress would force
@@ -547,9 +569,10 @@ export default function TvSpatialNav() {
           scroller.to(null, window.scrollY + pr.top - scrollMarginTop(park), !smoothScroll);
         } else {
           // Nudge-into-view only, and on the same easing so it never feels like a different app.
-          const pad = scrollMarginTop(next);
-          const overTop = r.top - pad;
-          const overBottom = r.bottom + 24 - window.innerHeight;
+          // Both edges read the element's own scroll-margin now — see scrollMarginBottom for the
+          // half of that which used to be a constant.
+          const overTop = r.top - scrollMarginTop(next);
+          const overBottom = r.bottom + scrollMarginBottom(next) - window.innerHeight;
           if (overTop < 0) scroller.to(null, window.scrollY + overTop, !smoothScroll);
           else if (overBottom > 0) scroller.to(null, window.scrollY + overBottom, !smoothScroll);
           // horizontal clipping (a rail scrolled sideways) is still the browser's job

@@ -14,6 +14,40 @@ import type { MediaItem } from '../lib/types';
 
 type TypeFilter = 'all' | 'movie' | 'tv';
 
+const IS_TV = import.meta.env.MODE === 'tv';
+
+/* ---- TWO CONTROLS A REMOTE COULD NOT WORK, AND THEY FAIL IN OPPOSITE DIRECTIONS -------------
+ *
+ * THE SEARCH FIELD WAS UNREACHABLE. TvSpatialNav's candidate selector omits `input` on purpose —
+ * a text field it can enter is a field it can be trapped in, because arrows belong to the caret
+ * once focus is inside. The result on this page is that the one control it exists for could not
+ * be reached at all: a search page a remote cannot type into. `tabIndex` opts this single field
+ * in, and Up/Down hand the remote back out to the filter button beside it — the same pair, and
+ * the same reasoning, as the add-on URL box.
+ *
+ * THE SLIDERS WOULD HAVE BEEN THE OPPOSITE PROBLEM. A range input is reachable the moment it is
+ * focusable, and then it swallows EVERY arrow: Left/Right change the value, and so do Up/Down, so
+ * a remote that entered one could never leave and would be quietly editing the filter while it
+ * tried. So the slider is never focused. Its ROW is the focus stop, Left/Right on the row step
+ * the value, and Up/Down are left alone to move to the next row — which means the value can only
+ * change on the axis the viewer is deliberately pushing, and leaving is always one press. */
+const SLIDER_ROW_KEYS = ['ArrowLeft', 'ArrowRight'];
+
+function tvSliderRow(step: (delta: number) => void) {
+  if (!IS_TV) return {};
+  return {
+    tabIndex: 0,
+    role: 'group' as const,
+    onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!SLIDER_ROW_KEYS.includes(e.key)) return;
+      // Consumed so spatial nav does not ALSO move sideways off the row on the same press.
+      e.preventDefault();
+      e.stopPropagation();
+      step(e.key === 'ArrowRight' ? 1 : -1);
+    },
+  };
+}
+
 export default function Explore() {
   const t = useT();
   const genreT = useGenre();
@@ -33,6 +67,15 @@ export default function Explore() {
   const [rating, setRating] = useState(0);
   const [filterOpen, setFilterOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const filterBtnRef = useRef<HTMLButtonElement>(null);
+
+  /* The field's one exit, for the reason above. Left/Right stay with the caret — a search term is
+   * typed on a D-pad keyboard one letter at a time and losing the caret is expensive. */
+  const onSearchKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!IS_TV || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    e.preventDefault();
+    filterBtnRef.current?.focus();
+  };
 
   // re-seed when navigating between different genre cards without unmounting —
   // apply the genre but keep the filter panel closed (user asked results-first)
@@ -70,8 +113,9 @@ export default function Explore() {
           id="searchInput" ref={inputRef} type="search" autoComplete="off" spellCheck={false}
           aria-label={t('search.aria')} placeholder={t('search.ph')}
           value={raw} onChange={(e) => setRaw(e.target.value)}
+          {...(IS_TV ? { tabIndex: 0 } : {})} onKeyDown={onSearchKey}
         />
-        <button className="filter-toggle" id="filterToggle" aria-expanded={filterOpen} aria-controls="filterPanel" title="Filters" aria-label="Toggle filters" onClick={() => setFilterOpen((v) => !v)}>☰</button>
+        <button ref={filterBtnRef} className="filter-toggle" id="filterToggle" aria-expanded={filterOpen} aria-controls="filterPanel" title="Filters" aria-label="Toggle filters" onClick={() => setFilterOpen((v) => !v)}>☰</button>
         <span className="mono" aria-hidden="true">{'⚲'}</span>
         <span className="mono" aria-hidden="true">{'⏎'}</span>
 
@@ -98,15 +142,19 @@ export default function Explore() {
           </div>
           <div className="fp-row">
             <div className="k"><label htmlFor="yr">{t('filter.year')}</label></div>
-            <div>
-              <input type="range" min={1970} max={2025} value={year} id="yr" onChange={(e) => setYear(+e.target.value)} aria-label="Release year from" />
+            {/* One year a press: the range is 55 wide, so a step that skipped would make the
+                only reachable years the ones the step happens to land on. */}
+            <div className="fp-slider" {...tvSliderRow((d) => setYear((y) => Math.min(2025, Math.max(1970, y + d))))}>
+              <input type="range" min={1970} max={2025} value={year} id="yr" onChange={(e) => setYear(+e.target.value)} aria-label="Release year from" {...(IS_TV ? { tabIndex: -1 } : {})} />
               <span className="fp-out" id="yrOut">{year > 1970 ? year : t('filter.any_year')}</span>
             </div>
           </div>
           <div className="fp-row">
             <div className="k"><label htmlFor="rt">{t('filter.rating')}</label></div>
-            <div>
-              <input type="range" min={0} max={10} step={0.5} value={rating} id="rt" onChange={(e) => setRating(+e.target.value)} aria-label="Minimum rating" />
+            {/* Half a point a press, matching the input's own `step` — the row and the slider must
+                agree about granularity or a mouse and a remote would produce different values. */}
+            <div className="fp-slider" {...tvSliderRow((d) => setRating((r) => Math.min(10, Math.max(0, +(r + d * 0.5).toFixed(1)))))}>
+              <input type="range" min={0} max={10} step={0.5} value={rating} id="rt" onChange={(e) => setRating(+e.target.value)} aria-label="Minimum rating" {...(IS_TV ? { tabIndex: -1 } : {})} />
               <span className="fp-out" id="rtOut">{rating > 0 ? `★ ${rating}+` : t('filter.any_rating')}</span>
             </div>
           </div>
