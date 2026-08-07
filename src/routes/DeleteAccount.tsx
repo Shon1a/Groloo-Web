@@ -4,6 +4,7 @@ import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import { useAddons } from '../stores/addons';
 import { useBlocks } from '../stores/blocks';
+import { useHomeConfig } from '../stores/homeConfig';
 import { api, errorMessage } from '../lib/api';
 
 /* ------------------------------------------------------------------ *
@@ -59,6 +60,7 @@ export default function DeleteAccount() {
   const logout = useAuth((s) => s.logout);
   const clearAddons = useAddons((s) => s.clear);
   const clearBlocks = useBlocks((s) => s.clear);
+  const clearHomeConfig = useHomeConfig((s) => s.clear);
 
   const [phase, setPhase] = useState<Phase>('idle');
   const [busy, setBusy] = useState(false);
@@ -79,6 +81,10 @@ export default function DeleteAccount() {
       // what a person chose to hide is their own record — it must not outlive the account
       // on a device the next user signs into.
       clearBlocks();
+      // And the home layout, which is keyed by the signed-in email too now that it syncs.
+      // Left behind it would put a deleted account's home screen in front of whoever signs
+      // in next on the same television.
+      clearHomeConfig();
       // Every session for this user is already destroyed server-side, so this POST 401s;
       // it is called for its local half, which drops the mirrored token and the in-memory
       // user, and it swallows its own error.

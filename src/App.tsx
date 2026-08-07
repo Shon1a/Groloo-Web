@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './stores/auth';
 import { useAddons } from './stores/addons';
 import { useBlocks } from './stores/blocks';
+import { useHomeConfig } from './stores/homeConfig';
 import { useHistory } from './stores/history';
 import { useLibrary } from './stores/library';
 import { useOfficial } from './stores/official';
@@ -64,6 +65,7 @@ export default function App() {
   const user = useAuth((s) => s.user);
   const pullAddons = useAddons((s) => s.pullFromServer);
   const pullBlocks = useBlocks((s) => s.pullFromServer);
+  const pullHomeConfig = useHomeConfig((s) => s.pullFromServer);
   const reloadHistory = useHistory((s) => s.reload);
   const pullHistory = useHistory((s) => s.pull);
   const reloadLibrary = useLibrary((s) => s.reload);
@@ -79,8 +81,10 @@ export default function App() {
   // merge the server-stored add-on collection + watch history when signed in
   useEffect(() => {
     reloadHistory(); reloadLibrary();
-    if (user) { pullAddons(); pullBlocks(); pullHistory(); pullLibrary(); }
-  }, [user, pullAddons, pullBlocks, reloadHistory, pullHistory, reloadLibrary, pullLibrary]);
+    // homeConfig reloads itself off the auth store (like addons/blocks), so only its PULL
+    // belongs here — it reconciles the account's official-add-on toggles across devices.
+    if (user) { pullAddons(); pullBlocks(); pullHomeConfig(); pullHistory(); pullLibrary(); }
+  }, [user, pullAddons, pullBlocks, pullHomeConfig, reloadHistory, pullHistory, reloadLibrary, pullLibrary]);
 
   return (
     <HashRouter>
