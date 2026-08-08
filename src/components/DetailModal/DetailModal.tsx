@@ -9,6 +9,7 @@ import { useReport } from '../../stores/report';
 import { useMeta, useAddonMeta } from '../../lib/queries';
 import { useT, useGenre } from '../../i18n/i18n';
 import { hueBg } from '../../lib/img';
+import { epLabel } from '../../lib/utils';
 import type { MetaDetail, MediaItem, CastMember } from '../../lib/types';
 import { useTrailer } from './useTrailer';
 import EpisodeChooser from './EpisodeChooser';
@@ -121,14 +122,31 @@ const playsInstead = (s: AddonStream, want: string): string | null => {
  * nothing ranks with the playable ones rather than being punished for being terse. */
 const audible = (s: AddonStream): number => (audioPlayability(s.label) === false ? 0 : 1);
 
+/** What the viewer was actually watching, so the next episode can be more of the same. */
+export interface StreamPick { source: string; quality: string }
+
 /** The one to start for `want`: deliverable only, audible first, then best quality. Falls
- *  back to the plain best if nothing can deliver, so ▶ is never a dead button. */
-const bestFor = (list: AddonStream[], want: string): AddonStream | undefined => {
+ *  back to the plain best if nothing can deliver, so ▶ is never a dead button.
+ *
+ *  `prefer` is the source the LAST episode played from, and it is a tie-break rather than a
+ *  filter — see the note at `playEpisode`. It sits below deliverability on purpose: continuity
+ *  is worth having only among sources that were already acceptable answers, and an add-on that
+ *  cannot deliver the language, or cannot be started at all, does not become acceptable by
+ *  virtue of having worked for episode four. */
+const bestFor = (list: AddonStream[], want: string, prefer?: StreamPick | null): AddonStream | undefined => {
+  const sameSource = (s: AddonStream): number => (prefer && s.source === prefer.source ? 1 : 0);
+  /* Quality is matched EXACTLY here rather than by rank, and only after the add-on already
+   * matches. The point is that a viewer who chose 1080p over the 4K in the same list gets 1080p
+   * again — a rank comparison would quietly walk them back up to whatever is best, which is the
+   * behaviour this preference exists to stop. */
+  const sameQuality = (s: AddonStream): number => (prefer && s.quality === prefer.quality ? 1 : 0);
   // `startable` leads: ▶ must never land on a link that opens a browser tab, or on a torrent
   // with no server behind it, while an ordinary playable source is sitting in the same list.
   const rank = (a: AddonStream, b: AddonStream) => (startable(b) - startable(a))
     || (audible(b) - audible(a))
     || (deliverability(b, want) - deliverability(a, want))
+    || (sameSource(b) - sameSource(a))
+    || (sameQuality(b) - sameQuality(a))
     || (qualityRank(b.quality) - qualityRank(a.quality));
   const best = [...list.filter((s) => canDeliver(s, want))].sort(rank)[0] ?? [...list].sort(rank)[0];
   // Nothing startable at all is not an answer — better no auto-play than opening a tab the
@@ -263,6 +281,10 @@ export default function DetailModal() {
   const episodesRef = useRef<HTMLDivElement>(null);
   const streamsRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
+  /* The add-on, quality and language of the last thing this modal STARTED, so the next episode
+   * can be more of the same — see `playEpisode`. A ref rather than state: nothing renders from
+   * it, and making it state would re-render the whole title screen on every play. */
+  const lastPick = useRef<(StreamPick & { id: string; lang: string }) | null>(null);
   const [bdLoaded, setBdLoaded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [pickedEp, setPickedEp] = useState<{ season: number; ep: number } | null>(null);
@@ -555,6 +577,14 @@ export default function DetailModal() {
     const nxt = nextEpOf(ep);
     // the language this playback represents, so resume can pick the same one later
     const chosen = langTag ?? (lang && s.langs.includes(lang) ? lang : s.langs[0]);
+    /* WHAT IS PLAYING, KEPT FOR THE EPISODE AFTER THIS ONE. Written on every start — including a
+     * start that came FROM the auto-next — so a viewer who switches add-on half way through a
+     * season carries the new one forward rather than the one they abandoned.
+     *
+     * Stamped with the title id because this modal is not remounted between titles: without it,
+     * finishing an episode of one show and opening another would offer the previous show's add-on
+     * as a preference, which is meaningless — the same add-on name serves different releases. */
+    lastPick.current = { id: String(target?.id ?? ''), source: s.source, quality: s.quality, lang: chosen || '' };
     playSource({
       url,
       // 'torrent' is not a player concept: what comes back from the server is an ordinary
@@ -562,24 +592,48 @@ export default function DetailModal() {
       kind: s.kind === 'hls' ? 'hls' : 'url',
       notWebReady: s.notWebReady,
       title, lang: chosen, langs: s.langs,
-      subtitle: ep ? `S${ep.season} · E${ep.ep}` : undefined,
+      subtitle: ep ? epLabel(ep.season, ep.ep) : undefined,
       media: buildMediaFor(ep, chosen), subtitles: subsOf(s), subsQuery: subsQueryFor(ep),
       next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined,
       series: seriesFor(ep),
     });
   };
   const playStream = (s: AddonStream) => playStreamFor(s, pickedEp);
-  // switch to a specific episode, fetch its sources, and play the best one (auto-next)
+  /* SWITCH TO AN EPISODE AND START IT — the one path behind all three ways of getting there:
+   * the player's auto-next when a file ends, its "Next episode" button, and picking a card in the
+   * in-player episode shelf.
+   *
+   * IT CONTINUES WHAT WAS PLAYING RATHER THAN RE-DECIDING FROM SCRATCH. Episodes of a season are
+   * one sitting, and every add-on is a different encode: switching between them mid-season means
+   * the volume, the sharpness, the subtitle timing and whether the audio decodes at all can change
+   * between episode four and episode five, for no reason the viewer did anything to cause. Before
+   * this, each next episode ran the same "best available" contest from nothing and took whatever
+   * won — usually but not reliably the same answer.
+   *
+   * THE LANGUAGE IS PART OF THE SAME PROMISE, and it is read from the last PLAYBACK rather than
+   * from the modal's `lang` tab. The two come apart routinely: the tab is where the viewer was
+   * browsing when they pressed play, and `playStreamFor` may have started something else if the
+   * chosen source could not deliver that language.
+   *
+   * A PREFERENCE, NEVER A REQUIREMENT. Both fall through if the previous add-on has nothing for
+   * this episode, or nothing in that language — a season with a gap in one add-on's coverage must
+   * still play, and continuity is not worth a black screen. Everything below is a tie-break
+   * inside the ranking `bestFor` already applied. */
   const playEpisode = async (season: number, ep: number) => {
     const videoId = videoIdFor({ season, ep }); if (!videoId) return;
     setPickedEp({ season, ep });
     const list = await collectAddonStreams(videoId, 'series');
     const langs = langTabs(list);
-    const want = langs.includes(lang) ? lang : langs[0];
-    const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want) ?? bestFor(list, '');
+    const prev = lastPick.current && lastPick.current.id === String(target?.id ?? '') ? lastPick.current : null;
+    /* The language that was actually playing wins, then the tab, then whatever the episode has.
+     * `langs.includes` is the guard that keeps this a preference: a dub that stops after episode
+     * three hands the choice back rather than filtering the list down to nothing. */
+    const want = prev?.lang && langs.includes(prev.lang) ? prev.lang
+      : langs.includes(lang) ? lang : langs[0];
+    const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want, prev) ?? bestFor(list, '', prev);
     if (best) { playStreamFor(best, { season, ep }, want); return; }
     const nxt = nextEpOf({ season, ep });
-    playSource({ url: '/assets/demo.mp4', title, subtitle: `S${season} · E${ep}`, media: buildMediaFor({ season, ep }), subsQuery: subsQueryFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
+    playSource({ url: '/assets/demo.mp4', title, subtitle: epLabel(season, ep), media: buildMediaFor({ season, ep }), subsQuery: subsQueryFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
   };
   // language buckets (from the sources) + the sources for the picked language, sorted
   // best-quality first
@@ -596,9 +650,11 @@ export default function DetailModal() {
   // what the rows actually render as: the same sources, deliverable-language-first
   const rowStreams = forRender(shownStreams, lang);
   // Each stream row is titled by the open CONTENT — the movie name, or for a series the
-  // show name + chosen episode as `S# · E#` (same format the player subtitle uses). The
-  // add-on's own caption (s.label) drops to the detail line so its release info survives.
-  const streamTitle = isTv && pickedEp ? `${title} · S${pickedEp.season} · E${pickedEp.ep}` : title;
+  // show name + chosen episode as `S# | E#`, character for character what the player's own
+  // title line renders. Two spellings of one label is how they drift, and this is the string a
+  // viewer reads immediately before the player shows them the other one.
+  // The add-on's own caption (s.label) drops to the detail line so its release info survives.
+  const streamTitle = isTv && pickedEp ? `${title} ${epLabel(pickedEp.season, pickedEp.ep)}` : title;
 
   // Play the best available source for the current language/episode. The player
   // seeks to any saved resume position itself (VideoPlayer reads getResume), so

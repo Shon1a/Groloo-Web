@@ -798,12 +798,20 @@ const NAME_TO_1: Record<string, string> = {
   macedonian: 'mk', bosnian: 'bs', catalan: 'ca', icelandic: 'is',
 };
 
-/** One add-on's language token → `{ code, label }`.
+/** One language token → `{ code, label }`.
  *
  *  The region is dropped from the CODE and kept in the LABEL: `pt-BR` matches a saved
  *  preference of `pt` (which is what the user asked for) while still reading "Português
- *  (BR)" in the menu, so a Brazilian and a European track are never two identical rows. */
-function normalizeSubLang(raw: string): { code: string; label: string } {
+ *  (BR)" in the menu, so a Brazilian and a European track are never two identical rows.
+ *
+ *  EXPORTED because the add-ons are not the only origin of a language token. A stream's own
+ *  embedded tracks arrive named by whatever muxed them — `rus_forced_4`, `eng_5` — and were
+ *  previously carried through untouched, so the player held `ru` for an add-on's Russian and
+ *  `rus_forced_4` for the file's own. Two strings, one language, and anything that compares
+ *  or groups them saw two. Same tokeniser for both origins is the fix; the split on `[-_]`
+ *  already turns `rus_forced_4` into base `rus` + region `forced`, which is both the right
+ *  code and a genuinely useful label. */
+export function normalizeSubLang(raw: string): { code: string; label: string } {
   const t = String(raw || '').trim();
   if (!t) return { code: '', label: 'Subtitle' };
   const [base, region] = t.split(/[-_]/);
