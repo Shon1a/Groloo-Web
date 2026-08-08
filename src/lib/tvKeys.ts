@@ -37,17 +37,37 @@ import { mirroredHref } from './launchIntent';
 /** A layer that owns Back while it is showing. Return true if the press was consumed. */
 export type BackHandler = () => boolean;
 
-const handlers: BackHandler[] = [];
+/* REGISTRATION ORDER IS NOT STACKING ORDER, and one press was being spent on the difference.
+ *
+ * Registered-most-recent-first is right for nested UI inside ONE surface — a chip menu inside the
+ * title screen, the gear menu inside the player. It is wrong across surfaces, because a surface
+ * that is still mounted UNDERNEATH another one registered EARLIER and so answers LATER, not never.
+ * The measured bug: with a series episode picked, the title screen holds a handler ("Back returns
+ * to the episode list"); opening a stream registers the player's on top. The player's own handler
+ * declines a bare Back — the player is meant to close on it — and the press then fell through to
+ * the title screen hidden behind the video, which stepped ITS view back invisibly. Nothing on
+ * screen changed, and the second press was the one that closed the player.
+ *
+ * So a handler also carries the z of the surface it belongs to, and only the topmost surface's
+ * handlers are consulted. Within a surface nothing changes: same z, so recency still decides. */
+export const BACK_LAYER = { modal: 200, player: 3000 } as const;
+
+interface Layer { fn: BackHandler; z: number }
+
+const handlers: Layer[] = [];
 
 /**
  * Register a layer that is not backed by a store — in practice VideoPlayer's gear menu and its
- * episode panel. Most recently registered wins, which is the same as topmost for nested UI.
+ * episode panel, and the title screen's chip menu and episode view. `z` is the stacking level of
+ * the SURFACE the handler belongs to (see BACK_LAYER); only the topmost level is consulted, and
+ * within it the most recently registered wins.
  * Returns the unregister function, so a component can hand it straight back from an effect.
  */
-export function registerBackHandler(fn: BackHandler): () => void {
-  handlers.push(fn);
+export function registerBackHandler(fn: BackHandler, z: number = BACK_LAYER.modal): () => void {
+  const entry: Layer = { fn, z };
+  handlers.push(entry);
   return () => {
-    const i = handlers.indexOf(fn);
+    const i = handlers.indexOf(entry);
     if (i >= 0) handlers.splice(i, 1);
   };
 }
@@ -102,9 +122,14 @@ function layerOpen(): boolean {
  * swallow the key. Exported plainly because the Android carrier is a bridge message, not a key.
  */
 export function handleBack(): boolean {
-  // 1. Layers with no store of their own — the player's menu, then its episode panel.
-  for (let i = handlers.length - 1; i >= 0; i -= 1) {
-    if (handlers[i]()) return true;
+  /* 1. Layers with no store of their own — the player's menu, then its episode panel. Only the
+   *    topmost surface answers: one still mounted beneath it must not step its own view back
+   *    where nobody can see it happen (see the note on BACK_LAYER). */
+  if (handlers.length) {
+    const top = Math.max(...handlers.map((h) => h.z));
+    for (let i = handlers.length - 1; i >= 0; i -= 1) {
+      if (handlers[i].z === top && handlers[i].fn()) return true;
+    }
   }
 
   // 2. Fullscreen is a layer too: leave it before tearing anything down.

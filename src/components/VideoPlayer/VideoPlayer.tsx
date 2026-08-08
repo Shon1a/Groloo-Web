@@ -11,7 +11,7 @@ import { playDemuxed, probeUrl, type DemuxHandle, type DemuxBlocker } from '../.
 import { playWithWasmAudio, needsWasmDecoder, type WasmAudioHandle } from '../../lib/wasmAudio';
 import { langName, collectAddonSubtitles } from '../../lib/addonClient';
 import { apiFetch } from '../../lib/api';
-import { registerBackHandler, mediaAction } from '../../lib/tvKeys';
+import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
 import EpisodePanel from './EpisodePanel';
 import EpisodeRail from './EpisodeRail';
 import { scrollCardToSlot } from './railScroll';
@@ -1334,7 +1334,11 @@ export default function VideoPlayer() {
        * So Back now falls through to the app's chain, which closes the player. Settings first,
        * shelf next, then out — one press each, in the order they were opened. */
       return false;
-    });
+      /* Registered AT THE PLAYER'S OWN LEVEL so that "falls through to the app's chain" means the
+       * player closes, and not that the title screen underneath quietly steps its own view back
+       * first — which is exactly what a series cost: one wasted press with nothing visibly
+       * happening. See BACK_LAYER. */
+    }, BACK_LAYER.player);
   }, [source, menuOpen, audioOpen, epPanelOpen]);
 
   // picture-enhance: rewrite the unsharp-mask convolution kernel from the clarity

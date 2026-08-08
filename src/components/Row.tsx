@@ -2,6 +2,7 @@ import type { MediaItem } from '../lib/types';
 import PosterCard from './PosterCard';
 import Rail from './Rail';
 import TvSpotlight from './TvSpotlight';
+import TvHomeRow from './TvHomeRow';
 import { useT } from '../i18n/i18n';
 
 /* A home rail: a header (with the "see all" title) + the shared Rail of PosterCards.
@@ -29,9 +30,16 @@ export default function Row({ title, cat, items, onSelect, onSeeAll }: RowProps)
   const t = useT();
   if (!items.length) return null;
   if (IS_TV) {
-    // The rail's "see all" heading has no equivalent a remote can land on, so the TV row spends
-    // `cat`/`onSeeAll` on a card at the END of its strip instead — see the note in TvSpotlight.
-    return <TvSpotlight items={items} title={title} cat={cat} onSelect={onSelect} onSeeAll={onSeeAll} />;
+    /* The rail's "see all" heading has no equivalent a remote can land on, so the TV row spends it
+     * on a card at the END of its strip instead — and that card no longer LEAVES. A category row
+     * ends in "+", which lengthens the row in place (TvHomeRow), the same as the TV / Movies /
+     * Anime pages already did. Walking right is the pagination; nothing navigates.
+     *
+     * `onSeeAll` is what says "this row is a category with more behind it": the rows without one
+     * (My List, an add-on catalogue) are the rows that ARE all there is, and they still end where
+     * their titles do. */
+    if (cat && onSeeAll) return <TvHomeRow cat={cat} title={title} items={items} onSelect={onSelect} />;
+    return <TvSpotlight items={items} title={title} onSelect={onSelect} />;
   }
   return (
     <div className="strip reveal in" data-row={cat}>

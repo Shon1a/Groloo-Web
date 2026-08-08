@@ -73,6 +73,10 @@ export interface MetaDetail {
   rating?: number;
   year?: string | number;
   runtime?: string;
+  /** Age rating as the board that issued it writes it — "PG-13", "12", "18", "TV-MA". The
+   *  viewer's own country when TMDB has it, else US/GB; absent when nobody has rated the title
+   *  (see pickMovieCert / pickTvCert in server.js). Never a number, and never inferred. */
+  certification?: string | null;
   genre?: string[];
   cast?: CastMember[];
   director?: string;
