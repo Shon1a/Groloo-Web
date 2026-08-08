@@ -15,7 +15,7 @@ import { apiFetch } from '../../lib/api';
 import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
 import EpisodePanel from './EpisodePanel';
 import EpisodeRail from './EpisodeRail';
-import TvChipMenu, { type ChipOption } from '../DetailModal/TvChipMenu';
+import TvChipMenu from '../DetailModal/TvChipMenu';
 import { scrollCardToSlot } from './railScroll';
 
 /* THE TV BUILD IS A DIFFERENT PLAYER, and this constant is what splits them. `import.meta.env.MODE`
