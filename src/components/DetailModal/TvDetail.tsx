@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
 import { imgW } from '../../lib/img';
 import { langName, sourceNote, type AddonStream } from '../../lib/addonClient';
@@ -62,7 +62,11 @@ import type { ModalTarget } from '../../stores/modal';
 const BACKDROP_RENDITION = 'w1280';
 /** Longest the loading veil waits on the backdrop's decode before opening without it. */
 const ART_WAIT_MAX = 2500;
-/** Cast names shown on the one-line credits row. Past this it is a wall of text, not a cue. */
+/* Cast names on the credits row. It was six, then four while the row was held to a single line
+ * with an ellipsis; the row wraps to two lines inside its own column now (see .tv-det-credit-names
+ * in tv.css), so the names fit again and being cut off after three was just losing the cast.
+ * Six is still a cap: TMDB orders cast by billing, so the names anyone recognises are at the front,
+ * and a list past six is a document rather than a cue whatever room there is to print it. */
 const CAST_LINE = 6;
 
 /* NO TRAILER PLAYS ON THIS SCREEN, and the note at the head of this file — "the trailer embed…
@@ -246,14 +250,35 @@ export default function TvDetail(p: TvDetailProps) {
   const director = meta?.director || meta?.creators?.[0]?.name || '';
   const castNames = (meta?.cast ?? []).slice(0, CAST_LINE).map((c) => c.name).filter(Boolean);
 
-  const metaBits = [
+  /* ---- ONE LINE OF FACTS, DIVIDED RATHER THAN JOINED -----------------------------------------
+   * ★ 6.8 │ 2020 │ 12+ │ 1h 55min │ Adventure · Fantasy · Action
+   *
+   * It was two lines (facts, then genres underneath) joined with "  ·  ". Three things changed
+   * and they are one change: the genres came UP into the line, because on a screen whose whole
+   * left column is a stack of paragraphs a second dimmer line of the same weight read as the
+   * start of the synopsis rather than as the end of the facts; the separator became a rule, which
+   * is what lets a certificate CHIP sit in the run without looking like a word; and the row is
+   * built from nodes instead of a string, because a chip cannot survive `.join()`.
+   *
+   * THE GENRES STAY DOT-JOINED INSIDE THEIR OWN CELL. They are a set, not four more facts — one
+   * rule between "Adventure" and "Fantasy" would say they rank alongside the year and the
+   * runtime, and a line of six rules says nothing at all. */
+  const metaBits: ReactNode[] = [
     rating ? `★ ${rating}` : '',
     year ? String(year) : '',
+    /* The board's own string, printed as issued — no "+" appended and nothing normalised. "12"
+     * is a German certificate and "PG-13" an American one; rewriting either into the other's
+     * shape would be this app inventing a rating no board gave. Absent for an unrated title, and
+     * the cell simply does not appear. */
+    meta?.certification
+      ? <span key="cert" className="tv-det-age">{meta.certification}</span>
+      : '',
     meta?.runtime || '',
     isSeries && meta?.seasons
       ? [meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }),
          epTotal ? t('modal.episodes_count', { n: epTotal }) : ''].filter(Boolean).join(' · ')
       : '',
+    genreChips.length > 0 ? genreChips.map(genre).join(' · ') : '',
   ].filter(Boolean);
 
   const services = srcTab === 'services' ? pickWatchServices(meta?.providers, title) : [];
@@ -679,24 +704,33 @@ export default function TvDetail(p: TvDetailProps) {
                 : title}
             </h2>
 
-            {metaBits.length > 0 && <div className="tv-det-meta">{metaBits.join('  ·  ')}</div>}
-            {genreChips.length > 0 && <div className="tv-det-genres">{genreChips.map(genre).join(' · ')}</div>}
+            {metaBits.length > 0 && (
+              <div className="tv-det-meta">
+                {metaBits.map((b, i) => <span key={i} className="tv-det-metabit">{b}</span>)}
+              </div>
+            )}
 
             <p className="tv-det-plot">{plot}</p>
 
+            {/* TWO ALIGNED ROWS, NOT TWO PARAGRAPHS. The label used to be an inline span at the
+                head of a block of text, so a cast list long enough to wrap came back under the
+                label rather than under the first name — a second line starting in a column of its
+                own, ragged against the line above it. As a two-column grid the labels share one
+                edge and the names share another, which is what makes these read as credits rather
+                than as two more sentences under the synopsis. */}
             {(director || castNames.length > 0) && (
               <div className="tv-det-credits">
                 {director && (
-                  <div className="tv-det-credit">
+                  <>
                     <span className="tv-det-credit-role">{t(isSeries ? 'modal.creator' : 'modal.director')}</span>
-                    {director}
-                  </div>
+                    <span className="tv-det-credit-names">{director}</span>
+                  </>
                 )}
                 {castNames.length > 0 && (
-                  <div className="tv-det-credit">
+                  <>
                     <span className="tv-det-credit-role">{t('modal.cast_credits')}</span>
-                    {castNames.join(' · ')}
-                  </div>
+                    <span className="tv-det-credit-names">{castNames.join(' · ')}</span>
+                  </>
                 )}
               </div>
             )}

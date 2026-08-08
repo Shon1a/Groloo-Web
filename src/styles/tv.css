@@ -223,8 +223,8 @@
   position: relative;
   z-index: 1;
   font: inherit;
-  font-size: 21px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 500;
   line-height: 1;
   color: rgba(255,255,255,0.62);
   background: none;
@@ -232,14 +232,22 @@
   border-radius: 999px;
   /* ASYMMETRIC BY HALF A PIXEL, TO CENTRE THE INK RATHER THAN THE LINE BOX.
      `align-items: center` centres the LINE BOX, and a line box is ascent + descent — for Poppins
-     at 21px that is 22 above the baseline and 7 below. A nav label has no descenders ("Home",
-     "Series", "Movies"), so those 7px are reserved and never drawn, and centring the box that
-     contains them lifts the visible ink above the true centre. Measured against the pill: 14.6px
-     of white above the glyphs and 15.7px below.
+     that is ~22 above the baseline and ~7 below at 21px, and the ratio holds at any size. A nav
+     label has no descenders ("Home", "Series", "Movies"), so those reserved pixels are never
+     drawn, and centring the box that contains them lifts the visible ink above the true centre.
+     Measured against the pill at 21px: 14.6px of white above the glyphs and 15.7px below.
      The correction is half that difference, moved from the top padding to the bottom, so the
      item's HEIGHT is unchanged — which matters because TvTopNav sizes the travelling pill from
-     this element's offsetHeight, and a taller item would simply move the problem into the pill. */
-  padding: 9.5px 18px 8.5px;
+     this element's offsetHeight, and a taller item would simply move the problem into the pill.
+
+     THE VERTICAL PADDING ABSORBED THE TYPE GOING FROM 21px TO 18. It is not comfort, it is the
+     bar's ONE height: a text item is line-height (1 × the font size) + this padding, and the
+     search glyph next to it is padded to match at 39px (see .tv-nav-search for what a 3px
+     disagreement did to the travelling pill). 18 + 11 + 10 keeps that 39 exactly, so the smaller
+     type cost the bar nothing — only the ring of white around each label grew, which is what a
+     lighter, smaller label wants anyway. Change the font size here and these two numbers move
+     with it. */
+  padding: 11px 18px 10px;
   cursor: pointer;
   display: inline-flex; align-items: center;
   transition: color .22s ease, background-color .22s ease;
@@ -277,7 +285,8 @@
 .tv-shell .tv-nav-item:focus-visible { outline: none; }
 
 /* THE SEARCH BUTTON IS PADDED TO THE TEXT ITEMS' HEIGHT, NOT TO ITS OWN COMFORT.
-   Its content is a 24px glyph where theirs is a 21px line, so at equal padding it came out 42px
+   Its content is a 24px glyph where theirs is a text line (21px when this was written, 18 now —
+   the items' padding keeps their box at 39 either way), so at equal padding it came out 42px
    against their 39 — and in a flex row that makes IT set the line height and leaves every text
    item centred 1.5px lower. Two things went wrong with that. The travelling pill is placed from
    the focused item's `offsetTop`, which is an integer, so a true 1.5px offset rounded to 2 and
@@ -528,6 +537,20 @@
   overflow: hidden;
   border-radius: 12px;
 
+  /* NOTHING PAINTS UNDER THE BILLBOARD, and this is what actually fixed the red line.
+     The strip parks the walked-past tiles in [0, --sp-wl] — the billboard's own box — on the
+     understanding that the billboard is opaque and covers them. It very nearly does. The tile
+     immediately behind it ends flush with the card's right edge and runs the card's full height,
+     but it is a 10px-radius rounded box behind a 12px-radius one, composited separately: the two
+     curves do not coincide, and the fraction of a pixel where they disagree let the poster show
+     as a hairline along the bottom and around the corner. A red poster (Spider-Man) under a dark
+     backdrop is where that becomes a red line, which is how it was found.
+     Clipping the whole left band away is exact rather than approximate — no radius to match, no
+     antialiasing to lose a race with, and no dependence on the artwork above being opaque. A tile
+     sliding in still travels the same path: it is simply clipped at the billboard's edge instead
+     of covered by it, which looks identical because that edge is where the card is. */
+  clip-path: inset(0 0 0 var(--sp-wl));
+
   /* OFF-SCREEN ROWS STOP PAINTING THEIR POSTERS. Home stacks ~13 of these and only two or three
      are ever on screen, but every one of them was styling, laying out and rastering its whole
      strip on every scroll frame. `content-visibility: auto` lets the browser skip the subtree
@@ -699,23 +722,59 @@
    artwork for several frames). It is the second step of the cascade, and it is what stops the
    billboard from reading as one flat swap: the photograph answers the press, then the title
    settles onto it, then the copy underneath changes. Three beats, one gesture.
-   Its opacity multiplies with the layer's, so the outgoing plate is carried off by the layer's own
-   fade and only the arrival needs a delay of its own. */
-.tv-spot-layer .tv-spot-card-in {
+
+   THE PLATE IS ITS OWN PAIR OF ELEMENTS NOW, not a child of the art layer, and that is the fix
+   for the scrim flicker (see `.tv-spot-scrim` below). Inside the layer its opacity multiplied with
+   the layer's, so the outgoing plate was carried off by the layer's 90ms fade and only the arrival
+   needed a delay of its own. Standing on its own it has to do both itself: 90ms out, matching the
+   layer it used to ride, and the same delayed 200ms in. The timings are unchanged; only what
+   carries them is. */
+.tv-spot-plate {
+  position: absolute; inset: 0;
+  z-index: 2;
+  pointer-events: none;
   opacity: 0;
-  transition: opacity 200ms ease;
+  transition: opacity 90ms linear;
 }
-.tv-spot-layer.on .tv-spot-card-in {
+.tv-spot-plate.on {
   opacity: 1;
   transition: opacity 200ms ease 110ms;
 }
 
+/* ---- THE BLACK UNDER THE TITLE, AND WHY IT IS NOT PART OF THE TITLE ------------------------
+   THE DEFECT: the gradient at the foot of the billboard blinked out and back on every press.
+   It was `background` on `.tv-spot-card-in`, one copy per art layer, so it inherited the plate's
+   cascade — out with the outgoing layer in 90ms, and not back until 110ms later over 200ms. For
+   ~110ms the card had NO scrim, which on a bright backdrop is a visible flash of the photograph
+   where black should be. The cascade is right for the wordmark, which is per-title; it is wrong
+   for the scrim, which belongs to the BILLBOARD and is identical for every title in the row.
+   So it is drawn once, above both art layers (z-index 1 — a scrim baked into each would also
+   double-darken the overlap while a dissolve is half-and-half) and below both plates. Nothing a
+   press does can reach it, which is the whole requirement: it is stationary.
+
+   FIXED HEIGHT, NOT THE PLATE'S. It used to be the plate's own box, so it grew and shrank with
+   the wordmark — a title falling back to text had a shorter gradient than one with a tall logo,
+   which is a second, quieter version of the same fault. 160px clears the tallest plate the card
+   can build (22px padding + an 84px wordmark cap + 22) with room over it, and the top of the ramp
+   is transparent, so nothing shows where the plate happens to be shorter. Deliberately NOT
+   re-cut when the movie/series tag was removed from the plate: the scrim is the billboard's, and
+   a gradient that tracks whatever the plate currently holds is the thing this rule exists to
+   stop being. */
+.tv-spot-scrim {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 160px;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(0deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 60%, transparent 100%);
+}
+
 /* ---- THE ROW PREVIEW (muted trailer on the billboard) ------------------------------------
    UNDERNEATH the artwork, at z-index 0, and the artwork fades off it. The obvious build — video
-   on top of the picture — cannot work here: the tag and the wordmark live INSIDE each artwork
-   layer (they cross-dissolve together, which is the point), so a video painted over the layers
-   covers the title too, and fading the LAYER to reveal a video above it takes the title with it.
-   Uncovering the video from below leaves the plate exactly where it was, on top, legible. */
+   on top of the picture — cannot work here: the scrim and the title plate sit ABOVE the artwork
+   layers (z-index 1 and 2), so a video painted over everything covers the title too, and fading
+   the artwork to reveal a video above it would take the title with it whichever way round the
+   plate was nested. Uncovering the video from below leaves the plate exactly where it was, on
+   top, legible. */
 .tv-spot-trailer-slot {
   position: absolute; inset: 0;
   z-index: 0;
@@ -755,8 +814,9 @@
   pointer-events: none;
 }
 .tv-spot-trailer-slot video.on { opacity: 1; }
-/* Only the ART goes; `.tv-spot-card-in` (the tag + wordmark + its scrim) stays put, so a playing
-   preview still says what it is. Slower out than the video is in, so the two overlap rather than
+/* Only the ART goes; the scrim and `.tv-spot-card-in` (the tag + wordmark) are siblings of the
+   layers rather than children of them, so they stay put and a playing preview still says what it
+   is. Slower out than the video is in, so the two overlap rather than
    handing over through a black frame. */
 .tv-spot-hero.has-trailer .tv-spot-art {
   opacity: 0;
@@ -803,7 +863,8 @@
   position: absolute; left: 0; right: 0; bottom: 0;
   padding: 22px 24px;
   text-align: left;
-  background: linear-gradient(0deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 60%, transparent 100%);
+  /* NO BACKGROUND. The scrim it used to carry is `.tv-spot-scrim`, drawn once for the billboard —
+     see the note there for why a per-plate gradient flickered on every press. */
 }
 .tv-spot-tag {
   display: block;
@@ -862,7 +923,8 @@
    from a sofa and it is the only thing on the row that says "you are part-way through this".
    Drawn at the very bottom edge of the billboard AND of each strip tile — both clip it into
    their own corners with their existing overflow:hidden + radius, so no corner rounding is
-   repeated here. z-index puts it over the title plate's gradient, which reaches the same edge. */
+   repeated here. z-index puts it over the plate's own text; the billboard's scrim reaches the same
+   edge but is a whole layer below the plate, so the bar is never drawn through it. */
 .tv-spot-progress {
   position: absolute; left: 0; right: 0; bottom: 0;
   height: 6px; z-index: 3;
@@ -1095,8 +1157,38 @@
   inset: 0;
   z-index: 1;
   pointer-events: none;
+  /* THE LEFT WASH RUNS TO NEAR-BLACK AND HOLDS IT ACROSS THE WHOLE COLUMN, rather than starting to
+     lift at 28%. The copy is the reason this layer exists and it is the thing that was suffering:
+     a bright backdrop — sky, snow, a daylit street — came through at .84 as mid-grey behind the
+     synopsis, which is legible in the sense that the letters can be made out and not in the sense
+     that anyone reads three lines of it from a sofa. Holding .95 to the 42% mark puts the entire
+     info column on a flat dark ground, and the fall-off then happens across the middle of the
+     frame where nothing is written.
+     THE PICTURE IS STILL THE SCREEN, which is what stops this becoming a black panel: the right
+     half keeps its old values almost exactly, so the artwork reads at full strength where the
+     sources panel floats over it and only fades where type needs it to. Two flat gradients, no
+     radial and no blur — the fill-rate rule at the head of this section is unchanged. */
+  /* THE FALL-OFF IS AN S-CURVE, WRITTEN OUT AS STOPS. A CSS gradient interpolates LINEARLY between
+     the stops it is given, and a linear ramp between two alpha values has a corner at each end —
+     the rate of change starts and stops instantly. Over a wash this wide those corners are exactly
+     what reads as an edge: not a line, but a place where the picture visibly begins, which is what
+     was reported here. Perception makes it worse than the numbers suggest, because the eye is
+     tuned to the second derivative and a corner is where that is infinite (Mach banding).
+     Eight stops approximating a smoothstep have no corner to find: the darkening eases out of the
+     flat left side and eases into the picture at the right, so there is no point along the frame
+     where the change announces itself. Same two layers, same endpoints, same cost — the extra
+     stops are resolved once when the layer is rasterised. */
   background:
-    linear-gradient(90deg, rgba(0, 0, 0, .94) 0%, rgba(0, 0, 0, .84) 28%, rgba(0, 0, 0, .42) 58%, rgba(0, 0, 0, .28) 100%),
+    linear-gradient(90deg,
+      rgba(0, 0, 0, .97) 0%,
+      rgba(0, 0, 0, .95) 40%,
+      rgba(0, 0, 0, .93) 48%,
+      rgba(0, 0, 0, .86) 56%,
+      rgba(0, 0, 0, .70) 65%,
+      rgba(0, 0, 0, .52) 73%,
+      rgba(0, 0, 0, .38) 81%,
+      rgba(0, 0, 0, .29) 89%,
+      rgba(0, 0, 0, .26) 100%),
     linear-gradient(0deg, rgba(0, 0, 0, .8) 0%, rgba(0, 0, 0, .25) 34%, transparent 62%);
 }
 
@@ -1157,9 +1249,12 @@
 
 /* ---- The two columns.
    Padding is the overscan margin — a set that still overscans cuts roughly 5% off each edge, so
-   nothing readable may sit inside that band. `align-items: end` bottom-anchors the copy against
-   the picture the way the row billboards already do, and stretching only the panel means the
-   left column never reflows when a synopsis runs long. */
+   nothing readable may sit inside that band.
+   `align-items: start` is the screen's one anchor line: both columns begin at the top overscan
+   edge, so the wordmark and the chip above the sources sit level and the screen reads as one
+   thing. It was `end` when the copy was bottom-anchored against the picture (see `.tv-det-info`),
+   and each column has since had to say otherwise in its own rule — the panel with `start`, the
+   deck with `stretch`. Only the deck still needs to: it fills the column by design. */
 .tv-det-grid {
   position: absolute;
   inset: 0;
@@ -1167,11 +1262,37 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) clamp(400px, 33vw, 620px);
   gap: clamp(32px, 4vw, 76px);
-  align-items: end;
+  align-items: start;
+  /* The padding is the overscan band and nothing else — it is where the SOURCES column starts, and
+     that column was already sitting right. Dropping the whole screen by padding this moved the
+     panel with it, which is what the extra breathing room the left column wanted cost. So the left
+     column asks for its own offset instead (see `.tv-det-info`). */
   padding: clamp(40px, 6vh, 76px) clamp(48px, 4.5vw, 92px);
 }
+/* TOP-ALIGNED, LEVEL WITH THE PANEL BESIDE IT — and this has now been all three things.
+   It began bottom-anchored, inherited from the row billboards where that is right for a reason
+   that does not hold here: a billboard's copy sits on a plate at the foot of a 16:9 card, and this
+   screen has no card. That wedged the type against the bottom overscan band with the upper half of
+   the picture empty.
+   Then centred, to halve the per-title drift — the block's height changes with the copy (one line
+   of genres or two, credits or none), so wherever it is anchored, the other end moves.
+   Centring fixed the drift and created a worse problem, which is what this is: the two columns
+   are ONE screen and they were starting at two different heights, the wordmark floating somewhere
+   in the middle of the frame while the source list began at the top of it. Nothing on screen
+   explains that offset, and the eye has to travel down and back up to read the pair.
+   Start-aligned they share a line, and the drift the centring was buying off is spent where it
+   costs least: at the BOTTOM, over empty artwork, rather than on the title itself. */
 .tv-det-info {
-  align-self: end;
+  /* CENTRED IN THE FRAME. The column has been every one of bottom-anchored, top-anchored and this,
+     and the reason it lands here is that its HEIGHT IS NOT FIXED: the copy is one line of genres or
+     two, credits or none, a two-line synopsis or three. Anchored at either end, the whole of that
+     variation is paid at the other one — top-anchored, the last line of credits sits at a different
+     height on every title; bottom-anchored, the wordmark does. Centred, each end moves by half as
+     much and neither is the one that carries it all.
+     The wordmark is the thing worth holding steady, and centring is what comes closest to holding
+     it. The right-hand column keeps its own alignment (start, or stretch as a deck), so the chip
+     row is where it has always been. */
+  align-self: center;
   min-width: 0;
   max-width: 62ch;
 }
@@ -1205,59 +1326,148 @@
   transition: opacity .45s ease;
 }
 .tv-det-title .title-logo.rdy { opacity: 1; }
+/* ---- THE FACTS LINE: ★ 6.8 │ 2020 │ 12+ │ 1h 55min │ Adventure · Fantasy · Action ----------
+   A FLEX ROW OF CELLS, NOT A SENTENCE. It used to be one string joined with "  ·  " and a second,
+   dimmer line of genres beneath it. Both went for the same reason: a certificate is a CHIP — a
+   red box with its own padding — and a chip cannot be joined into a string, nor sat in a line
+   whose spacing is two literal spaces around a dot.
+   `align-items: center` is what keeps the chip's box from riding above the baseline of the words
+   either side of it, and the wrap is real: six cells at 23px do not fit a 4:3 panel's left column,
+   and the genres are the cell that should fall to the next line when they don't. */
 .tv-det-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 14px;
   font-family: var(--font-mono);
   font-size: clamp(17px, 1.15vw, 23px);
   letter-spacing: .04em;
   color: #e6e6e6;
-  margin-bottom: 8px;
-}
-.tv-det-genres {
-  font-size: clamp(16px, 1.05vw, 21px);
-  letter-spacing: .02em;
-  color: #a9a9a9;
   margin-bottom: clamp(14px, 1.8vh, 24px);
 }
-/* Three lines, hard. A synopsis is context, not the reason the screen is open — and an
-   uncapped one pushes the action row down the frame, which on a fixed-height layout is the
-   difference between WATCH sitting where the eye expects it and moving per title. */
+/* THE DIVIDER IS DRAWN, NOT TYPED. A "│" glyph is a character in the mono face: it inherits the
+   text's weight and colour, so it reads as loud as the facts it is separating, and it takes the
+   line's letter-spacing on both sides so the gaps come out uneven. A short rule sits behind the
+   words where a divider belongs, and — being a pseudo-element on every cell but the first — it
+   cannot be left dangling at the end of the line or doubled up when a cell is absent.
+   IT IS 2px AT 45%, not 1px at 28%: this line is read from across a room, and a hairline at a
+   quarter opacity is the first thing a television's own picture processing loses. The rule still
+   has to stay quieter than the facts either side of it — it is punctuation, not a fact — which is
+   what keeps this short of a full-strength line. */
+/* `min-width: 0` IS WHAT KEEPS A DIVIDER OFF THE START OF A LINE. A flex item will not shrink below
+   its own content by default, so the genres — the one cell long enough to matter — could not wrap
+   INSIDE the cell and were carried whole onto the next line instead. The rule that draws the
+   divider sits on the cell, so it went with them: a title with two lines of genres began its second
+   line with a dangling "│" that separated nothing. Released, the cell breaks its own text and the
+   divider stays where it belongs, between two things. */
+.tv-det-metabit { display: inline-flex; align-items: center; min-width: 0; }
+.tv-det-metabit + .tv-det-metabit::before {
+  content: '';
+  width: 2px;
+  height: 1em;
+  border-radius: 1px;
+  margin-right: 14px;
+  background: rgba(255, 255, 255, .45);
+  /* Pinned to the FIRST line rather than centred, for the cell that now wraps: centred, the rule
+     would float halfway down a two-line block of genres, level with nothing. `.1em` is the half
+     leading a normal line box puts above the type, so a one-line cell is unchanged. */
+  align-self: flex-start;
+  margin-top: .1em;
+}
+/* THE CERTIFICATE. The one thing in this line that is a mark rather than a word, so it is the one
+   thing with a fill.
+   A LITERAL RED, NOT `--accent`, and that is not an oversight to tidy up later: this build's accent
+   IS WHITE (app.css), so painting the chip with it would put white on white and delete it. Red is
+   not decoration here — it is the colour a certificate is printed in on every poster and box in
+   the world, and it is the one thing on this screen that is allowed to be alarming.
+   `.28em` of side padding rather than pixels, so a three-character "PG-13" and a two-character
+   "12" are both a box around their own text at any of the sizes this line clamps between. */
+.tv-det-age {
+  padding: .1em .28em;
+  border-radius: 3px;
+  background: #e50914;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: .02em;
+  /* Slightly under the line's own size: a certificate is a qualifier, and at full size the red
+     box out-shouts the title's own wordmark a few pixels above it. */
+  font-size: .86em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+/* SIX LINES, WHICH IS MOST SYNOPSES IN FULL. It was three, hard — and the cap was written for a
+   layout that no longer exists: the argument was that an uncapped synopsis pushes the ACTION ROW
+   down the frame, and the action row (WATCH and the two discs beside it) has since moved out of
+   this column entirely, into the chip row above the panel. Nothing below the plot moves with it
+   any more; the column is centred, so it grows about its own middle over empty artwork.
+   What three lines actually bought, then, was an ellipsis on almost every title — a synopsis cut
+   off mid-sentence with no way to read the rest, which on a screen with no pointer is a dead end
+   rather than a summary. Six clears the great majority of TMDB overviews outright.
+   IT IS STILL A CAP, because a handful of them are essays: at six the block is about a third of
+   the frame, and past that the picture stops being a picture. A title that long still ends in an
+   ellipsis, which is the honest thing for the tail nobody was going to read from a sofa. */
 .tv-det-plot {
   margin: 0 0 clamp(14px, 1.8vh, 22px);
   font-size: clamp(18px, 1.2vw, 25px);
   line-height: 1.5;
   color: #d2d2d2;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 /* The cast column, flattened to two lines. The web version is a sticky sidebar of circular
    headshots; at 38px they are unreadable from a sofa, so the names — the actual information —
    ship as text and a dozen image requests do not happen at all. */
+/* ---- CREDITS AS A SMALL TABLE ---------------------------------------------------------------
+   Two rows, two columns: the labels in the first, the names in the second, each column sharing one
+   left edge. As a stack of inline text this was two ragged blocks — a wrapped cast list returned
+   under its own LABEL, so the second line started in a column nothing else used, and the two
+   credits lined up with each other nowhere.
+   `auto 1fr` rather than a fixed label width: the labels are two words in one language and two
+   quite different ones in the next (ka/ru are longer), and a hard-coded column is a number that is
+   right in English and wrong everywhere else. Baseline alignment, not centre — these are two runs
+   of type at different sizes, and what has to agree is the line they sit on. */
 .tv-det-credits {
   margin-bottom: clamp(20px, 2.6vh, 34px);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.tv-det-credit {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: clamp(12px, 1vw, 20px);
+  row-gap: 8px;
+  align-items: baseline;
   font-size: clamp(15px, 1vw, 20px);
   line-height: 1.45;
-  color: #b8b8b8;
+}
+/* WRAPS NOW, AND THAT IS ONLY SAFE BECAUSE THE COLUMN EXISTS. This was one nowrap line with an
+   ellipsis, on the argument that a second line of names is not worth the height. The argument was
+   really against the OLD shape: wrapping put the continuation under the label, in a column of its
+   own, which is what made a long cast look broken. Inside the grid a second line lands under the
+   first NAME and the block stays a tidy rectangle, so the names can simply be shown.
+   Two lines is still the ceiling — past that it is a document rather than a cue — and the clamp
+   ends it with an ellipsis instead of letting a twelve-name list run down the frame.
+   `min-width: 0` is the grid release that lets the column shrink to its track at all; without it
+   the text pushes the column wider than the frame instead of wrapping inside it. */
+.tv-det-credit-names {
+  min-width: 0;
+  color: #d6d6d6;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* THE LABEL IS THE QUIET HALF, and it was the loud one: `--accent` is WHITE in this build, so the
+   word "CASTS & CREDITS" was printing brighter than the names it introduces — the eye landed on
+   the word for the category rather than on the answer. Grey at 45% keeps it legible as a heading
+   and lets the names lead, which is the order they are read in. */
 .tv-det-credit-role {
   font-family: var(--font-mono);
   font-size: .74em;
   letter-spacing: .16em;
   text-transform: uppercase;
-  color: var(--accent);
-  margin-right: 10px;
+  color: rgba(255, 255, 255, .45);
+  white-space: nowrap;
 }
 :root[data-lang="ka"] .tv-det-credit-role {
   text-transform: none;
@@ -1717,10 +1927,11 @@
    Weight alone was doing the first job and it was too quiet next to an opaque white bar — the
    current season looked like nothing in particular once focus was elsewhere in the list. Grey
    rather than another white: under the bar the two would otherwise be indistinguishable, and
-   this way a focused-AND-current row still reads as both. */
+   this way a focused-AND-current row still reads as both. The panel carries the meaning on its
+   own, so the weight stays level with every other option — bolding it too made the current row
+   sit at a different size from its neighbours for no extra information. */
 .tv-chipmenu-opt.on {
   color: #fff;
-  font-weight: 700;
   background: rgba(255, 255, 255, .17);
 }
 /* The ink flips against the bar, and the ring goes.
@@ -2328,7 +2539,9 @@
    off in the component under the same query. */
 @media (prefers-reduced-motion: reduce) {
   .tv-spot-strip { transition: none; }
-  .tv-spot-layer { transition: none; }
+  .tv-spot-layer,
+  .tv-spot-plate,
+  .tv-spot-plate.on { transition: none; }
   /* The preview still plays — it is content, not decoration, and the modal treats it the same
      way — but it cuts in rather than dissolving. */
   .tv-spot-trailer-slot iframe,
@@ -2349,6 +2562,11 @@
   .tv-spot.is-open .tv-spot-info { animation: none; }
   .tv-spot-hero { transition: none; }
   .tv-shell .tv-spot-hero:focus-visible { transform: scale(1); }
+  /* The search bar keeps its WHITE FILL under this query and loses only the growing — the fill is
+     the whole of what says "the remote is in here", and dropping it would leave the one focus stop
+     on the page unmarked. Same trade as the billboard directly above. */
+  .tv-shell #explore .search { transition: none; }
+  .tv-shell #explore .search:focus-within { transform: scale(1); }
   .tv-hero-layer { transition: none; }
   .tv-hero-copy { animation: none; }
   .tv-hero-reveal, .tv-nav-items, .tv-nav-item.active { transition: none; }
@@ -4061,20 +4279,451 @@
   border-radius: 8px;
 }
 
+/* ============================================================================================
+   THE FILTER ROW — search · type · genre · year · rating, on one line above the results.
+
+   IT IS A ROW BECAUSE A PANEL WAS A SECOND SURFACE. The ☰ that used to sit in the search bar was
+   a focus stop whose entire job was to reveal more focus stops, and what it revealed covered the
+   grid it was filtering. Every control now sits one press from the field, and the results stay on
+   screen while they change — which is the only way to tell whether a filter did what you meant.
+
+   EACH CONTROL WEARS ITS OWN LABEL, in the small caps this build already uses for a field name
+   (`.tv-det-credit-role`, the settings rows). On a panel the label could sit in a left-hand
+   column shared by every row; in a line there is nowhere for it to go but above the control, and
+   it has to be there — four unlabelled pills reading "All", "Genre", "any year", "any rating" say
+   nothing about which axis each one moves.
+
+   ONE HEIGHT FOR EVERY CONTROL, and this is a reversal of what stood here before.
+   The row used to align to the bottom and let each control keep its natural height — a 58px search
+   plate beside ~40px chips — on the argument that different controls should look different. On a
+   panel seen from a sofa that argument loses to the simpler one: five boxes of five heights on one
+   line read as a row that failed to line up, not as five kinds of control. The KIND is already said
+   by what is inside each box (a caret, a caret pair, a magnifier) and by the label above it. So the
+   height is a single variable every control on the row is cut to, and the row aligns to the bottom
+   only so the labels sit on a common line above them. */
+.tv-shell #explore {
+  /* The one number the whole row is built from — field height. Everything else (radius, the
+     labels' leading, the horizontal padding) is derived or clamped alongside it, so the row can be
+     retuned for a panel size from here rather than in six places. */
+  --tv-filt-h: clamp(44px, 5.4vh, 60px);
+  --tv-filt-fill: rgba(255, 255, 255, .07);
+}
+/* THIS PAGE IS ONE ROW WITH A HEADER ABOVE IT, which is not quite what `.tv-onerow` assumes: it
+   centres its whole content, and centring a filter row means the controls drift down the screen as
+   the row under them changes height. The filters belong at the top — they are the header — and the
+   results take the space that is left and centre in THAT. So the section stays the full-height flex
+   column `.tv-onerow` makes it, and the centring moves one level in.
+   `min-height: 0` on the body is the usual flex release: without it a flex child refuses to shrink
+   below its content, which is how a page that is supposed to fit the screen ends up scrolling
+   anyway. */
+.tv-shell #explore.tv-onerow { justify-content: flex-start; }
+.tv-shell #explore.tv-onerow .explore-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.tv-shell #explore .tv-filterbar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: clamp(10px, 1.1vw, 20px);
+  /* POSITIONED, BUT NOT STICKY. It was sticky — inherited from the search plate it replaced, so
+     the controls stayed reachable while a long grid of results scrolled under them. The results
+     are one billboard row now and the page is sized to the screen (`.tv-onerow` below), so there
+     is nothing to scroll and nothing to stick to: left sticky, the row simply rode up into the top
+     bar on the last few pixels of overscroll and printed its labels through the nav's.
+     `relative` stays, because the z-index is doing a second job — the chip menus and the genre
+     board drop out of this row and over the billboard beneath it. */
+  position: relative;
+  z-index: 60;
+  margin: clamp(10px, 2vh, 26px) 0 clamp(18px, 2.6vh, 34px);
+}
+/* The search field takes the slack; each menu is a fixed box rather than a chip shrink-wrapped to
+   whatever it currently says. A chip that is as wide as its own value RESIZES when the value
+   changes — pick "2019+" after "any year" and the control shrinks and drags the two beside it
+   sideways, which on a row that is meant to sit still is the worst kind of movement: it happens
+   after the press, to something other than what was pressed. A fixed cell also lets the caret park
+   at the right edge, where it means "this opens" rather than trailing the word like punctuation. */
+.tv-shell #explore .tv-filt {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(5px, .7vh, 9px);
+  flex: 0 0 auto;
+  width: clamp(130px, 10.5vw, 190px);
+  min-width: 0;
+  /* Positioned so the cells paint ABOVE the travelling pill. Left unpositioned they are ordinary
+     flex items, which the browser paints in an earlier phase than ANY positioned element — the
+     pill would cover the very label and value it is meant to be sitting behind. (Same fix, same
+     reason, as `.tv-nav-item` and `.tv-chipmenu-opt`.) */
+  position: relative;
+  z-index: 1;
+}
+/* ---- THE TRAVELLING PILL ------------------------------------------------------------------
+   One white shape that slides between the five fields, exactly as the top bar's does — the whole
+   argument is written against `.tv-nav-mark`, and it applies here for the same reason: a per-field
+   fill can only cut, and there is then nothing moving between Genre and Type for the eye to
+   follow. Placed and sized from whichever control has focus (see TvExplore's `place`), in the
+   row's own coordinates — the row is `position: sticky`, which makes it the offsetParent.
+   Transform and size only, on one element nothing else's layout depends on, so a step never
+   reflows the row. */
+.tv-shell #explore .tv-filt-mark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  border-radius: 999px;
+  background: #fff;
+  pointer-events: none;
+  z-index: 0;
+}
+/* Armed one frame after the pill is first placed, so arriving on the row is a placement rather
+   than a slide in from the row's left edge. */
+.tv-shell #explore .tv-filterbar.is-armed .tv-filt-mark {
+  transition:
+    transform .28s cubic-bezier(.2, .7, .2, 1),
+    width .28s cubic-bezier(.2, .7, .2, 1),
+    height .28s cubic-bezier(.2, .7, .2, 1);
+}
+/* Genre and rating carry the longest values ("Sci-Fi & Fantasy · 2", "any rating"), year the
+   shortest — so the two that need it get a wider cell rather than every cell being sized for the
+   worst case and the row losing that width from the search field. */
+.tv-shell #explore .tv-filt-wide { width: clamp(152px, 12.5vw, 225px); }
+/* After the two above, so the flexible cell's own sizing is the last word on it.
+   THE BASIS IS SMALL AND THE GROWTH IS UNCAPPED, and the two halves of that do different jobs. The
+   basis is what the row is measured against for wrapping, and at 34vw it was too much: the four
+   menus wanted ~55vw between them, so rating had nowhere to go and dropped to a second line, taking
+   its label with it and pushing the grid down by a whole control. Growth happens after the line is
+   settled and cannot cause a wrap, so the field can then take every remaining pixel — which is what
+   fills the plate out to meet the filter group instead of leaving a dead lane between them. The
+   menus end up hard against the right edge for free: there is no slack left for them to sit in. */
+.tv-shell #explore .tv-filt-search { flex: 1 1 clamp(260px, 27vw, 480px); width: auto; min-width: 220px; }
+.tv-shell #explore .tv-filt-k {
+  /* SENTENCE CASE, NOT SMALL CAPS. Tracked-out uppercase is this build's voice for a section
+     heading, and these are not headings — they are field names, sitting a few pixels above a
+     control that says the same kind of thing in the same size. At 800/.18em they read as the
+     louder of the two, which is backwards: the label is the quiet half of the pair. */
+  font-size: clamp(12px, 1.45vh, 16px);
+  font-weight: 500;
+  letter-spacing: .01em;
+  color: rgba(255, 255, 255, .55);
+  /* Never the thing the eye lands on: it names a control that is itself the loud object when the
+     remote arrives. Padding-left aligns it with the field's own text rather than its pill edge. */
+  padding-left: clamp(10px, .8vw, 16px);
+  white-space: nowrap;
+}
+
+/* ---- THE FOCUS INDICATOR IS THE PILL, AND THE FIELDS GET OUT OF ITS WAY --------------------
+   The row used to say "the remote is here" the way the title screen's chips do: fill the control
+   white and swell it 6%. On a title screen that is one control alone in a corner, and it is right.
+   In a row of five it is wrong twice — the swell shoves 20px of white into the gap beside a
+   neighbour that has not moved, and the fill can only CUT from one field to the next, so walking
+   the row read as five things blinking rather than one selection being carried across it.
+   So this row borrows the top bar's answer instead: ONE white pill that slides (see `.tv-filt-mark`
+   below and TvTopNav, which made the same argument for the same reason). Each field then has only
+   to stop drawing its own fill while it is the focused one, and flip its ink to sit on the white.
+   `background: transparent`, NOT the row's tint: the pill is behind the field, so anything opaque
+   in front of it hides the very thing that arrived. */
+.tv-shell #explore .tv-chipmenu .tv-chipmenu-btn:focus-visible,
+.tv-shell #explore .tv-chipmenu.is-open .tv-chipmenu-btn {
+  outline: none;
+  background: transparent;
+  border-color: transparent;
+  color: #0b0b0b;
+  transform: none;
+}
+/* AND THE OPTIONS' INK FLIPS TOO. The travelling white bar is unscoped and slides here already;
+   the rule that turns the text under it dark is `.tv-det`-scoped, so without this the bar would
+   arrive under grey-on-white and the option would read as blank. `:focus` rather than
+   `:focus-visible` for the reason written against the .tv-det copy — the bar is placed from the
+   `focus` event, so both halves of one indicator must key off the same thing. */
+.tv-shell #explore .tv-chipmenu .tv-chipmenu-opt:focus {
+  outline: none;
+  border-radius: 10px;
+  color: #0b0b0b;
+}
+/* The chip grows about its own left edge on this page (the title screen's grows about the right,
+   because it is right-aligned against a column). A control at the head of a row must grow away
+   from the edge it is aligned to, or the zoom reads as a slide. */
+.tv-shell #explore .tv-chipmenu-btn { transform-origin: 0% 50%; }
+
+/* ---- ONE FIELD, FOUR TIMES -----------------------------------------------------------------
+   The two menu components are drawn as the same box as the search plate beside them: same height,
+   same radius, same fill, caret parked at the right edge. Only here — the title screen's chips are
+   a control floating over artwork and keep their outline and their near-black fill, which is what
+   makes them legible over a still. On this page they sit on a flat background in a row of four, so
+   the outline is four traced shapes doing what one shared fill does more quietly.
+   The fill is a tint of white rather than a fixed grey, so it holds its relationship to the page
+   whatever is behind it — the same reasoning as the chip's own background note, reached the other
+   way round because here there is never artwork underneath. */
+.tv-shell #explore .tv-chipmenu-btn,
+.tv-shell #explore .tv-multi-btn {
+  width: 100%;
+  height: var(--tv-filt-h);
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 clamp(12px, .9vw, 18px);
+  border-color: transparent;
+  background: var(--tv-filt-fill);
+  border-radius: 999px;
+  font-size: clamp(15px, 1.05vw, 20px);
+  /* The value can be longer than the cell ("Sci-Fi & Fantasy"); it clips at the padding rather
+     than widening the control, which is the whole point of a fixed cell. */
+  overflow: hidden;
+}
+.tv-shell #explore .tv-chipmenu-btn:hover { background: rgba(255, 255, 255, .12); }
+
+/* ---- THE GENRE BOARD (TvMultiMenu) --------------------------------------------------------
+   Everything above applies to its chip too — it is deliberately the same object as the three
+   single-select ones beside it, and the only thing that says otherwise is what opens underneath.
+   The behaviour argument for a board rather than a list is in TvMultiMenu.tsx. */
+.tv-shell #explore .tv-multi { position: relative; z-index: 300; flex: 0 0 auto; }
+/* NO FILL, NO BORDER, NO PADDING, NO FONT-SIZE HERE — the shared field block above owns all four,
+   and this block used to restate them. It is a copy of `.tv-chipmenu-btn`'s own declarations (this
+   component was written against that chip), so it sat LATER in the file at the same specificity and
+   silently won: the genre control kept the title screen's near-black fill and hairline outline while
+   the three chips beside it took the row's tint, and the one that looked different was the one that
+   opens a different thing — which reads as meaning something and does not. */
+.tv-shell #explore .tv-multi-btn {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid transparent;
+  color: #e8e8e8;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transform: scale(1);
+  transform-origin: 0% 50%;
+  transition: background-color .18s ease, color .18s ease,
+              transform .2s cubic-bezier(.2, .7, .2, 1);
+}
+/* A FILTER THAT IS DOING SOMETHING LOOKS DIFFERENT FROM ONE THAT IS NOT, at rest and without
+   being focused. Four chips that read "All / Genre / any year / any rating" and four that are
+   actually filtering must not be the same object, or the only way to find out what the grid is
+   showing is to open each one in turn. A brighter border and full-strength ink is enough — this
+   is a resting state, and a filled chip here would compete with the focused one.
+   IT IS THE FILL THAT LIFTS, NOT A BORDER, since the row's fields no longer draw one — a single
+   outlined box among four filled ones would read as a different kind of control rather than as the
+   same control with something in it. */
+.tv-shell #explore .tv-multi-btn.has-value {
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+}
+.tv-shell #explore .tv-multi-btn:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+/* Same bargain as the chips beside it: the pill draws the white, this gets out of the way and
+   flips its ink. `transparent` here also has to beat `.has-value`'s tint above, which it does on
+   the pseudo-class — a genre already chosen must not paint over the pill that just arrived. */
+.tv-shell #explore .tv-multi .tv-multi-btn:focus-visible,
+.tv-shell #explore .tv-multi.is-open .tv-multi-btn {
+  outline: none;
+  background: transparent;
+  border-color: transparent;
+  color: #0b0b0b;
+  transform: none;
+}
+/* The chevron, drawn rather than typed — two borders rotated, so it cannot be a missing glyph on
+   a set whose system font is not ours. Flips when the board is open, as the chip menu's does. */
+.tv-shell #explore .tv-multi-chev {
+  width: .42em;
+  height: .42em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-.12em) rotate(45deg);
+  transition: transform .2s ease;
+}
+.tv-shell #explore .tv-multi.is-open .tv-multi-chev { transform: translateY(.08em) rotate(225deg); }
+
+/* THE BOARD ITSELF. Anchored to the chip's left edge and sized by its columns rather than by the
+   chip, because it is a surface in its own right — the reference's genre panel is wider than the
+   control that opens it and that is what makes it readable at a distance.
+   `max-width` against the viewport so a long genre list on a 4:3 panel cannot run off the right;
+   the columns wrap inside it before that happens. */
+.tv-shell #explore .tv-multi-board {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 320;
+  padding: clamp(14px, 1.8vh, 22px) clamp(16px, 1.4vw, 26px);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(10, 10, 10, .97);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .7);
+  max-width: min(76vw, 900px);
+}
+.tv-shell #explore .tv-multi-cols {
+  display: flex;
+  gap: clamp(18px, 2.2vw, 44px);
+  align-items: flex-start;
+}
+.tv-shell #explore .tv-multi-col { display: flex; flex-direction: column; min-width: clamp(140px, 12vw, 220px); }
+/* THE OPTIONS DRAW NO RING AND NO TRAVELLING BAR. The chip menu's sliding highlight is a vertical
+   idea — one bar, one axis — and on a board the remote also moves sideways, so it would have to
+   jump columns rather than travel, which is the "two things blinking" that bar exists to avoid.
+   A focused option simply inverts, which is this build's other way of saying the same thing and
+   is what the option rows in every other menu already do. */
+.tv-shell #explore .tv-multi-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: rgba(255, 255, 255, .74);
+  font: inherit;
+  font-size: clamp(15px, 1.05vw, 20px);
+  text-align: left;
+  padding: clamp(7px, .9vh, 11px) clamp(8px, .6vw, 12px);
+  cursor: pointer;
+  transition: background-color .16s ease, color .16s ease;
+}
+.tv-shell #explore .tv-multi-opt:hover { color: #fff; }
+.tv-shell #explore .tv-multi-opt.on { color: #fff; }
+.tv-shell #explore .tv-multi .tv-multi-opt:focus {
+  outline: none;
+  background: #fff;
+  color: #0b0b0b;
+}
+/* THE TICK HOLDS ITS SPACE WHETHER OR NOT IT IS DRAWN — see the note at the markup. Two borders
+   again rather than a ✓, for the same missing-glyph reason as the chevron. The box is sized in em
+   so it tracks the option's own type across both TV resolutions. */
+.tv-shell #explore .tv-multi-tick {
+  flex: 0 0 auto;
+  width: .58em;
+  height: .95em;
+  border-right: 2.5px solid currentColor;
+  border-bottom: 2.5px solid currentColor;
+  transform: rotate(45deg) translate(-.06em, -.06em);
+  opacity: 0;
+  transition: opacity .16s ease;
+}
+.tv-shell #explore .tv-multi-opt.on .tv-multi-tick { opacity: 1; }
+.tv-shell #explore .tv-multi-clear {
+  display: block;
+  margin: clamp(10px, 1.4vh, 16px) 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: rgba(255, 255, 255, .6);
+  font: inherit;
+  font-size: clamp(13px, .95vw, 17px);
+  padding: clamp(6px, .8vh, 10px) clamp(12px, 1vw, 18px);
+  cursor: pointer;
+}
+.tv-shell #explore .tv-multi .tv-multi-clear:focus {
+  outline: none;
+  background: #fff;
+  color: #0b0b0b;
+}
+
 /* ---- SEARCH ---------------------------------------------------------------------------------
    The field is a focus stop on this page only (see Explore.tsx), which makes a visible focus
    state load-bearing: `.search input` is borderless by design, so with the remote inside it
    nothing on screen said so. */
-.tv-shell #explore .search { max-width: min(1100px, 92vw); }
+/* ---- THE BAR IS THE FOCUS INDICATOR, AND THERE IS NO RING ----------------------------------
+   THE WHOLE BAR FILLS IN, exactly as a nav item's pill does: solid white, dark ink, nothing else
+   changed. That is this build's one sentence for "the remote is here", and the search field had
+   been saying it a different way — a 3px outline floating 6px off a borderless input, which is
+   the shape you reach for when a control cannot fill (a poster, a slider row) and which reads as
+   a second box drawn around the first when it can.
+   ON THE BAR, NOT ON THE INPUT. The input is a transparent 1100px strip inside a rounded plate;
+   filling it would paint a white rectangle with dark corners showing through the plate's radius.
+   The plate is the thing with the shape, so the plate is the thing that fills — and `:focus-within`
+   is what lets a container answer for the field inside it.
+   AND A LITTLE ZOOM WITH IT. A colour change alone is static, and this bar is the only stop on the
+   page: the movement is what the eye catches from across a room, the same way the row billboard
+   grows when the remote reaches it. 2% on a 1100px bar is ~22px — a lift rather than a lunge. */
+/* THE PLATE NOW LIVES IN THE ROW, so the three things that made it a standalone bar are undone
+   here rather than in app.css: it was `position: sticky` (the ROW is sticky now — two sticky
+   boxes, one inside the other, is one of them not sticking), `margin: 6px auto 34px` (auto
+   margins centred it in a flex cell that is already exactly its width) and a fixed 680px
+   (the cell is the flexible one on the row and the plate should fill whatever it gets). */
+.tv-shell #explore .tv-filt-search .search {
+  position: static;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  /* Cut to the row's own field height and shape, so the plate and the four menus beside it are one
+     object repeated rather than five near-misses. */
+  height: var(--tv-filt-h);
+  padding: 0 clamp(12px, .9vw, 18px);
+  border-radius: 999px;
+  border-color: transparent;
+  background: var(--tv-filt-fill);
+  /* THE BLUR AND THE SHADOW GO, and they are why the pill looked like it was doing something
+     different here. Both are left over from the plate being a standalone floating bar. A
+     backdrop-filter paints the pill's white through 18px of blur and a saturate, so the shape that
+     slid in arrived soft-edged and slightly off-colour against the crisp one that had just left a
+     chip; the drop shadow then drew a second, darker outline around it that no chip has. The pill
+     is the same object on all five fields, so all five have to be the same kind of surface.
+     `none` rather than deleting app.css's declaration — that rule also dresses the website's
+     search bar, where a floating plate is exactly right. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  /* And the same transition the chips run, so the fill under the pill fades out over the same
+     period the pill takes to arrive. It was .22s here against their .18s, with `transform` still in
+     the list for a zoom that no longer happens. */
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease;
+}
+/* THE MAGNIFIER SITS AT THE FAR END, not in front of the placeholder. Leading, it is an icon the
+   eye has to pass to reach the word that actually says what the field is for, and it pushes that
+   word off the left edge the three labels above are aligned to. Trailing, the field starts with
+   its own text like every other control on the row and the icon becomes what it is — a mark on the
+   end of the plate saying which key finishes the job. `order` rather than markup: the same JSX
+   renders the website's bar, where the icon leads and should keep leading. */
+.tv-shell #explore .tv-filt-search .search .search-lead { order: 3; }
+/* NO TRANSFORM LEFT TO REST AT. This used to hold `scale(1)` so the 2% focus swell had an identity
+   to return to without handing back its compositor layer mid-type; the swell is gone (the pill
+   moves instead), and a transform kept for an animation that no longer exists is just a layer this
+   row pays for on every repaint. The transition lives on the `.tv-filt-search` rule above, matched
+   to the chips'. */
+.tv-shell #explore .search {
+  max-width: min(1100px, 92vw);
+}
+/* The ink fades rather than snapping, on the chips' own timing — the pill takes 280ms to arrive and
+   a placeholder that turned black the instant the key was pressed was the other half of why this
+   field read as a different kind of control from the four beside it. */
+.tv-shell #explore .search input,
+.tv-shell #explore .search .search-lead {
+  transition: color .18s ease;
+}
 .tv-shell #explore .search input {
   font-size: clamp(16px, 2vh, 22px);
   scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px 0;
 }
-.tv-shell #explore .search input:focus-visible {
-  outline: 3px solid var(--tv-ring);
-  outline-offset: 6px;
-  border-radius: 8px;
+/* THE RING IS GONE. Restated rather than deleted: app.css gives every input `outline:none` but the
+   TV shell puts a ring on anything focusable at the foot of this file, so `:focus-visible` here
+   has to say no explicitly or the generic rule paints one over the white plate. */
+.tv-shell #explore .search input:focus-visible { outline: none; }
+/* `.tv-filt-search` is in the selector to outscore the resting fill set on the plate in the row
+   block above — same id, one more class — and not because the state belongs to the row. Without it
+   the plate would keep its 7% tint with the remote inside it and the field would be the one control
+   on the page that does not say where the remote is.
+   THE WHITE IS THE TRAVELLING PILL NOW, so this clears the plate rather than filling it, and the
+   2% swell goes with it: the pill arrives from the chip beside it and the plate must not also grow
+   under it. The ink rules below are unchanged — they key off the same `:focus-within` and are what
+   makes the placeholder and the magnifier legible once the white is behind them. */
+.tv-shell #explore .tv-filt-search .search:focus-within {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
+/* THE INK FLIPS WITH THE FILL, and all of it has to: the placeholder, the magnifier and the filter
+   glyph are all painted in white-with-alpha at rest, which on a white plate is nothing at all.
+   Placeholder at 55% black rather than the same 42% white inverted — grey text on white needs more
+   contrast than grey text on black to read as the same weight from a sofa. */
+.tv-shell #explore .search:focus-within input { color: #0b0b0b; }
+.tv-shell #explore .search:focus-within input::placeholder { color: rgba(0, 0, 0, .55); }
+.tv-shell #explore .search:focus-within .search-lead { color: rgba(0, 0, 0, .62); }
+.tv-shell #explore .search:focus-within .filter-toggle { color: rgba(0, 0, 0, .62); }
+/* THE FILTER GLYPH IS ITSELF A STOP, and it lives INSIDE the bar — so walking onto it keeps the
+   plate white (it is still focus-within) while the shared ring paints white-on-white and vanishes.
+   The ring flips with the ink for the same reason the ink flips with the fill. */
+.tv-shell #explore .search:focus-within .filter-toggle:focus-visible { outline-color: rgba(0, 0, 0, .62); }
 .tv-shell #explore .pill-btn { font-size: clamp(13px, 1.6vh, 17px); padding: clamp(8px, 1.1vh, 12px) clamp(14px, 1.3vw, 20px); }
 .tv-shell #explore .pill-btn:focus-visible { outline: none; background: #fff; border-color: #fff; color: #0b0b0b; }
 
@@ -4188,7 +4837,7 @@
   background-size: cover;
   background-position: center;
 }
-/* The title plate — the same bottom-up scrim as `.tv-spot-card-in`, at a scale where it is a
+/* The title plate — the same bottom-up scrim as `.tv-spot-scrim`, at a scale where it is a
    gradient rather than a panel. */
 .tv-shell .cfg-tvrow-plate {
   position: absolute; left: 0; right: 0; bottom: 0;

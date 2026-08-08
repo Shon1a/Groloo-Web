@@ -132,9 +132,10 @@ export default function Home() {
             // live poster tile, so ~13 rows put ~260 decoded bitmaps on the home screen —
             // the largest passive memory load in the app and a real out-of-memory risk on a
             // webOS TV. HOME_RAIL_CAP fills the viewport (~9 cards at 1080p) with comfortable
-            // scroll beyond it, and nothing is lost: every rail's "See all" opens the full
-            // browse grid. Invisible on screen — the first ~9 cards are unchanged, which is
-            // all a rest-state view or a screenshot ever shows.
+            // scroll beyond it, and nothing is lost: on the web every rail's "See all" opens the
+            // full browse grid, and on TV the card at the end of the row lengthens it in place
+            // from the same catalogue (TvHomeRow). Invisible on screen — the first ~9 cards are
+            // unchanged, which is all a rest-state view or a screenshot ever shows.
             const list = (rows[row.cat]?.results ?? []).filter((m) => m.poster).slice(0, HOME_RAIL_CAP);
             if (!list.length) return null;
             return (

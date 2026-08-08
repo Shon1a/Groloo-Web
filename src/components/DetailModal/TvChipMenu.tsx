@@ -44,9 +44,20 @@ export interface TvChipMenuProps {
   onSelect: (key: string) => void;
   /** names the popup for a screen reader — the chip itself is named by its label */
   ariaLabel: string;
+  /* WHAT THE CHIP SAYS WHILE IT IS ON ITS FIRST OPTION — the field's own name, for a menu whose
+   * first option means "no choice made" ("any year", "any rating", "All"). A filter row of those
+   * phrases says what each control is NOT doing, in three different wordings, where the label above
+   * it has already said what it IS; naming the field instead makes the resting row read Type ·
+   * Genre · Year · Rating, and the moment anything is chosen the chip shows the choice.
+   * THE OPTION KEEPS ITS OWN WORDING. Inside the open menu "any year" is the right label — it is
+   * the row you press to clear the filter, and "Year" there would name the menu, not the option.
+   * That is why this is a separate prop rather than a rewrite of options[0].
+   * Optional, and unset everywhere else: the season and source pickers have no such option, and
+   * their first entry is a real choice like any other. */
+  placeholder?: ReactNode;
 }
 
-export default function TvChipMenu({ options, value, onSelect, ariaLabel }: TvChipMenuProps) {
+export default function TvChipMenu({ options, value, onSelect, ariaLabel, placeholder }: TvChipMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -111,6 +122,10 @@ export default function TvChipMenu({ options, value, onSelect, ariaLabel }: TvCh
 
   if (options.length < 2) return null;
   const current = options.find((o) => o.key === value) ?? options[0];
+  /* First option === nothing chosen, by the convention every caller with a placeholder follows
+     (the clearing entry is written first so it is where the menu opens). Falling back to the
+     option's own label keeps the chip correct for the pickers that pass no placeholder. */
+  const chipLabel = placeholder != null && current.key === options[0].key ? placeholder : current.label;
 
   return (
     <div
@@ -129,7 +144,7 @@ export default function TvChipMenu({ options, value, onSelect, ariaLabel }: TvCh
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        {current.label}
+        {chipLabel}
         {/* Drawn in CSS rather than set as `⌄`. The glyph is hairline at this size, and it is a
             character a TV's system font may simply not have — a missing-glyph box on the one
             control that says the menu opens is not a risk worth taking for two borders. */}

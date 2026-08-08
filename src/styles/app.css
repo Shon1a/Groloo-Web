@@ -333,7 +333,12 @@
   @keyframes fpop{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
   .fp-row{display:flex;align-items:flex-start;gap:18px;padding:10px 0;border-bottom:1px solid var(--border)}
   .fp-row:last-of-type{border-bottom:none}
-  .fp-row > .k{width:72px;flex-shrink:0;font-size:15px;letter-spacing:.16em;color:var(--text-muted);padding-top:6px}
+  /* The caps are DRAWN here, not typed into the string. They used to be baked into the English
+     "TYPE"/"GENRE"/"YEAR"/"RATING", which meant the tracked-out look was a property of one locale's
+     copy — ka.json says "ტიპი" and always rendered plain — and it left the TV's version of the same
+     four labels shouting where that row wants them quiet. The strings are sentence case now and the
+     panel asks for the case it wants. */
+  .fp-row > .k{width:72px;flex-shrink:0;font-size:15px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-muted);padding-top:6px}
   .pills{display:flex;flex-wrap:wrap;gap:7px}
   .pill-btn{font-size:16px;padding:5px 11px;border:1px solid var(--border);border-radius:20px;cursor:pointer;
     color:var(--text-muted);transition:.2s;background:none}

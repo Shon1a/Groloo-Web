@@ -45,7 +45,7 @@ import { FadeBg, FadeImg } from './FadeArt';
  * nobody has seen — 13 rows made it the largest passive load on the screen. Nothing is lost: the
  * card at the end of every row opens the full browse grid. Rows that ARE a page (TV / Movies /
  * Anime) pass their own `max` and are unaffected. */
-const SPOT_MAX = 10;
+export const SPOT_MAX = 10;
 
 /* ms the remote must sit still on a title before its trailer is even asked for.
  *
@@ -168,10 +168,6 @@ const IcSoundOff = (
   </svg>
 );
 
-function isSeries(it: MediaItem) {
-  return it.type === 'tv' || it.type === 'series';
-}
-
 export interface TvSpotlightProps {
   items: MediaItem[];
   /** Row heading. Defaults to "Featured". */
@@ -242,7 +238,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * second affordance to explain — the row just got one card longer.
    *
    * It is conditional on a destination existing. Add-on catalogue rows (AddonRows) render through
-   * the same component with no `cat`, and a card that goes nowhere is worse than no card. */
+   * the same component with no `cat`, and a card that goes nowhere is worse than no card.
+   *
+   * NO CALLER PASSES `cat`/`onSeeAll` ANY MORE — the home rows were the last, and they now end in
+   * the "+" card instead (TvHomeRow), so a row lengthens rather than navigating away. The branch is
+   * kept because it is the honest answer for a row whose contents are NOT a category the API can
+   * page through, which is the next kind of row anyone adds. */
   const canSeeAll = !!cat && !!onSeeAll;
   const canMore = !canSeeAll && !!onMore;
   const hasEnd = canSeeAll || canMore;
@@ -811,17 +812,42 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         return { ...s, [back]: slot, front: back };
       });
     };
-    /* The end card has no artwork by design, and an `enrich` row whose detail has not landed yet
+    /* ---- THE WORDMARK IS PART OF THE SWAP, NOT SOMETHING THAT CATCHES UP WITH IT --------------
+     * THE DEFECT: the picture arrived whole and the title did not. The gate below waited on the
+     * BACKDROP only, so a press flipped the layers the moment the photograph was decoded and the
+     * plate began its rise 110ms later with whatever the logo happened to be — which for a cold
+     * card is nothing at all. The wordmark then faded in on its own clock a few hundred
+     * milliseconds after the card it belongs to, and on a walk it read as the billboard changing
+     * twice: first the photograph, then, separately, the name of what you are looking at.
+     *
+     * The cascade this row is built around is picture → wordmark → copy, and that is a matter of
+     * TIMING, not of readiness: each beat is deliberate and each one is supposed to be complete
+     * when it starts. A logo that is merely late is not the third beat arriving, it is the second
+     * beat failing.
+     *
+     * So both pictures are decoded before the layers trade places. They are asked for together
+     * rather than in sequence — a wordmark is a ~20KB PNG against a 780px JPEG, so it is almost
+     * never the one being waited on, and serialising them would add its round trip to the
+     * backdrop's for no reason. The cap below covers the pair exactly as it covered the one.
+     *
+     * The end card has no artwork by design, and an `enrich` row whose detail has not landed yet
      * has none to wait for either — both dissolve immediately, exactly as before. */
-    const url = slot === 'end' ? '' : billboardUrl(withArt(slot));
-    if (!url) { flip(); return; }
+    const art = slot === 'end' ? null : withArt(slot);
+    const urls = art ? [billboardUrl(art), logoOf(art) || ''].filter(Boolean) : [];
+    if (!urls.length) { flip(); return; }
 
-    const img = new Image();
-    img.decoding = 'async';
-    img.src = url;
-    if (img.complete && img.naturalWidth > 0) { flip(); return; }
-    if (typeof img.decode === 'function') img.decode().then(flip, flip);
-    else { img.onload = flip; img.onerror = flip; }
+    let left = urls.length;
+    // Only the LAST of the two releases the swap; either failing still counts, because a missing
+    // wordmark is a card that falls back to type and must not hold the picture behind it.
+    const done = () => { if (--left <= 0) flip(); };
+    for (const url of urls) {
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = url;
+      if (img.complete && img.naturalWidth > 0) { done(); continue; }
+      if (typeof img.decode === 'function') img.decode().then(done, done);
+      else { img.onload = done; img.onerror = done; }
+    }
     /* THE CAP IS WHAT KEEPS A GATE FROM BECOMING A STALL. A cold row on a slow set must not leave
      * the billboard on the title you just walked off — past this the swap happens anyway and the
      * old behaviour takes over (gradient, then the photo fading in when it lands), which is a
@@ -867,13 +893,20 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         for (const i of [(active + d) % stops, (active - d + stops) % stops]) {
           const slot = slotAt(i);
           if (slot === 'end') continue;
-          const url = billboardUrl(withArt(slot));
-          if (!url || warmed.has(url)) continue;
-          warmed.add(url);
-          const img = new Image();
-          img.decoding = 'async';
-          img.src = url;
-          if (typeof img.decode === 'function') img.decode().catch(() => { /* 404 / expired signature — the gate's cap covers it */ });
+          const art = withArt(slot);
+          /* THE WORDMARK IS WARMED WITH THE PHOTOGRAPH, because the swap now waits for BOTH (see
+           * the gate above) and a gate is only free if everything it waits on is already in hand.
+           * Warming just the backdrop would have moved the stall rather than removed it: every
+           * press would sit out a cold ~20KB PNG and, often as not, hit the 200ms cap — which is
+           * the exact "blink traded for a lag" this warm exists to prevent. */
+          for (const url of [billboardUrl(art), logoOf(art) || '']) {
+            if (!url || warmed.has(url)) continue;
+            warmed.add(url);
+            const img = new Image();
+            img.decoding = 'async';
+            img.src = url;
+            if (typeof img.decode === 'function') img.decode().catch(() => { /* 404 / expired signature — the gate's cap covers it */ });
+          }
         }
       }
     };
@@ -969,7 +1002,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       backgroundPosition: heroBgPosition(it),
     };
   };
-  const tagFor = (it: MediaItem) => (isSeries(it) ? t('nav.series') : t('nav.movies'));
   /* AT THE SIZE IT IS PAINTED, which for a wordmark on the billboard is 201px wide at most (62%
    * of the card, capped at 84px tall — see tv.css). The URL arrives as w500 and was used as it
    * came, so every logo on the screen was a 2.5x oversample: fetched, decoded and held at four
@@ -1057,6 +1089,38 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
                   <div className="tv-spot-blank">
                     <span className="tv-spot-blank-ic" aria-hidden="true">{endIcon}</span>
                   </div>
+                </div>
+              );
+            }
+            return (
+              <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
+                <FadeBg className="tv-spot-art" {...heroArt(withArt(it))} />
+              </div>
+            );
+          })}
+
+          {/* ---- THE SCRIM IS ONE ELEMENT AND IT NEVER MOVES -----------------------------------
+              It used to be the background of `.tv-spot-card-in`, one per layer, which meant it
+              cross-dissolved WITH the plate — and the plate's timing is deliberately not the
+              layer's: the outgoing one leaves in 90ms and the incoming one does not begin its
+              rise until 110ms after that. For the gap between them there was no scrim on the card
+              at all, so every press flicked the black off the bottom of the billboard and back
+              on. It read as a fault in the artwork rather than as a cascade.
+              Hoisted here it is drawn once, above both art layers and below both plates, and a
+              press cannot touch it. Same fix, same reason, as `.tv-hero-scrim` in TvHero. */}
+          <div className="tv-spot-scrim" aria-hidden="true" />
+
+          {/* THE PLATES CROSS-FADE, THE SCRIM UNDER THEM DOES NOT. Split out of the art layers so
+              the two can keep their own clocks (see the note above): the tag, the wordmark and the
+              resume bar are per-title and must change with the picture, while the black they are
+              legible against belongs to the billboard. */}
+          {(['a', 'b'] as const).map((slot) => {
+            const it = xfade[slot];
+            const on = xfade.front === slot;
+            if (!it) return <div key={slot} className="tv-spot-plate" aria-hidden="true" />;
+            if (it === 'end') {
+              return (
+                <div key={slot} className={`tv-spot-plate${on ? ' on' : ''}`} aria-hidden={!on}>
                   <div className="tv-spot-card-in">
                     <span className="tv-spot-tag">{endLabel}</span>
                     <span className="tv-spot-cardtitle">{heading}</span>
@@ -1064,14 +1128,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
                 </div>
               );
             }
-            const art = withArt(it);
-            const logo = logoOf(art);
+            const logo = logoOf(withArt(it));
             const res = resumeOf?.(it);
             return (
-              <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
-                <FadeBg className="tv-spot-art" {...heroArt(art)} />
+              <div key={slot} className={`tv-spot-plate${on ? ' on' : ''}`} aria-hidden={!on}>
                 <div className="tv-spot-card-in">
-                  <span className="tv-spot-tag">{tagFor(it)}</span>
+                  {/* NO "MOVIE" / "SERIES" TAG. It sat above every wordmark saying the one thing
+                      the artwork already says, on a row whose whole job is to show the title —
+                      and on a billboard with a tall logo it was the line that pushed the plate
+                      into the picture. The end card keeps a tag because its label ("see all" /
+                      "load more") is the only thing that card has to say. */}
                   {/* The wordmark falls back to the plain title, and it must not do BOTH in turn:
                       text first and a logo a beat later is the same swap the backdrop had. FadeImg
                       renders the fallback only when there is no logo to wait for. */}
@@ -1082,9 +1148,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
                     fallback={<span className="tv-spot-cardtitle">{it.title}</span>}
                   />
                 </div>
-                {/* Outside the plate and pinned to the card's own bottom edge, so it survives the
-                    trailer taking the artwork away — where you are in a title is not a thing that
-                    should blink out because a preview started. */}
+                {/* Outside the plate's own box and pinned to the card's bottom edge, so it survives
+                    the trailer taking the artwork away — where you are in a title is not a thing
+                    that should blink out because a preview started. */}
                 {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}
               </div>
             );

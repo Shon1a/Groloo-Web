@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { gridUrl, type GridDesc } from '../lib/grid';
@@ -43,9 +43,13 @@ export interface TvCatalogRowProps {
   desc: GridDesc;
   title: string;
   onSelect?: (m: MediaItem) => void;
+  /** What to say when the descriptor matches nothing. A catalogue page has one honest answer
+   *  ("no titles found") and needs no prop; a SEARCH has a better one — it can name the query that
+   *  found nothing — and the search page is the only caller that knows what was typed. */
+  emptyMessage?: ReactNode;
 }
 
-export default function TvCatalogRow({ desc, title, onSelect }: TvCatalogRowProps) {
+export default function TvCatalogRow({ desc, title, onSelect, emptyMessage }: TvCatalogRowProps) {
   const t = useT();
   const { lang } = useLang();
   const [shown, setShown] = useState(FIRST);
@@ -81,7 +85,7 @@ export default function TvCatalogRow({ desc, title, onSelect }: TvCatalogRowProp
   if (q.isLoading) {
     return <div className="grid-loader"><span className="cat-loader" role="status" aria-label={t('grid.loading')} /></div>;
   }
-  if (!all.length) return <div className="grid-msg">{t('grid.no_titles')}</div>;
+  if (!all.length) return <>{emptyMessage ?? <div className="grid-msg">{t('grid.no_titles')}</div>}</>;
 
   const items = all.slice(0, shown);
   // The end card is offered while the catalogue still has anything left to give — either already
