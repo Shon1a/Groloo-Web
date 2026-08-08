@@ -32,13 +32,6 @@ import { useAuth } from '../stores/auth';
  * inert rather than a regression nobody notices until it is on a shelf. */
 const ICON = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
 
-const UserGlyph = () => (
-  <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true" {...ICON}>
-    <path d="M20 21a8 8 0 0 0-16 0" />
-    <circle cx="12" cy="8" r="5" />
-  </svg>
-);
-
 const SearchGlyph = () => (
   <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true" {...ICON}>
     <path d="m21 21-4.34-4.34" />
@@ -48,8 +41,14 @@ const SearchGlyph = () => (
 
 const GATED = ['/addons', '/settings', '/library'];
 
-// Centre order: Search (icon) · Home · Series · Movies · Anime · Categories. Search is the icon
-// button rendered first; the rest are text items.
+// Centre order: Search (icon) · Home · Series · Movies · Anime. Search is the icon button
+// rendered first; the rest are text items.
+//
+// CATEGORIES IS NOT HERE ANY MORE. It was a page of genre tiles that led to a grid — a browsing
+// index, which is what the home rows already are, and what Search already answers directly. On a
+// bar the remote walks left to right that made it a stop everyone passes to reach nothing they
+// could not reach faster, and the page behind it was a second way to arrive at the same Browse
+// screen the three items beside it open in one press.
 //
 // MY SPACE IS NOT HERE ON PURPOSE. The profile avatar on the left already opens it — the same
 // route, the same sign-in gate — so a "My Space" text item was a second control for the same
@@ -61,7 +60,6 @@ const ITEMS = [
   { to: '/tv', key: 'nav.series' },
   { to: '/movies', key: 'nav.movies' },
   { to: '/anime', key: 'nav.anime' },
-  { to: '/categories', key: 'nav.categories' },
 ] as const;
 
 export default function TvTopNav() {
@@ -126,17 +124,13 @@ export default function TvTopNav() {
 
   return (
     <nav className="tv-topnav" aria-label="Primary navigation">
-      {/* LEFT — profile avatar (opens My space) */}
-      <div className="tv-nav-left">
-        <button
-          type="button"
-          className="tv-nav-profile"
-          aria-label={t('myspace.title')}
-          onClick={() => go('/library')}
-        >
-          <UserGlyph />
-        </button>
-      </div>
+      {/* LEFT — an empty spacer. The profile avatar used to live here, alone in the corner, and it
+          has moved into the centre group (below). It was the one destination in this bar that the
+          remote could not reach by walking the row it belongs to: from Home, Left crossed the
+          whole width of the screen to find it, and every other item had to be passed to get back.
+          A grid column is kept rather than dropped, because `grid-template-columns: 1fr auto 1fr`
+          is what centres the group — with two children the items would take the first column. */}
+      <div className="tv-nav-left" aria-hidden="true" />
 
       {/* CENTRE — search icon, then the page items.
           The group SCALES UP while the remote is in it and settles back when focus leaves. It is
@@ -188,6 +182,33 @@ export default function TvTopNav() {
             {t(it.key)}
           </button>
         ))}
+        {/* MY SPACE CLOSES THE ROW, and it is a WORD now rather than an avatar glyph. The icon
+            was inherited from the corner it used to sit in, where a 44px disc is what a lone
+            account control looks like; in a row of words it was the one item that had to be
+            recognised rather than read, and a head-and-shoulders outline at three metres says
+            "a person" long before it says "your space". Every other destination here states its
+            name — this one now does too.
+
+            `tv-nav-item` is load-bearing, not decoration: it is what the travelling pill's
+            `place()` looks for. Without it focus would land here and the white pill would stay
+            behind on Anime. `tv-nav-profile` is kept purely as the hook TvSpatialNav lists in its
+            candidate selectors; it no longer carries any style of its own.
+
+            No `aria-label` any more — the visible text is the accessible name, and a label
+            duplicating it would only be a second copy to let drift.
+
+            LAST RATHER THAN FIRST, the way an account sits at the end of every other product's
+            nav, and it keeps Home one press from the search icon at the head of the group.
+            `active` is deliberately not applied: My Space is a destination rather than one of the
+            browse surfaces these items switch between, and lighting it up as "the page you are
+            on" would put two meanings on one wash. */}
+        <button
+          type="button"
+          className="tv-nav-item tv-nav-profile"
+          onClick={() => go('/library')}
+        >
+          {t('myspace.title')}
+        </button>
       </div>
 
       {/* RIGHT — intentionally empty (no logo); a spacer keeps the centre truly centred */}

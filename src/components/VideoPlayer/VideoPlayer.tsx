@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { usePlayer } from '../../stores/player';
 import { useHistory } from '../../stores/history';
 import { useSettings } from '../../stores/settings';
@@ -9,11 +10,12 @@ import { isDecodingSilently, SILENT_AFTER } from '../../lib/codecs';
 import { resolvePlayback } from '../../lib/streamingServer';
 import { playDemuxed, probeUrl, type DemuxHandle, type DemuxBlocker } from '../../lib/browserDemux';
 import { playWithWasmAudio, needsWasmDecoder, type WasmAudioHandle } from '../../lib/wasmAudio';
-import { langName, collectAddonSubtitles } from '../../lib/addonClient';
+import { langName, normalizeSubLang, collectAddonSubtitles } from '../../lib/addonClient';
 import { apiFetch } from '../../lib/api';
 import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
 import EpisodePanel from './EpisodePanel';
 import EpisodeRail from './EpisodeRail';
+import TvChipMenu, { type ChipOption } from '../DetailModal/TvChipMenu';
 import { scrollCardToSlot } from './railScroll';
 
 /* THE TV BUILD IS A DIFFERENT PLAYER, and this constant is what splits them. `import.meta.env.MODE`
@@ -139,13 +141,57 @@ const nativeAudioList = (l: NativeAudioTrackList): NativeAudioTrack[] => Array.f
 
 const Worm = (
   <svg className="vp-pl" viewBox="0 0 128 128" width="128" height="128" aria-hidden="true">
-    <defs><linearGradient id="vpPlGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#f4f4f7" /><stop offset="100%" stopColor="#8d8d95" /></linearGradient></defs>
+    {/* THE SAME FOUR STOPS THE SCRUBBER'S PLAYED FILL USES, and horizontal for the same reason it
+        is there: the worm travels a circle, so a gradient laid across the box paints it by
+        POSITION — the dash cools from cyan through blue to indigo as it comes round, which is the
+        one thing a static two-tone sweep could never do. Vertical (the grey it replaces) would
+        have given a top half and a bottom half and looked like a lighting error. */}
+    <defs>
+      <linearGradient id="vpPlGrad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stopColor="#64f8ff" />
+        <stop offset="42%" stopColor="#1fa5f0" />
+        <stop offset="72%" stopColor="#060eff" />
+        <stop offset="100%" stopColor="#280880" />
+      </linearGradient>
+    </defs>
     <circle className="vp-pl__ring" r="56" cx="64" cy="64" fill="none" strokeWidth="16" strokeLinecap="round" />
     <path className="vp-pl__worm" d="M92,15.492S78.194,4.967,66.743,16.887c-17.231,17.938-28.26,96.974-28.26,96.974L119.85,59.892l-99-31.588,57.528,89.832L97.8,19.349,13.636,88.51l89.012,16.015S81.908,38.332,66.1,22.337C50.114,6.156,36,15.492,36,15.492a56,56,0,1,0,56,0Z" fill="none" stroke="url(#vpPlGrad)" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="44 1111" strokeDashoffset="10" />
   </svg>
 );
-const IcPlay = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>;
-const IcPause = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>;
+/* PLAY AND PAUSE, WITH ROUNDED CORNERS — the two glyphs that get drawn biggest and looked at
+ * hardest, so they are the two worth building properly.
+ *
+ * The old pair were the geometric primitives every player ships with: `M8 5v14l11-7z` and two
+ * plain rects. At 18px beside a cursor that is fine. Blown up into a 60px disc on a television
+ * the triangle's point becomes a needle and the bars' corners become four hard right angles, and
+ * the whole control reads as clip-art next to type that is rounded and a disc that is a circle.
+ *
+ * THE TRIANGLE IS ROUNDED BY STROKING ITS OWN PATH. `stroke-linejoin: round` with the stroke
+ * painted in the same ink as the fill turns each vertex into an arc of half the stroke width —
+ * one path, no arc maths, and it stays correct at any size because the radius scales with the
+ * viewBox. The path is inset to compensate: a 3-wide stroke straddles the edge, adding 1.5 all
+ * round, so the geometry is drawn 1.5 smaller than the space it should occupy.
+ *
+ * The bars are `rx` on a rect, which is the honest way to say the same thing.
+ *
+ * THE TRIANGLE'S OPTICAL OFFSET LIVES IN THE PATH, not in a margin on the element. It used to be
+ * `margin-left: 6%` on the <svg> in tv.css, applied on top of a path that was ALREADY sitting
+ * right of centre in its own viewBox — two corrections for one problem, which is why the glyph
+ * read as parked against the right of the disc. Here the box is centred (8.3 → 16.9 about 12.6)
+ * and carries the whole nudge itself: half a unit, because a triangle's mass is toward its base
+ * and geometric centring leaves it looking as though it has slipped left. Anything positioning
+ * this glyph can now simply centre it. */
+const IcPlay = (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+    <path d="M8.3 6.8 16.9 12 8.3 17.2Z" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+  </svg>
+);
+const IcPause = (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+    <rect x="6.2" y="4.8" width="4.2" height="14.4" rx="1.7" />
+    <rect x="13.6" y="4.8" width="4.2" height="14.4" rx="1.7" />
+  </svg>
+);
 const IcBack = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12.5 7V4l-5 5 5 5V11a4.5 4.5 0 1 1-4.5 4.5H6A6 6 0 1 0 12.5 7z" /></svg>;
 const IcFwd = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M11.5 7V4l5 5-5 5V11A4.5 4.5 0 1 0 16 15.5h1.5A6 6 0 1 1 11.5 7z" /></svg>;
 const IcMute = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4z" /><path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M18.5 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>;
@@ -187,6 +233,20 @@ const TV_GRAIN = [0, 0.08, 0.18, 0.3];
 const TV_CLARITY = [0, 0.25, 0.5, 0.85];
 const TV_LEVEL_KEYS = ['menu.off', 'menu.low', 'menu.medium', 'menu.high'];
 
+/* The settings panel's four sections, in the order the chip offers them. Ordered by how often a
+ * viewer comes here for each: Subtitles is why this menu gets opened most nights, Enhance picture
+ * is set once and forgotten. Quality / source sits third whether or not the stream offers more
+ * than one level — a list whose LENGTH depends on the release means the row under the remote
+ * changes identity between one title and the next, and muscle memory is worth more than a saved
+ * line. */
+const SET_TABS = [
+  { key: 'subs', i18n: 'menu.subtitles' },
+  { key: 'speed', i18n: 'menu.speed' },
+  { key: 'quality', i18n: 'menu.quality' },
+  { key: 'enhance', i18n: 'menu.enhance' },
+] as const;
+type SetTab = typeof SET_TABS[number]['key'];
+
 /* ---- TEN FEET AWAY: WHAT THE REMOTE DOES ---------------------------------------------------
  * The player has two modes on a TV and exactly one thing moves between them.
  *
@@ -206,8 +266,12 @@ const TV_LEVEL_KEYS = ['menu.off', 'menu.low', 'menu.medium', 'menu.high'];
  * only the scrubber knows about, and the seek happens once, ~half a second after the last press.
  * Holding the button also lengthens the step (10s → 30s → 60s), because crossing forty minutes
  * of a film ten seconds at a time is not something anyone should have to sit through. */
-const TV_SEEK_COMMIT_MS = 550;  // stillness that ends a scrub and applies it
+const TV_SEEK_COMMIT_MS = 550;  // FALLBACK only — stillness that ends a scrub on a remote that never reports a release
 const TV_SEEK_REPEAT_MS = 400;  // gap under which two presses count as "held"
+const TV_SEEK_RELEASE_MS = 150; // grace after a key-up before the scrub commits (see tvSeekRelease)
+const TV_SEEK_TAP = 10;         // one deliberate press, in seconds of film
+const TV_RAMP_V0 = 45;          // seconds of film per second at the instant a hold takes over
+const TV_RAMP_GROWTH = 3.2;     // and how that rate multiplies per further second of holding
 const TV_HIDE_MS = 5000;        // chrome auto-hide — longer than the desktop's 3s; reading is slower from a sofa
 
 // each menu section's collapsible gear-header icon + a single checkable option row
@@ -257,6 +321,10 @@ export default function VideoPlayer() {
   const recordedRef = useRef(false);   // record watch-history once per opened source
   const lastProgRef = useRef(0);       // throttle progress writes
   const resumedRef = useRef(false);    // seek-to-resume once per source
+  /* Has this source ever actually rendered? It is what tells a decode failure that means "this
+   * browser cannot play the file" from one that means "something went wrong twenty minutes in" —
+   * see the <video>'s onError. */
+  const startedRef = useRef(false);
   const audioPrefDone = useRef(false); // audio-language preference applied once per source
   const subPicked = useRef(false);     // the USER chose a subtitle → stop applying the preference
   const vttCache = useRef(new Map<string, string>()); // add-on subtitle url → converted blob: url
@@ -280,7 +348,9 @@ export default function VideoPlayer() {
   const [currentSub, setCurrentSub] = useState(-1); // -1 = subtitles off
   const [audioTracks, setAudioTracks] = useState<Array<{ i: number; name: string }>>([]);
   const [curAudio, setCurAudio] = useState(0);
-  const [acc, setAcc] = useState<Record<string, boolean>>({}); // expanded accordion sections
+  const [acc, setAcc] = useState<Record<string, boolean>>({}); // expanded accordion sections (web)
+  const [setTab, setSetTab] = useState<SetTab>('subs');        // which section the TV panel is showing
+  const [subLang, setSubLang] = useState<string | null>(null); // which language group is expanded
   const [fs, setFs] = useState(false);
   const [hideUi, setHideUi] = useState(false);
   /* Every subtitle track OFFERED for this source — the ones embedded in the stream plus
@@ -315,10 +385,18 @@ export default function VideoPlayer() {
   // --- TV remote (see "TEN FEET AWAY" above; all of this is dropped from the web build) ---
   const [tvNav, setTvNav] = useState(false);              // the D-pad is driving the chrome
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
+  const [landed, setLanded] = useState(false);            // the half-second after a scrub commits
+  const [ramping, setRamping] = useState(false);          // a held button is driving the preview continuously
   const tvNavRef = useRef(false);                         // fresh read from bump()'s timer
   const seekPreviewRef = useRef<number | null>(null);     // fresh read from the key handler
   const seekCommitTimer = useRef<number | undefined>(undefined);
-  const seekRepeats = useRef(0);
+  const landedTimer = useRef<number | undefined>(undefined);
+  const seekReleaseTimer = useRef<number | undefined>(undefined);
+  const seekHoldDir = useRef<0 | 1 | -1>(0);              // which way the held button is pulling
+  const rampRaf = useRef(0);
+  const rampVel = useRef(0);                              // seconds of film per second, right now
+  const rampAt = useRef(0);                               // timestamp of the last ramp frame
+  const rampPaint = useRef(0);                            // timestamp of the last state write
   const seekLastAt = useRef(0);
   /* Where the bar should re-seed focus when a layer above it closes. 'scrubber' is distinct
    * from 'bar': 'bar' is "no opinion, use the usual order" (which prefers a visible Skip
@@ -377,9 +455,10 @@ export default function VideoPlayer() {
     const v = videoRef.current;
     if (!v || !source || !playSrc) return;
     let cancelled = false;
-    recordedRef.current = false; resumedRef.current = false; lastProgRef.current = 0;
+    recordedRef.current = false; resumedRef.current = false; lastProgRef.current = 0; startedRef.current = false;
     setLoading(true); setErrKind(null); setPlaying(false); setCur(0); setDur(0); setBuffered(0); setLevels([]); setCurLevel(-1); setMenuOpen(false); setAudioOpen(false); setHideUi(false); setAudioTracks([]); setCurAudio(0); setEpPanelOpen(false); setBright(1); setSeekHud(null); setVHud(null); seekAccumRef.current = { side: '', secs: 0 };
     setTvNav(false); setSeekPreview(null); seekPreviewRef.current = null; window.clearTimeout(seekCommitTimer.current);
+    setLanded(false); window.clearTimeout(landedTimer.current);
     const url = playSrc.url;
     // Prefer hls.js for any HLS source. DON'T gate on canPlayType('…mpegurl'):
     // modern Chrome returns "maybe" for that MIME type yet CANNOT actually play HLS
@@ -622,9 +701,25 @@ export default function VideoPlayer() {
    * renumbered out from under them. Appending keeps every existing index stable, which is
    * what makes `currentSub` safe to hold across the update. */
   useEffect(() => {
-    const embedded: SubCandidate[] = (source?.subtitles || []).map((s) => ({
-      lang: s.lang, label: s.label || langName(s.lang) || 'Subtitle', url: s.url,
-    }));
+    /* NORMALISED ON THE WAY IN, the same way the add-on tracks are. What a muxer wrote in the
+     * file — `rus_forced_4`, `eng_5` — is not a language code, and carrying it through meant the
+     * player held `ru` for an add-on's Russian and `rus_forced_4` for the stream's own: two
+     * strings for one language, which every comparison then treated as two languages. The menu
+     * grouped them apart, and the default-subtitle-language preference could match one and miss
+     * the other on the same title.
+     *
+     * The stream's own label still wins where it has one — it is the only place the release's
+     * wording ("Signs & Songs") survives — and the derived label is the fallback, which keeps the
+     * forced/region qualifier that the code deliberately drops. */
+    const embedded: SubCandidate[] = (source?.subtitles || []).map((s) => {
+      const n = normalizeSubLang(s.lang || '');
+      /* A LABEL THAT IS JUST THE CODE AGAIN IS NOT A LABEL. DetailModal builds these rows as
+       * `label: x.lang || 'Subtitle'` — so for a stream with no title of its own the "label" is
+       * the raw token, and preferring it would print `rus_forced_4` as the row's own name inside
+       * a group headed Русский. Only a label that says something the code does not gets to win. */
+      const own = s.label && s.label !== s.lang ? s.label : '';
+      return { lang: n.code, label: own || n.label || 'Subtitle', url: s.url };
+    });
     setSubs(embedded);
     setCurrentSub(-1);
     /* Cleared HERE and not left to the resolve effect below. That effect is keyed on
@@ -751,38 +846,151 @@ export default function VideoPlayer() {
   }, []);
   const nudge = useCallback((d: number) => { const v = videoRef.current; if (v) v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + d)); }, []);
 
-  /* Apply a pending scrub. Called by the idle timer, by OK, and by anything that ends the
-   * gesture early (leaving the bar, a transport key, closing the player). */
+  /** Tear down the hold ramp. Safe to call when no ramp is running. */
+  const stopRamp = useCallback(() => {
+    if (rampRaf.current) cancelAnimationFrame(rampRaf.current);
+    rampRaf.current = 0;
+    rampVel.current = 0;
+    seekHoldDir.current = 0;
+    setRamping(false);
+  }, []);
+
+  /* Apply a pending scrub. Called by the release grace, by OK, by the idle fallback, and by
+   * anything that ends the gesture early (leaving the bar, a transport key, closing the player). */
   const commitSeek = useCallback(() => {
     window.clearTimeout(seekCommitTimer.current);
+    window.clearTimeout(seekReleaseTimer.current);
+    stopRamp();
     const pos = seekPreviewRef.current;
-    seekPreviewRef.current = null; seekRepeats.current = 0;
+    seekPreviewRef.current = null;
     setSeekPreview(null);
     const v = videoRef.current;
-    if (v && pos != null) v.currentTime = pos;
+    if (v && pos != null) {
+      v.currentTime = pos;
+      /* AND THE BAR IS TOLD IN THE SAME BREATH, which is the whole fix for the snap-back.
+       *
+       * The scrubber renders `seekPreview ?? cur`. Dropping the preview on commit therefore fell
+       * back to `cur` — and `cur` is only refreshed by the video's own `timeupdate`, which does not
+       * arrive until the seek has actually landed, up to a quarter-second later and longer on a
+       * cold buffer. For that whole window the bar was reading the position the viewer had just
+       * rewound AWAY from, so a scrub visibly recoiled to where it started and then jumped to the
+       * destination once the event caught up. Two movements for one gesture, and the wrong one
+       * first.
+       *
+       * Seeding it here closes the window: `v.currentTime` is already `pos`, so this is not an
+       * optimistic guess about where the video will end up — it is the same fact, delivered to
+       * React without waiting to be told it a second time. */
+      setCur(pos);
+      /* THE LANDING. Committing used to be silent: the preview markers vanished and the picture
+       * changed whenever the demuxer got there, so the gesture had no ending — it just stopped
+       * being. A half-second ring off the playhead gives the scrub a full stop, and it fires the
+       * instant the seek is issued rather than when the frame arrives, so it also covers the
+       * decode gap that is otherwise dead air on a slow TV. */
+      setLanded(true);
+      window.clearTimeout(landedTimer.current);
+      landedTimer.current = window.setTimeout(() => setLanded(false), 520);
+    }
     bump();
-  }, [bump]);
+  }, [bump, stopRamp]);
+
+  /* ---- THE RAMP: WHAT A HELD BUTTON ACTUALLY DRIVES -------------------------------------------
+   *
+   * A held remote key is not a stream of small seeks — it is one continuous motion, and it has to
+   * be driven by a clock rather than by the autorepeat. The previous version advanced the preview
+   * once per repeat, which meant the playhead moved at whatever rate the TV's key repeat happened
+   * to fire (every ~160ms on some, ~40ms on others, irregular under load on all of them). Easing
+   * each of those hops only smoothed the individual jumps; the gesture was still a stutter,
+   * because the thing generating it was stuttering.
+   *
+   * So a hold now starts a rAF loop that integrates a velocity: position += rate × elapsed, every
+   * frame, from the frame clock. The autorepeat stops being motion and becomes what it should have
+   * been all along — a signal that the button is still down. Rate is exponential in the DURATION of
+   * the hold, not in the press count, so the acceleration curve is identical on every remote.
+   *
+   * The cap is derived from the runtime rather than fixed: whatever is playing, holding at full
+   * tilt crosses the whole of it in about fourteen seconds. A constant would make a 22-minute
+   * episode feel twitchy at the same setting that makes a three-hour film feel like wading. */
+  const rampFrame = useCallback((t: number) => {
+    const v = videoRef.current;
+    const dir = seekHoldDir.current;
+    if (!v || !dir || !v.duration) { stopRamp(); return; }
+    // Clamped, because a backgrounded tab or a dropped frame on a slow TV hands back a huge
+    // delta, and integrating it raw would teleport the playhead — the exact artefact this exists
+    // to remove.
+    const dt = Math.min((t - rampAt.current) / 1000, 0.05);
+    rampAt.current = t;
+    const vmax = Math.max(400, v.duration / 14);
+    rampVel.current = Math.min(vmax, rampVel.current * Math.pow(TV_RAMP_GROWTH, dt));
+    const base = seekPreviewRef.current ?? v.currentTime;
+    const next = clamp(base + dir * rampVel.current * dt, 0, v.duration);
+    seekPreviewRef.current = next;
+    /* PAINT AT ~18Hz, NOT AT 60. The ref is what the next frame integrates from, so the motion is
+     * frame-accurate regardless; this only governs how often React re-renders the bar. A TV that
+     * is already decoding video cannot re-render this subtree every frame, and it does not need
+     * to — the CSS transition below interpolates between paints, so the playhead glides at 60fps
+     * off ~18 state writes a second. */
+    if (t - rampPaint.current >= 55) { rampPaint.current = t; setSeekPreview(next); }
+    // Both ends are absorbing: park there and keep the ramp alive, so releasing still commits and
+    // reversing picks straight back up without a fresh tap.
+    rampRaf.current = requestAnimationFrame(rampFrame);
+  }, [stopRamp]);
 
   /** One press of Left/Right (or ⏪/⏩) in TV mode: extend the preview, defer the seek. */
   const tvSeek = useCallback((dir: 1 | -1) => {
     const v = videoRef.current;
     if (!v || !v.duration || !isFinite(v.duration)) return;
+    // A key going down cancels any release that was pending — see tvSeekRelease for why a release
+    // is not acted on immediately.
+    window.clearTimeout(seekReleaseTimer.current);
     const now = performance.now();
-    seekRepeats.current = now - seekLastAt.current < TV_SEEK_REPEAT_MS ? seekRepeats.current + 1 : 0;
+    const held = seekHoldDir.current === dir && now - seekLastAt.current < TV_SEEK_REPEAT_MS;
     seekLastAt.current = now;
-    // Held-button acceleration — see the note above. Thresholds are presses, not seconds, so a
-    // slow deliberate tap-tap-tap never accelerates however long it goes on.
-    const step = seekRepeats.current >= 12 ? 60 : seekRepeats.current >= 5 ? 30 : 10;
-    const base = seekPreviewRef.current ?? v.currentTime;
-    const next = clamp(base + dir * step, 0, v.duration);
-    seekPreviewRef.current = next;
-    setSeekPreview(next);
+    seekHoldDir.current = dir;
+
+    if (!held) {
+      /* A DELIBERATE PRESS IS STILL EXACTLY TEN SECONDS. Tapping is aiming, and aiming needs an
+       * answer that does not depend on how long the finger stayed down — a tap that seeked by
+       * "however far the ramp got" would be unrepeatable. Reversing mid-hold lands here too, which
+       * is what makes an overshoot correctable: the ramp is dropped and the first press back is a
+       * precise ten seconds rather than a resumption of full-tilt travel in the other direction. */
+      stopRamp();
+      seekHoldDir.current = dir;
+      const base = seekPreviewRef.current ?? v.currentTime;
+      const next = clamp(base + dir * TV_SEEK_TAP, 0, v.duration);
+      seekPreviewRef.current = next;
+      setSeekPreview(next);
+    } else if (!rampRaf.current) {
+      // Second repeat in the same direction: the button is being HELD. Hand over to the clock.
+      rampVel.current = TV_RAMP_V0;
+      rampAt.current = now;
+      rampPaint.current = now;
+      setRamping(true);
+      rampRaf.current = requestAnimationFrame(rampFrame);
+    }
+
     // Show the bar for the duration of the scrub without handing the D-pad over: the viewer is
     // seeking, not choosing, and the next Left press must still seek rather than move a selection.
     setHideUi(false);
     window.clearTimeout(hideTimer.current);
     window.clearTimeout(seekCommitTimer.current);
     seekCommitTimer.current = window.setTimeout(commitSeek, TV_SEEK_COMMIT_MS);
+  }, [commitSeek, stopRamp, rampFrame]);
+
+  /* THE BUTTON COMING BACK UP IS THE END OF THE GESTURE, and waiting half a second to notice was
+   * the dead stop at the end of every scrub: the viewer stopped pressing, the bar sat frozen with
+   * a stale number on it, and only then did the picture move. The idle timer is still there, but
+   * demoted to a fallback for remotes that report no release at all.
+   *
+   * THE 150ms GRACE IS NOT POLISH — IT IS THE WHOLE RELIABILITY STORY. Several TV platforms
+   * implement autorepeat as repeated key-down/key-up PAIRS rather than as repeated downs, so a
+   * held button on those devices reports a release between every repeat. Committing on the first
+   * one would make holding impossible: the scrub would seek and reset a dozen times. The grace is
+   * long enough that the next repeat cancels it and short enough that a real release still reads
+   * as instant — 150ms is under the ~200ms at which a delay stops being felt as causation. */
+  const tvSeekRelease = useCallback(() => {
+    if (seekPreviewRef.current == null) return;
+    window.clearTimeout(seekReleaseTimer.current);
+    seekReleaseTimer.current = window.setTimeout(commitSeek, TV_SEEK_RELEASE_MS);
   }, [commitSeek]);
 
   /** Summon the controls and give the D-pad to them. */
@@ -843,6 +1051,44 @@ export default function VideoPlayer() {
     });
     return () => cancelAnimationFrame(id);
   }, [tvNav, menuOpen, epPanelOpen]);
+
+  /* THE SETTINGS MENU OPENS WITH SUBTITLES ALREADY SELECTED.
+   *
+   * Nothing used to seed focus into this panel at all — the effect above explicitly stands aside
+   * for it ("the panel seeds its own first row"), which was true of the episode rail and never
+   * true here. So focus stayed on the ⋯ button OUTSIDE the menu, and the first Down handed the
+   * question to TvSpatialNav, which answers it geometrically: it picks whatever is nearest in
+   * that direction, which is not reliably the top row and was landing on Enhance picture. A menu
+   * that opens on its last item reads as though it remembered something the viewer never chose.
+   *
+   * Subtitles is the answer rather than "the first row" by coincidence: it is the first row AND
+   * the reason this menu is opened most of the time, and on a TV those two agreeing is what makes
+   * the common case cost one press. Taking the first control in DOM order gives it without
+   * hard-coding an id — if the rows are ever reordered, this follows the order rather than
+   * contradicting it. Two selectors because the panel is chips on a television and accordions on
+   * the web, and this effect is the one piece of it that both builds share.
+   *
+   * A frame's delay, because the panel is mounted by the same render that sets `menuOpen` and is
+   * not in the document to be focused until after it commits. */
+  useEffect(() => {
+    if (!IS_TV || !menuOpen) return;
+    // Every open starts on Subtitles rather than resuming wherever the last visit ended. The panel
+    // is opened for one errand at a time and the common errand is subtitles; remembering a section
+    // the viewer chose ten minutes ago only means they have to notice and undo it.
+    setSetTab('subs');
+    /* The language currently in use comes up expanded; with subtitles off, everything is closed.
+     * Opening on the group you are already in is what makes "same language, different file" — the
+     * reason most people return to this list — cost no presses to reach, while a viewer who wants
+     * a different language sees an unexpanded index of what is available instead of one language's
+     * files pushing the rest off the screen. Deliberately keyed on the OPEN rather than on
+     * `currentSub`: re-deriving it whenever the selection changes would slam a group shut under
+     * the remote the moment a track from another language was chosen. */
+    setSubLang(currentSub >= 0 ? (subs[currentSub]?.lang || null) : null);
+    const id = requestAnimationFrame(() => {
+      overlayRef.current?.querySelector<HTMLElement>('#vpMenu .tv-chipmenu-btn, #vpMenu .vp-acc-head')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [menuOpen]);
   /* Drive the rail's mount/slide off `epPanelOpen`. 470ms is the 420ms transform (`--vp-rail-ease`
    * in tv.css) plus margin; it only has to OUTLAST the animation — unmounting a few ms late costs
    * nothing, unmounting early is the blink this exists to prevent, so if the curve is ever
@@ -1277,12 +1523,30 @@ export default function VideoPlayer() {
         }
       }
     };
+    /* THE MATCHING KEY-UP, which is the other half of every hold. It is deliberately NOT filtered
+     * by mode or by focus the way the key-down above is: whatever state the player has got itself
+     * into by the time the finger comes off, a scrub that is up MUST be able to end. The handler
+     * is inert unless one is actually pending, so there is nothing to guard against. */
+    const onKeyUp = (e: KeyboardEvent) => {
+      const k = e.key;
+      if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'MediaRewind' || k === 'MediaFastForward') tvSeekRelease();
+    };
     window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [source, tvNav, menuOpen, epPanelOpen, tvSeek, commitSeek, enterTvNav, togglePlay, close, bump]);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
+  }, [source, tvNav, menuOpen, epPanelOpen, tvSeek, tvSeekRelease, commitSeek, enterTvNav, togglePlay, close, bump]);
 
-  // A pending scrub must never outlive the player (or the source it was measured against).
-  useEffect(() => () => window.clearTimeout(seekCommitTimer.current), []);
+  // A pending scrub must never outlive the player (or the source it was measured against) — and
+  // neither must the ramp that is driving it.
+  useEffect(() => () => {
+    window.clearTimeout(seekCommitTimer.current);
+    window.clearTimeout(seekReleaseTimer.current);
+    window.clearTimeout(landedTimer.current);
+    if (rampRaf.current) cancelAnimationFrame(rampRaf.current);
+  }, []);
 
   /* The two layers the Back chain cannot see from outside: both are local state, not a store.
    * Registered while the player is open so a remote's Back closes the menu, then the episode
@@ -1358,6 +1622,85 @@ export default function VideoPlayer() {
   const seekDelta = seekPreview == null ? 0 : Math.round(seekPreview - cur);
   const pct = dur ? (shownTime / dur) * 100 : 0;
   const bufPct = dur ? (buffered / dur) * 100 : 0;
+  /* Where the video ACTUALLY is while a preview is pending — the origin of the jump. The bar
+   * paints the span between this and `pct` so the skip has a length on screen and not just a
+   * number attached to it. */
+  const curPct = dur ? (cur / dur) * 100 : 0;
+  /* Width of both TV clocks, in characters of the longest string either will ever hold. The floor
+   * of 5 ("00:00") stops the cell — and so the bar — resizing once when the duration arrives and
+   * "0:00" becomes "24:15". */
+  const clockCh = Math.max(5, fmt(dur).length);
+
+  /* UP AND DOWN INSIDE THE SETTINGS PANEL WALK THE LIST, NOT THE GEOMETRY.
+   *
+   * TvSpatialNav picks the nearest candidate in the direction pressed, scored on travel and
+   * drift. That is the right instrument for a screen of cards and the wrong one here, because
+   * this panel's rows are full-width and stacked: several of them are almost equally "up" from
+   * any given row, and the language headings sit inline among the tracks they introduce. From a
+   * source row, Up could land on the heading above it, on a row two groups away, or on the
+   * section chip, depending on pixels the viewer cannot see and did not choose.
+   *
+   * A list has an unambiguous answer and it is DOM order. Up from the first track of a language
+   * is that language's own heading — the button that opened it, which is what a viewer reaching
+   * back up is reaching for — and Up from a heading is whatever the list actually holds above it.
+   * Down is the same walk in reverse. Nothing here depends on how the rows happen to be laid out.
+   *
+   * DELIBERATELY NOT EXHAUSTIVE. `.vp-speed` is left out: the speeds are a horizontal grid, and
+   * pulling them into a vertical walk would make Down step sideways through 0.5×, 0.75×, 1×.
+   * Focus sitting anywhere this list does not name falls through untouched, which is also what
+   * carries the remote out of the panel at either end — the ends are not trapped, so Up from the
+   * chip still leaves for the bar above it. */
+  const onSetPanelKey = (e: ReactKeyboardEvent) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const ae = document.activeElement as HTMLElement | null;
+    if (!ae) return;
+    const stops = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('.tv-chipmenu-btn, .vp-subgroup-head, .vp-opt'));
+    const at = stops.indexOf(ae);
+    if (at < 0) return;
+    const to = stops[at + (e.key === 'ArrowDown' ? 1 : -1)];
+    if (!to) return;
+    e.preventDefault();
+    e.stopPropagation();
+    to.focus({ preventScroll: true });
+    // `nearest` honours the row's scroll-margin and does nothing when it is already on screen,
+    // which is the common case — the panel only scrolls for a long list.
+    to.scrollIntoView({ block: 'nearest' });
+  };
+
+  /* THE SUBTITLE TRACKS, GATHERED UNDER THEIR LANGUAGES (TV panel only).
+   *
+   * Grouped in the order each language FIRST APPEARS rather than alphabetically. `subs` is already
+   * ordered by how likely the track is to be the one wanted — the viewer's preferred language and
+   * the stream's embedded tracks come first — and sorting the headings A-Z would throw that away
+   * to put Arabic above English on an English profile. First-appearance keeps the ranking and
+   * still guarantees each language is named once.
+   *
+   * The index carried alongside each track is its position in the ORIGINAL array, because that is
+   * what `selectSub` and `currentSub` speak. Grouping is a presentation of the list, not a
+   * renumbering of it — a subtle but total difference if these ever drift apart. */
+  const subGroups = (() => {
+    const out: Array<{ lang: string; name: string; items: Array<{ s: SubCandidate; i: number }> }> = [];
+    const at = new Map<string, number>();
+    subs.forEach((s, i) => {
+      /* NORMALISED AGAIN HERE, AND THAT IS NOT REDUNDANT. Both paths that fill `subs` today
+       * already store a clean code, so this is a no-op for them — `normalizeSubLang('ru')` is
+       * `ru`. It exists because grouping is the one place where a raw token does visible damage
+       * (a whole extra heading reading RUS_FORCED_4), and the list has two producers today and
+       * could have a third tomorrow. Guarding at the point of harm costs one map lookup per
+       * track and cannot be forgotten by whoever adds the next origin. */
+      const lang = normalizeSubLang(s.lang || '').code;
+      let idx = at.get(lang);
+      if (idx == null) {
+        idx = out.length;
+        at.set(lang, idx);
+        out.push({ lang, name: langName(lang) || lang || t('menu.track').trim(), items: [] });
+      }
+      out[idx].items.push({ s, i });
+    });
+    return out;
+  })();
+  const spanFrom = Math.min(pct, curPct);
+  const spanWidth = Math.abs(pct - curPct);
   const hasSubs = subs.length > 0;
 
   // ::cue styling from the subtitle settings (color / bg / size / outline)
@@ -1477,6 +1820,124 @@ export default function VideoPlayer() {
                   the cost of a menu nobody opened. The web keeps the node so it can animate. */}
               {(!IS_TV || menuOpen) && (
               <div className={`vp-menu${menuOpen ? ' open' : ''}`} id="vpMenu" role="menu">
+                {IS_TV ? (
+                  /* ONE PICKER, THEN WHATEVER IT PICKED.
+                   *
+                   * The panel was four accordions, then four label-and-chip rows, and both had the
+                   * same flaw at ten feet: four controls on screen at once, of which the viewer
+                   * wants exactly one. The accordions also resized the panel under the D-pad as
+                   * they unfolded, so the rows below the one being used kept moving.
+                   *
+                   * A single chip naming the SECTION, with that section's options laid out below
+                   * it, is one thing to aim at and one list to read. The chip stays put, the list
+                   * under it swaps, and nothing above the chosen option can move — which is what
+                   * makes the second press (choosing a value) safe to make without re-reading the
+                   * screen. It is also the shape the title screen already uses for seasons and
+                   * sources, so the remote's habits carry straight over.
+                   *
+                   * The options below stay plain rows rather than becoming a second chip: they are
+                   * the destination, not another branch, and a menu that opens a menu is the thing
+                   * this panel keeps being redesigned to avoid. */
+                  <div className="vp-setpanel" onKeyDown={onSetPanelKey}>
+                    <TvChipMenu
+                      options={SET_TABS.map((s) => ({ key: s.key, label: t(s.i18n) }))}
+                      value={setTab}
+                      onSelect={(k) => setSetTab(k as SetTab)}
+                      ariaLabel={t('ctl.settings_a')}
+                    />
+                    <div className="vp-setbody">
+                      {setTab === 'subs' && (
+                        <>
+                          <OptRow on={currentSub < 0} label={t('menu.off')} onClick={() => selectSub(-1)} />
+                          {/* GROUPED BY LANGUAGE, because the flat list was not a list of choices —
+                              it was a list of the same choice repeated. A popular release comes
+                              back from the add-ons with a dozen English files and a dozen Spanish
+                              ones, interleaved in whatever order they were fetched, and a viewer
+                              scrolling for Spanish had to read every English row on the way past.
+                              Under a heading, the same twelve rows are one thing to skip.
+
+                              The heading is not a focus stop: it is a `<div>` with no tabIndex, so
+                              the D-pad steps straight from the last track of one language to the
+                              first of the next. It orients, it does not obstruct. */}
+                          {subGroups.map((g) => (
+                            <div className={`vp-subgroup${subLang === g.lang ? ' open' : ''}`} key={g.lang}>
+                              {/* ONE LANGUAGE OPEN AT A TIME, and that is the point rather than a
+                                  limitation. Left to expand freely, three or four languages open
+                                  together restore the endless list this grouping exists to break
+                                  up — and on a D-pad the cost of collapsing what you no longer
+                                  want is a press per group. Opening one closes the last, so the
+                                  panel is always as short as the question being asked. */}
+                              <button type="button" className="vp-subgroup-head"
+                                aria-expanded={subLang === g.lang}
+                                onClick={() => setSubLang((l) => (l === g.lang ? null : g.lang))}>
+                                <span className="vp-subgroup-name">{g.name}</span>
+                                {/* The count is what makes a collapsed row worth reading: it is the
+                                    difference between "English, one file" and "English, fourteen",
+                                    which is exactly what decides whether it is worth opening. */}
+                                <span className="vp-subgroup-n">{g.items.length}</span>
+                                <span className="vp-subgroup-chev" aria-hidden="true" />
+                              </button>
+                              {subLang === g.lang && g.items.map(({ s, i }) => (
+                                <OptRow key={`${s.source || ''}${s.url}`} on={i === currentSub}
+                                  /* The language is on the heading now, so the row spends its width
+                                     on what actually distinguishes it from its neighbours — the
+                                     add-on's own title for the file. `label` is the fallback for
+                                     tracks embedded in the stream, which have no source. */
+                                  label={s.source || s.label || s.lang || `${t('menu.track')}${i + 1}`}
+                                  onClick={() => selectSub(i)} />
+                              ))}
+                            </div>
+                          ))}
+                          {subsLoading && <div className="vp-opt" style={{ opacity: 0.5 }}>{t('menu.loading_subs')}</div>}
+                          {!subsLoading && subs.length === 0 && (
+                            <div className="vp-opt" style={{ opacity: 0.5 }}>
+                              {source.subsQuery ? t('menu.no_subs_found') : t('menu.install_sub_addon')}
+                            </div>
+                          )}
+                          {subFailed && <div className="vp-menu-note">{t('menu.sub_failed')}</div>}
+                        </>
+                      )}
+                      {setTab === 'speed' && (
+                        <div className="vp-speeds">
+                          {SPEEDS.map((r) => <button key={r} type="button" className={`vp-speed${r === rate ? ' on' : ''}`} onClick={() => setSpeed(r)}>{r}×</button>)}
+                        </div>
+                      )}
+                      {setTab === 'quality' && (
+                        <>
+                          <OptRow on={curLevel < 0} label={t('menu.auto')} onClick={() => setLevel(-1)} />
+                          {[...levels].sort((a, b) => (b.height || 0) - (a.height || 0)).map((l) => (
+                            <OptRow key={l.i} on={l.i === curLevel} label={levelLabel(l)} onClick={() => setLevel(l.i)} />
+                          ))}
+                        </>
+                      )}
+                      {setTab === 'enhance' && (
+                        <>
+                          {/* Switching it on has to land on a level rather than only raising a
+                              flag — the grain rows set `enhance: g > 0`, so an enhancement can
+                              otherwise be on and doing nothing. See the web branch below, which
+                              documents the same trap at length. */}
+                          <OptRow on={settings.enhance} label={t('menu.enhance_on')}
+                            onClick={() => updateSettings(settings.enhance
+                              ? { enhance: false }
+                              : {
+                                  enhance: true,
+                                  grain: settings.grain > 0 ? settings.grain : TV_GRAIN[1],
+                                  clarity: settings.clarity > 0 ? settings.clarity : TV_CLARITY[1],
+                                })} />
+                          {TV_GRAIN.map((g, i) => (
+                            <OptRow key={g} on={settings.enhance && settings.grain === g} label={`${t('ctl.grain')} · ${t(TV_LEVEL_KEYS[i])}`}
+                              onClick={() => updateSettings({ enhance: g > 0, grain: g })} />
+                          ))}
+                          {TV_CLARITY.map((c, i) => (
+                            <OptRow key={c} on={settings.enhance && settings.clarity === c} label={`${t('menu.clarity')} · ${t(TV_LEVEL_KEYS[i])}`}
+                              onClick={() => updateSettings({ clarity: c })} />
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 {/* Subtitles */}
                 <div className={`vp-acc${acc.subs ? ' open' : ''}`}>
                   <button className="vp-acc-head" aria-expanded={acc.subs} onClick={() => toggleAcc('subs')}>
@@ -1527,8 +1988,15 @@ export default function VideoPlayer() {
                     </div>
                   </div>
                 </div>
-                {/* Quality (HLS levels) */}
-                {levels.length > 1 && (
+                {/* QUALITY / SOURCE (HLS levels).
+                    On the web this section appears only when there is a genuine choice to make —
+                    a single-level stream has nothing to offer and an inert row is clutter beside
+                    a cursor. The TV keeps it up unconditionally, which is the opposite call for
+                    the opposite reason: this menu is walked by a D-pad, and a list whose LENGTH
+                    depends on the stream means the row under the remote changes identity between
+                    one title and the next. Muscle memory is worth more here than one saved row,
+                    so the four sections are always the same four, in the same order. */}
+                {(IS_TV || levels.length > 1) && (
                   <div className={`vp-acc${acc.quality ? ' open' : ''}`}>
                     <button className="vp-acc-head" aria-expanded={acc.quality} onClick={() => toggleAcc('quality')}>
                       {AccIc}<span className="vp-acc-label">{t('menu.quality')}</span>
@@ -1606,6 +2074,8 @@ export default function VideoPlayer() {
                     )}
                   </div>
                 </div>
+                  </>
+                )}
               </div>
               )}
             </div>
@@ -1659,7 +2129,11 @@ export default function VideoPlayer() {
         }}
         onTimeUpdate={(e) => {
           const v = e.currentTarget;
-          setCur(v.currentTime);
+          /* NOT WHILE THE ELEMENT IS SEEKING. Browsers differ on what `currentTime` reads back
+             between a seek being issued and it completing, and some report the OLD position for a
+             tick or two — which would undo the seeding in commitSeek and put the recoil straight
+             back. `seeking` is false again the moment the new position is real. */
+          if (!v.seeking) setCur(v.currentTime);
           // throttle resume-progress writes to ~once/5s
           const now = v.currentTime;
           if (source.media?.key && v.currentTime > 8 && Math.abs(now - lastProgRef.current) >= 5) {
@@ -1678,9 +2152,44 @@ export default function VideoPlayer() {
         }}
         onPause={() => { setPlaying(false); setHideUi(false); }}
         onWaiting={() => setLoading(true)}
-        onPlaying={() => { setLoading(false); setErrKind(null); }}
+        onPlaying={() => { setLoading(false); setErrKind(null); startedRef.current = true; }}
         onCanPlay={() => { setLoading(false); setErrKind(null); }}
-        onError={() => { setLoading(false); setErrKind((k) => k ?? 'codec'); }}
+        /* WHAT WENT WRONG IS IN `v.error.code`, AND THIS USED TO IGNORE IT.
+         *
+         * Every failure the element could report was labelled `codec`, which prints "This file
+         * can't play in the browser · Many .mkv files use codecs browsers can't decode". For a
+         * file that never started that is usually right. For one that had been playing for twenty
+         * minutes it is self-evidently false — a stream the browser cannot decode does not play
+         * twenty minutes of itself first — and it sends the viewer to the Quality menu to fix a
+         * problem that is not there, while the actual cause (the host dropped, or the decoder
+         * gave up on a frame) goes unnamed.
+         *
+         * The four codes are not shades of one thing:
+         *   1 ABORTED           our own teardown, nearly always — switching source, closing the
+         *                       player, hls.destroy(). Never an error to show anybody.
+         *   2 NETWORK           the bytes stopped arriving. A source problem, whatever the codec.
+         *   3 DECODE            the decoder failed on data it had accepted. Genuinely ambiguous:
+         *                       before playback starts it means "cannot handle this", after
+         *                       playback has started it means a bad segment or a decoder that
+         *                       fell over — so `startedRef` decides, because "has this ever
+         *                       rendered a frame" is exactly the question that separates them.
+         *   4 SRC_NOT_SUPPORTED the only code that actually means what the codec message says.
+         *
+         * Also guarded on the TARGET. React simulates bubbling for `error`, which does not bubble
+         * natively, so a failing child — the <track> below, whose blob can 404 or be revoked
+         * mid-playback — dispatches through this handler as if the video itself had died. That
+         * alone could put a codec error over a film that was playing perfectly. */
+        onError={(e) => {
+          if (e.target !== e.currentTarget) return;      // a child's failure is not the video's
+          const err = e.currentTarget.error;
+          if (import.meta.env.DEV) console.warn('[player] media error', err?.code, err?.message);
+          if (err?.code === 1) return;                   // aborted: ours, and not worth a screen
+          setLoading(false);
+          const kind = err?.code === 2 ? 'source'
+            : err?.code === 3 ? (startedRef.current ? 'source' : 'codec')
+            : 'codec';
+          setErrKind((k) => k ?? kind);
+        }}
         onVolumeChange={(e) => { setVol(e.currentTarget.volume); setMuted(e.currentTarget.muted); }}
         onEnded={() => { setPlaying(false); if (settings.autoplayNext && source.next) source.next(); }}
       >
@@ -1718,7 +2227,18 @@ export default function VideoPlayer() {
       {loading && !errKind && (
         <div className="vp-loading show" id="vpLoading" role="status" aria-live="polite">
           {Worm}
-          <div className="lt">{t('player.preparing')}</div>
+          {/* THE WORM SAYS IT, THE CAPTION ONLY REPEATED IT — on the TV. A spinner over a black
+              screen already means "wait"; "Preparing stream…" underneath is the same information
+              spelled out, and it is the part that dates badly, because it names a stage the viewer
+              has no use for and cannot act on. The web keeps it: a browser tab can be one of many
+              things doing one of many things, and the words say which. A television is showing one
+              film and nothing else.
+              UNPAINTED RATHER THAN DELETED, the same call as the panel headings in TvDetail. The
+              wrapper is a `role="status"` live region and the worm is a CSS animation — with the
+              text gone outright there is nothing in it to announce, so a reader would meet a
+              silent region and the wait would be invisible twice over. `.sr-only` takes the
+              pixels and keeps the announcement. */}
+          <div className={IS_TV ? 'lt sr-only' : 'lt'}>{t('player.preparing')}</div>
           <div className="ls" />
         </div>
       )}
@@ -1741,9 +2261,13 @@ export default function VideoPlayer() {
 
       <div className="vp-ui">
         <div className="vp-top">
-          <div>
+          {/* THE EPISODE SITS BESIDE THE TITLE, NOT UNDER IT. Stacked, it was a second line of
+              chrome over the picture for four characters of information, and at the top-left
+              corner of a television that is the most expensive real estate on the screen. On one
+              line the pair reads as what it is — one name for what is playing. */}
+          <div className="vp-titlerow">
             <div className="vp-title" id="playerTitle">{source.title || ''}</div>
-            <div className="vp-subtitle" id="vpSubtitle">{source.subtitle || ''}</div>
+            {source.subtitle && <div className="vp-subtitle" id="vpSubtitle">{source.subtitle}</div>}
           </div>
           <div className="vp-top-right">
             <div className="vp-status" id="playerStatus" role="status" aria-live="polite" />
@@ -1758,16 +2282,15 @@ export default function VideoPlayer() {
           </div>
         </div>
 
-        {/* The centre disc is a BUTTON on the web and a plain badge on the TV. It has to stop
-            being focusable there: it is a second, ambiguous play control sitting in the middle of
-            the screen, and TvSpatialNav would offer it as a target above the bar's own ▶. OK
-            already toggles playback from anywhere in transport mode, so on a TV this is only ever
-            the "this is paused" sign it looks like. */}
-        {IS_TV ? (
-          <div className={`vp-center${playing ? ' hidden' : ''}`} aria-hidden="true">
-            <span className="ic">{playing ? IcPause : IcPlay}</span>
-          </div>
-        ) : (
+        {/* THE CENTRE DISC IS WEB-ONLY NOW. On a TV it had already been demoted from a button to a
+            badge — it could not be focusable, because it is a second, ambiguous play control in the
+            middle of the screen and TvSpatialNav would offer it above the bar's own ▶ — which left
+            it as a "this is paused" sign, drawn as a dark circle over the middle of the picture.
+            That is a caption on a still frame nobody asked for: the control bar comes up with the
+            same glyph on its own disc whenever playback stops, so the state was already stated
+            somewhere the viewer is looking, by something they can actually press. Two signs for
+            one fact, and this was the one sitting on the film. */}
+        {!IS_TV && (
           <button className={`vp-center${playing ? ' hidden' : ''}`} aria-label="Play / Pause" onClick={togglePlay}>
             <span className="ic">{playing ? IcPause : IcPlay}</span>
           </button>
@@ -1786,21 +2309,36 @@ export default function VideoPlayer() {
                   focusable: OK toggles playback from transport mode and from the scrubber, so a
                   second play control in the D-pad's path would be one more stop that does what
                   OK already did, and TvSpatialNav would offer it beside the bar. */}
+              {/* BOTH GLYPHS ARE ALWAYS MOUNTED, one on top of the other, and the class decides
+                  which is visible. Swapping `playing ? IcPause : IcPlay` replaces the node, and a
+                  node that does not exist yet cannot animate out of anything — the best that gets
+                  you is the incoming mark appearing while the outgoing one has already blinked
+                  away. Stacked, the change is one state on one element: two opacities and two
+                  transforms cross over each other, which is the only kind of transition that
+                  reads as one thing BECOMING another rather than as a cut. It costs a second
+                  inert <svg> in the DOM, which is nothing beside the alternative. */}
               <div className={`vp-play-disc${playing ? ' playing' : ''}`} aria-hidden="true">
-                {playing ? IcPause : IcPlay}
+                <span className="ic-play">{IcPlay}</span>
+                <span className="ic-pause">{IcPause}</span>
               </div>
-              <span className="vp-t vp-t-cur" id="vpCur">
-                {fmt(shownTime)}
-                {/* How far the pending scrub has travelled. The absolute time answers "where will
-                    I land"; this answers "how far did I just skip", which is what a viewer holding
-                    the button down is actually counting. It rides with the elapsed time, which is
-                    the number it is modifying. */}
-                {seekDelta !== 0 && <span className="vp-seekdelta">{seekDelta > 0 ? '+' : '−'}{fmt(Math.abs(seekDelta))}</span>}
-              </span>
+              {/* The scrub offset used to ride here, inline, in red. It had to move: this cell is
+                  in the flex row that also holds the bar, so a number appearing inside it widened
+                  the cell and squeezed the scrubber — the bar changed length every time the viewer
+                  touched Left or Right, which is the one element that must not move while it is
+                  being aimed. It now floats over the bar instead, out of flow. See `.vp-seek-cue`
+                  below the scrubber. */}
+              {/* THE CELL IS SIZED FROM THE DURATION, NOT FROM ITS OWN CONTENTS. `tabular-nums`
+                  alone was not enough and the comment on `.vp-t` used to claim otherwise: equal
+                  digit widths keep 1:11 and 9:99 the same size, but they do nothing about the
+                  digit COUNT, so 9:59 → 10:00 still widened this cell and pushed the bar's left
+                  end along with it — mid-scrub, while the viewer is aiming at it. The duration is
+                  fixed for the whole film and is always the longest the elapsed time can get, so
+                  measuring the cell against it holds the ends still for good. */}
+              <span className="vp-t vp-t-cur" id="vpCur" style={{ minWidth: `${clockCh}ch` }}>{fmt(shownTime)}</span>
             </>
           )}
           <div
-            className={`vp-progress${seekPreview != null ? ' seeking' : ''}`}
+            className={`vp-progress${seekPreview != null ? ' seeking' : ''}${ramping ? ' ramping' : ''}${landed ? ' landed' : ''}`}
             id="vpProgress"
             ref={barRef}
             onPointerDown={onBarPointerDown}
@@ -1818,10 +2356,36 @@ export default function VideoPlayer() {
             <div className="vp-bar">
               <div className="vp-buffered" id="vpBuffered" style={{ width: `${bufPct}%` }} />
               <div className="vp-played" id="vpPlayed" style={{ width: `${pct}%` }} />
+              {/* THE GROUND THE SCRUB HAS COVERED, drawn between where the video is and where it
+                  would land. Absolutely positioned inside the bar, so it costs the layout nothing
+                  and the bar keeps its length. */}
+              {IS_TV && seekPreview != null && spanWidth > 0 && (
+                <div className="vp-seek-span" style={{ left: `${spanFrom}%`, width: `${spanWidth}%` }} aria-hidden="true" />
+              )}
+              {IS_TV && seekPreview != null && <div className="vp-seek-origin" style={{ left: `${curPct}%` }} aria-hidden="true" />}
               <div className="vp-thumb" id="vpThumb" style={{ left: `${pct}%` }} />
             </div>
+            {/* THE OFFSET, FLOATING OVER THE BAR AND CLAMPED OFF ITS ENDS. `left` is clamped in px
+                rather than in % because the guard is about the pill's own width, which does not
+                scale with the bar: near 0:00 an uncorrected pill would hang off the left edge of
+                the screen. */}
+            {IS_TV && seekDelta !== 0 && (
+              <div
+                className={`vp-seek-cue${seekDelta > 0 ? ' fwd' : ' back'}`}
+                style={{ left: `clamp(64px, ${pct}%, calc(100% - 64px))` }}
+                aria-hidden="true"
+              >
+                {/* A TRUE MINUS SIGN (U+2212), not a hyphen. At this size a hyphen is a short
+                    stub sitting low against a tabular digit, which reads as a dash between two
+                    things rather than as the sign of the number after it; the minus is cut to the
+                    digits' own width and sits on their midline. The forward case takes no `+` —
+                    an unsigned offset while the playhead runs forward is the resting reading, and
+                    a sign that is present half the time is a sign worth noticing. */}
+                <span className="vp-seek-num">{seekDelta < 0 ? '−' : ''}{fmt(Math.abs(seekDelta))}</span>
+              </div>
+            )}
           </div>
-          {IS_TV && <span className="vp-t vp-t-dur" id="vpDur">{fmt(dur)}</span>}
+          {IS_TV && <span className="vp-t vp-t-dur" id="vpDur" style={{ minWidth: `${clockCh}ch` }}>{fmt(dur)}</span>}
           {!IS_TV && controlsRow}
         </div>
       </div>

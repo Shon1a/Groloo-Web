@@ -1,4 +1,8 @@
 import { useNavigate } from 'react-router-dom';
+/* This page's stylesheet, imported HERE and not from main.tsx. The route is a lazy chunk, so Vite
+ * emits these rules as that chunk's own CSS: fetched when the page is, and absent from any build
+ * the page is absent from — which on the TV build is the whole of it. */
+import '../styles/Categories.css';
 import { useT, useGenre } from '../i18n/i18n';
 import { catArt } from '../lib/categoryArt';
 import type { ReactNode } from 'react';

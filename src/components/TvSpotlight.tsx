@@ -800,9 +800,45 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * WARM, THIS COSTS NOTHING AND IS THE NORMAL CASE: `complete && naturalWidth` is checked first,
    * so a neighbour the effect below already fetched flips synchronously, with no wait at all and
    * not a frame's delay against the old behaviour. */
+  /* What the walk is currently pointing AT, as a stable string. `end` is its own value because the
+   * end card is a real stop with no id of its own. */
+  const activeSlot = slotAt(active);
+  const activeKey = activeSlot === 'end' ? 'end' : String(activeSlot?.id ?? '');
+
+  /* ---- A NEW CATALOGUE IS A NEW ROW ---------------------------------------------------------
+   * The three top-level pages share one component instance (see the note on `activeKey` in the
+   * effect below), so nothing about a route change resets this row on its own: the walk stays
+   * where it was on the previous page and the cross-fade layers still hold its artwork. Landing
+   * on Anime at card nine of Movies is not a state anyone asked for.
+   *
+   * DETECTED FROM THE HEAD OF THE LIST rather than from a `cat` prop, because these rows are not
+   * given one — TvCatalogRow passes items and nothing else. The first title's id is the cheapest
+   * thing that changes when the catalogue does and stays put when it does not: appending a page
+   * of results does not touch it, and neither does `enrich` filling artwork into a card already
+   * on screen.
+   *
+   * THE BILLBOARD IS CUT, NOT DISSOLVED. Both layers are rewritten in one go rather than left to
+   * the swap effect: a cross-fade means "this row moved to its neighbour", and a whole page
+   * changing underneath is not that. Dissolving Movies' billboard into Anime's would read as one
+   * row walking sideways across a page boundary. */
+  const headId = list.length ? String(list[0].id) : '';
+  const prevHead = useRef(headId);
+  useEffect(() => {
+    if (prevHead.current === headId) return;
+    prevHead.current = headId;
+    setActive(0);
+    setXfade({ a: list[0], b: null, front: 'a' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headId]);
+
   useEffect(() => {
     if (firstRun.current) { firstRun.current = false; return; }
-    const slot = slotAt(active);
+    /* `?? list[0]` because `active` can outlive the list it indexes. The reset above puts it back
+     * to 0, but that is state and lands a commit later — so for one render after a new category
+     * arrives, a walk that had reached card twelve of a twenty-card row is indexing a six-card
+     * one. Falling back to the head rather than reading `undefined` keeps that frame on the first
+     * title of what actually arrived instead of throwing inside `withArt`. */
+    const slot = slotAt(active) ?? list[0] ?? 'end';
     let spent = false;
     const flip = () => {
       if (spent) return;
@@ -859,8 +895,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * way. */
     const capId = window.setTimeout(flip, SWAP_WAIT_CAP);
     return () => { spent = true; window.clearTimeout(capId); };
+    /* `activeKey` IS IN HERE BECAUSE THE INDEX IS NOT THE PICTURE.
+     *
+     * Keyed on `[active, n]` alone this asked "has the walk moved, or has the row got longer" —
+     * and missed the third way the billboard goes stale: the same index now points at a different
+     * title. That is exactly what a page change does. Series, Movies and Anime are one `Browse`
+     * component in one position of the tree, so React keeps its state across the route change and
+     * hands it a new `items` array; `active` is still 0 and, for two catalogues that happen to be
+     * the same length, `n` is unchanged too. Neither dependency moved, the effect never ran, and
+     * the billboard kept showing the title from the page you had just left.
+     *
+     * The id of whatever sits under the walk is the honest dependency: it changes whenever the
+     * artwork should, and does not change when a row merely lengthens (load-more appends past
+     * `active`) or when `enrich` fills a logo into the card already showing. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, n]);
+  }, [active, n, activeKey]);
 
   /* ---- THE NEXT BILLBOARD IS FETCHED BEFORE IT IS ASKED FOR ---------------------------------
    * The gate above removes the black frame; this is what keeps it from costing anything, and the

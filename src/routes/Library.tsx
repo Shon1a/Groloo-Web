@@ -35,7 +35,9 @@ export default function Library() {
 
   const tiles: Array<{ key: keyof typeof icons; title: string; desc: string; go: () => void }> = [
     { key: 'mylist', title: t('nav.my_list'), desc: t('myspace.mylist_desc'), go: () => listRef.current?.scrollIntoView({ behavior: 'smooth' }) },
-    { key: 'new', title: t('nav.new_popular'), desc: t('myspace.new_desc'), go: () => nav('/categories') },
+    /* Web only: its destination does not exist on a television (see TvTopNav), and a tile that
+       redirects straight back to Home is worse than no tile — it looks broken rather than absent. */
+    ...(IS_TV ? [] : [{ key: 'new' as const, title: t('nav.new_popular'), desc: t('myspace.new_desc'), go: () => nav('/categories') }]),
     { key: 'addons', title: t('nav.addons'), desc: t('myspace.addons_desc'), go: () => nav('/addons') },
     { key: 'settings', title: t('nav.settings'), desc: t('myspace.settings_desc'), go: () => nav('/settings') },
   ];
