@@ -24,7 +24,21 @@ import Browse from './routes/Browse';
  * The two heavy MODALS (DetailModal, VideoPlayer) are split the same way but gated below,
  * because they are always in the tree rather than reached by a route — see DetailModalGate. */
 const Explore = lazy(() => import('./routes/Explore'));
-const Categories = lazy(() => import('./routes/Categories'));
+/* CATEGORIES IS NOT BUILT INTO THE TV PACKAGE AT ALL.
+ *
+ * Its route already redirects on that build (see the <Route> below), which stopped the page being
+ * REACHABLE — but a `lazy(() => import(…))` at module scope is a static dependency as far as the
+ * bundler is concerned, so the chunk was still emitted and still listed in the service worker's
+ * precache manifest. A television downloading and caching a screen it can never open is exactly
+ * the cost the code-splitting note above exists to avoid.
+ *
+ * Written against `import.meta.env.MODE` rather than the `IS_TV` const, because that const is
+ * declared further down this file and this has to fold at parse time: Vite replaces the
+ * expression with a literal, the ternary collapses to one branch, and the untaken branch — with
+ * its `import()` inside — is dropped before Rollup ever traces it. */
+const Categories = import.meta.env.MODE === 'tv'
+  ? (() => null)
+  : lazy(() => import('./routes/Categories'));
 const Library = lazy(() => import('./routes/Library'));
 const Addons = lazy(() => import('./routes/Addons'));
 const Settings = lazy(() => import('./routes/Settings'));
@@ -93,7 +107,12 @@ export default function App() {
           <Route index element={<Home />} />
           {/* discover surfaces */}
           <Route path="explore" element={<Suspense fallback={routeFallback}><Explore /></Suspense>} />
-          <Route path="categories" element={<Suspense fallback={routeFallback}><Categories /></Suspense>} />
+          {/* NOT ON A TELEVISION — see the note in TvTopNav for why the destination went. The
+              route stays registered and redirects rather than being dropped: a set that was left
+              on this page before an update, or a stale entry in the browser's own history, has to
+              land somewhere real. `Categories` is a lazy import, so the redirect also means the
+              chunk is never fetched on that build. */}
+          <Route path="categories" element={IS_TV ? <Navigate to="/" replace /> : <Suspense fallback={routeFallback}><Categories /></Suspense>} />
           <Route path="tv" element={<Browse cat="trending_tv" topLevel />} />
           <Route path="movies" element={<Browse cat="trending_movie" topLevel />} />
           <Route path="anime" element={<Browse cat="trending_anime" topLevel />} />

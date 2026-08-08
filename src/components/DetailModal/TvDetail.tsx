@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
 import { imgW } from '../../lib/img';
+import { epLabel } from '../../lib/utils';
 import { langName, sourceNote, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
 import { registerBackHandler } from '../../lib/tvKeys';
@@ -510,8 +511,28 @@ export default function TvDetail(p: TvDetailProps) {
    * three controls live on. From there Down re-enters the list — and `unreachable` in
    * TvSpatialNav means it re-enters on a row that is actually on screen, so leaving and coming
    * back keeps your place rather than snapping to the top. */
+  /* UP OFF THE TOP ROW GOES TO THE CHIP FOR THE SAME REASON LEFT DOES.
+   *
+   * From the first source, Up has nothing above it inside the list, so TvSpatialNav scored the
+   * whole head row and picked by geometry — which is the ✕ in the far corner, because it is the
+   * nearest candidate in that direction from a full-width row. Two presses later the viewer is
+   * closing the title they were trying to pick a source for.
+   *
+   * The chip is the answer here for the reason it is the answer for Left: it is the head of the
+   * panel, the control that says what the list underneath IS, and the row the other three live
+   * on — so from there every one of them is one press sideways. Geometry has no way to know that;
+   * the ✕ really is closer.
+   *
+   * ONLY FROM THE TOP ROW. Anywhere else Up means "the row above", which is what spatial
+   * navigation already does correctly, and taking the key there would break walking the list. */
   const leaveList = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'ArrowLeft' || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowUp') return;
+    if (e.key === 'ArrowUp') {
+      const stops = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('a, button, [tabindex]'))
+        .filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
+      if (stops[0] !== document.activeElement) return;   // mid-list: Up is "the row above"
+    }
     const chip = panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn');
     if (!chip) return;   // no head to go back to; leave the key alone rather than swallow it
     e.preventDefault();
@@ -595,7 +616,7 @@ export default function TvDetail(p: TvDetailProps) {
           unlabelled group of buttons. The S1 E1 stays in it for that reason too. */}
       <h3 className="tv-det-panel-title sr-only">
         {t('modal.streams')}
-        {pickedEp && <span className="tv-det-panel-sub"> · S{pickedEp.season} E{pickedEp.ep}</span>}
+        {pickedEp && <span className="tv-det-panel-sub"> {epLabel(pickedEp.season, pickedEp.ep)}</span>}
       </h3>
 
       {/* The language picker used to sit here, between this heading and the list. It is up in the

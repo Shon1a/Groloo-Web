@@ -1,0 +1,164 @@
+/* ============================================================================
+ * THE CATEGORIES HUB — styles for routes/Categories.tsx, and ONLY that route.
+ *
+ * Lifted out of app.css so the page's CSS travels with the page's code. The route is a lazy
+ * chunk, and on the TV build it is not built at all (see App.tsx) — but a stylesheet imported by
+ * main.tsx ships to every build whatever the modules do, so ~130 lines of rules for a screen that
+ * cannot be opened were being downloaded and cached by every television. Imported from the route
+ * component instead, Vite emits this as that chunk's own stylesheet: it is fetched when the page
+ * is, and it is absent from any build the page is absent from.
+ *
+ * WHAT DELIBERATELY DID NOT COME WITH IT. `cardFade`, `--grad`, `--text-muted` and the rest of
+ * the tokens these rules lean on stay in app.css: they are the app's, not this page's, and this
+ * file is a leaf that consumes them. It defines nothing anything else can depend on, which is
+ * what makes it safe to be missing.
+ * ==========================================================================*/
+
+  /* ---------- Categories hub — the "browse by category" page ----------
+     Not a title grid: each card IS a category (collection / genre / network). A
+     signed duotone glass tile — per-category hue (--h1 light → --h2 deep) + a big
+     line-art watermark glyph — that drills into the matching grid. No posters load
+     here, so the page paints instantly. */
+  .cat-hub{max-width:1440px;margin:0 auto}
+  .cathub-head{margin:2px 0 8px}
+  .cathub-eyebrow{display:inline-block;font-size:12px;letter-spacing:.34em;text-transform:uppercase;
+    color:var(--text-muted);margin-bottom:12px}
+  .cathub-title{font-size:clamp(30px,5vw,52px);font-weight:300;letter-spacing:-.02em;line-height:1.02;
+    background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .cathub-sub{margin-top:12px;color:var(--text-muted);font-size:clamp(14px,1.4vw,17px);max-width:560px}
+  .cathub-sec{margin-top:40px}
+  .cathub-sectitle{font-size:13px;letter-spacing:.24em;text-transform:uppercase;color:var(--text-muted);
+    margin:0 0 16px;font-family:var(--font-mono)}
+
+  /* shared card */
+  .catcard{position:relative;overflow:hidden;isolation:isolate;display:block;width:100%;text-align:left;
+    cursor:pointer;border-radius:18px;border:1px solid rgba(255,255,255,.10);padding:18px;color:#fff;
+    background:#0f0f12;   /* fallback when color-mix is unsupported */
+    background:
+      radial-gradient(120% 120% at 82% 12%, color-mix(in srgb, var(--h1) 58%, transparent) 0%, transparent 56%),
+      linear-gradient(155deg, color-mix(in srgb, var(--h2) 82%, #000) 0%, #0a0a0a 78%);
+    box-shadow:0 10px 30px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);
+    transition:transform .28s cubic-bezier(.16,.84,.44,1), box-shadow .28s, border-color .28s}
+  /* Fallbacks first, same rule as the scrim below. These two are genuinely cosmetic — the
+     card keeps its base border and a plain shadow on the TV — but LG's Magic Remote emits
+     real mouseover, so hover IS a state a TV user reaches, and a hover that visibly does
+     nothing reads as an unresponsive card rather than a subtle one. */
+  .catcard:hover{transform:translateY(-6px);border-color:rgba(255,255,255,.28);
+    box-shadow:0 22px 52px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.10);
+    border-color:color-mix(in srgb, var(--h1) 55%, transparent);
+    box-shadow:0 22px 52px rgba(0,0,0,.6), 0 0 0 1px color-mix(in srgb, var(--h1) 30%, transparent),
+      inset 0 1px 0 rgba(255,255,255,.10)}
+  .catcard:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+  /* big watermark glyph, tinted with the card's own light hue */
+  .catcard-ico{position:absolute;right:-8px;top:-10px;width:56%;max-width:132px;aspect-ratio:1;
+    color:#fff;color:color-mix(in srgb, var(--h1) 88%, #fff 12%);opacity:.16;transform:rotate(-8deg);
+    pointer-events:none;transition:transform .35s cubic-bezier(.16,.84,.44,1), opacity .35s}
+  .catcard-ico svg{width:100%;height:100%;display:block}
+  .catcard:hover .catcard-ico{transform:rotate(-3deg) scale(1.08);opacity:.3}
+
+  .catcard-body{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .catcard-name{font-size:clamp(15px,1.4vw,19px);font-weight:600;letter-spacing:-.01em;line-height:1.16}
+  .catcard-go{flex:0 0 auto;width:26px;height:26px;display:grid;place-items:center;border-radius:50%;
+    font-size:14px;color:#fff;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.18);
+    transform:translateX(-4px);opacity:0;transition:opacity .25s, transform .25s}
+  .catcard:hover .catcard-go{opacity:1;transform:none}
+
+  /* diagonal light sweep on hover */
+  .catcard-sheen{position:absolute;inset:0;z-index:3;pointer-events:none;
+    background:linear-gradient(115deg, transparent 32%, rgba(255,255,255,.14) 48%, transparent 64%);
+    transform:translateX(-120%);transition:transform .6s ease}
+  .catcard:hover .catcard-sheen{transform:translateX(120%)}
+
+  /* blended backdrop collage — a strip of real stills melting into the hue
+   * gradient. Sits at the very back; the scrim + label ride on top of it. */
+  .catcard-art{position:absolute;inset:0;z-index:0;display:flex;justify-content:flex-end;
+    overflow:hidden;animation:artIn .7s cubic-bezier(.16,.84,.44,1) both;
+    transition:transform .5s cubic-bezier(.16,.84,.44,1), filter .5s ease;
+    /* the whole strip dissolves into the hue gradient on the left, under the label —
+       masking the CONTAINER (not each shot) keeps the melt without eating any one still */
+    -webkit-mask-image:linear-gradient(90deg, transparent 0%, rgba(0,0,0,.55) 20%, #000 42%);
+    mask-image:linear-gradient(90deg, transparent 0%, rgba(0,0,0,.55) 20%, #000 42%)}
+  .catcard-shot{flex:1 1 0;min-width:0;background-size:cover;background-position:50% 42%;
+    filter:saturate(1.05) contrast(1.02);backface-visibility:hidden}
+  /* single still — centre the crop; the container mask melts its left into the hue */
+  .catcard-shot:nth-child(1){background-position:52% 42%}
+  .catcard.has-art:hover .catcard-art{transform:scale(1.06);filter:brightness(1.08)}
+  /* with real art the line-art watermark just clutters — drop it */
+  .catcard.has-art .catcard-ico{display:none}
+  @keyframes artIn{from{opacity:0;transform:scale(1.04)}to{opacity:1;transform:none}}
+
+  /* legibility + brand tint over the collage: dark wash from the bottom-left
+   * corner (where the label sits) fading out toward the top-right imagery,
+   * plus a soft hue glow so each card keeps its signature colour. */
+  .catcard-scrim{position:absolute;inset:0;z-index:1;pointer-events:none;
+    /* FALLBACK FIRST — this line is load-bearing on the TV, not decoration.
+       color-mix() is Chromium 111 against a webOS 22 floor of 87, and an unsupported VALUE
+       drops the whole declaration. Without a preceding one this element would have no
+       background at all, and the scrim is what makes the card's title legible over bright
+       artwork — so the failure is unreadable white text, not a missed tint. The hue-tinted
+       layer is what is lost; the black-to-transparent wash that does the actual work is
+       kept verbatim. */
+    background:
+      linear-gradient(90deg, rgba(0,0,0,.90) 0%, rgba(0,0,0,.44) 30%, transparent 60%),
+      linear-gradient(0deg, rgba(0,0,0,.86) 0%, rgba(0,0,0,.30) 34%, transparent 68%);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--h2) 90%, #000) 0%,
+        color-mix(in srgb, var(--h2) 44%, transparent) 30%, transparent 60%),
+      linear-gradient(0deg, rgba(0,0,0,.86) 0%, rgba(0,0,0,.30) 34%, transparent 68%),
+      radial-gradient(135% 130% at 90% 6%, color-mix(in srgb, var(--h1) 38%, transparent) 0%, transparent 56%)}
+
+  /* collection tiles — bigger, cinematic */
+  .cathero-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:18px}
+  .catcard-lg{min-height:158px;display:flex;flex-direction:column;justify-content:flex-end}
+  .catcard-lg .catcard-name{font-size:clamp(18px,1.7vw,23px)}
+  .catcard-lg .catcard-ico{width:52%;max-width:150px}
+
+  /* genre wall */
+  .catcard-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:16px}
+  .catcard-grid .catcard{min-height:116px;display:flex;flex-direction:column;justify-content:flex-end}
+
+  /* networks — denser + flatter */
+  .catcard-grid-net{grid-template-columns:repeat(auto-fill,minmax(158px,1fr))}
+  .catcard-net{min-height:92px}
+  .catcard-net .catcard-ico{opacity:.12;max-width:104px}
+
+  /* staggered entrance — reuses the drill-down cardRise keyframes */
+  .cat-hub .catcard{animation:cardRise .5s cubic-bezier(.16,.84,.44,1) both}
+  .cat-hub .catcard:nth-child(1){animation-delay:0s}
+  .cat-hub .catcard:nth-child(2){animation-delay:.04s}
+  .cat-hub .catcard:nth-child(3){animation-delay:.08s}
+  .cat-hub .catcard:nth-child(4){animation-delay:.12s}
+  .cat-hub .catcard:nth-child(5){animation-delay:.16s}
+  .cat-hub .catcard:nth-child(6){animation-delay:.2s}
+  .cat-hub .catcard:nth-child(7){animation-delay:.24s}
+  .cat-hub .catcard:nth-child(8){animation-delay:.28s}
+  .cat-hub .catcard:nth-child(n+9){animation-delay:.32s}
+
+  @media(max-width:900px){
+    .cathub-sec{margin-top:30px}
+    .cathero-grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+    .catcard-lg{min-height:128px}
+    .catcard{padding:14px;border-radius:15px}
+    .catcard-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+    .catcard-grid .catcard{min-height:100px}
+    .catcard-grid-net{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+    /* the go-arrow is a hover affordance — hide on touch where there's no hover */
+    .catcard-go{display:none}
+  }
+
+/* ---- OLD-CHROMIUM FALLBACK, kept with the page it belongs to.
+ *
+ * app.css carries one `@supports not (aspect-ratio: 1 / 1)` block holding every such fallback in
+ * the app, and this rule was in it. It comes here rather than staying there because it is the only
+ * member of that block that describes an element on this page — a fallback stranded in a file the
+ * page no longer relies on is a rule nobody will think to check when the card changes shape.
+ * Duplicating the four-word condition is the whole cost of keeping them together.
+ *
+ * Decorative watermark glyph, square. Its width is 56% capped at 132px and its <svg> child is
+ * height:100%, so a padding hack would leave the glyph with nothing to fill. The cap is the only
+ * concrete number available; at 0.16 opacity behind card artwork a few pixels of drift is
+ * invisible, and the alternative is an invisible glyph. */
+@supports not (aspect-ratio: 1 / 1) {
+  .catcard-ico { height: 132px; }
+}

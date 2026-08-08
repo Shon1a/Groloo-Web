@@ -133,7 +133,11 @@
   background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.55) 55%, rgba(0,0,0,0) 100%);
 }
 
-.tv-nav-left  { justify-self: start; }
+/* Both outer columns are empty spacers now that the avatar has moved into the group. They are
+   kept, and kept the same width, because `1fr auto 1fr` only centres the middle column when the
+   two beside it balance — and because the grid needs three children for the group to BE the
+   middle one. */
+.tv-nav-left  { justify-self: start; width: 44px; }
 .tv-nav-right { justify-self: end; width: 44px; }
 
 /* THE MENU SWELLS WHEN THE REMOTE IS IN IT. A transform, not a font-size change: scale composites
@@ -198,21 +202,12 @@
     height .28s cubic-bezier(.2, .7, .2, 1);
 }
 
-/* Profile avatar (opens My space). Focus is shown the same way the nav items show it — the pill
-   fills in — rather than with a ring around a circle. */
-.tv-nav-profile {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 44px; height: 44px; border-radius: 999px;
-  background: rgba(255,255,255,0.12);
-  color: #fff; border: 0; cursor: pointer;
-  transition: background-color .22s ease, color .22s ease;
-}
-.tv-nav-profile:hover { background: rgba(255,255,255,0.24); }
-.tv-shell .tv-nav-profile:focus-visible {
-  outline: none;
-  background: #fff;
-  color: #0b0b0b;
-}
+/* `.tv-nav-profile` has no styles of its own any more. It was a 44px disc with its own fill and
+   focus treatment when it stood alone in the left corner; then a glyph padded to the row's height
+   when it moved into the group; and now that it is simply the word "My Space" it is a text item
+   like the four beside it, and `.tv-nav-item` above says everything there is to say about it.
+   The class stays on the element because TvSpatialNav lists it as a focus candidate — a selector
+   hook with no rules behind it, which is the honest shape for what it now is. */
 
 /* Nav items — text pills; the active page gets a filled pill, the rest are dimmed until
    hovered/focused. Sized for across-the-room reading. */
@@ -2490,8 +2485,7 @@
  * Restated per shape below. There is no CSS keyword for "keep whatever this element already
  * had" — `revert` rolls back to the browser's own stylesheet, not to another author rule — so
  * the list has to be explicit. Anything given a radius AND made focusable belongs here. */
-.tv-shell .tv-nav-item:focus-visible,
-.tv-shell .tv-nav-profile:focus-visible { border-radius: 999px; }
+.tv-shell .tv-nav-item:focus-visible { border-radius: 999px; }
 .tv-shell .tv-hero-scrim:focus-visible,
 .tv-shell .tv-spot-hero:focus-visible { border-radius: 12px; }
 .tv-shell .pcard .poster:focus-visible { border-radius: 10px; }
@@ -3112,7 +3106,12 @@
 .vp-overlay.tv .vp-bottom { padding: clamp(14px, 2vh, 24px) clamp(48px, 4.5vw, 92px) clamp(32px, 5vh, 58px); }
 
 .vp-overlay.tv .vp-title { font-size: clamp(20px, 2.8vh, 30px); }
-.vp-overlay.tv .vp-subtitle { font-size: clamp(14px, 1.9vh, 20px); }
+/* The same clamp as the title, not a smaller one. Beside it rather than under it, a step down in
+   size would read as a caption on the name; at the same size the two are one label — "Solo
+   Leveling  S1 | E4" — which is how a viewer says it out loud. The mono face and the dimmer ink
+   are what keep them distinguishable without a size difference doing it. */
+.vp-overlay.tv .vp-subtitle { font-size: clamp(20px, 2.8vh, 30px); }
+.vp-overlay.tv .vp-titlerow { gap: clamp(10px, 1vw, 18px); }
 .vp-overlay.tv .vp-status { font-size: clamp(14px, 1.8vh, 19px); }
 
 /* ---- The scrubber. Thick enough to read across a room, and its thumb is ALWAYS drawn — on the
@@ -3127,7 +3126,7 @@
 .vp-overlay.tv .vp-progress { flex: 1; min-width: 0; padding: clamp(12px, 1.8vh, 20px) 0; }
 /* The unplayed track lifts from the web's .18 — that value is set against a bar the eye is
    already close to, and at three metres a track this thin at 18% white is barely there. */
-.vp-overlay.tv .vp-bar { height: 10px; border-radius: 5px; background: rgba(255, 255, 255, .26); }
+.vp-overlay.tv .vp-bar { height: 5px; border-radius: 2.5px; background: #2f8dd0bd; }
 
 /* ---- THE PLAYED PORTION IS A HEAT GRADIENT, and it is measured against the PLAYED LENGTH, not
    against the whole track. That is the choice worth stating, because the other reading is just
@@ -3137,16 +3136,15 @@
    keeps the two agreeing at every position, which is what makes the disc read as the hot end of
    the bar rather than as a separate object parked on top of it. */
 .vp-overlay.tv .vp-played {
-  background: linear-gradient(90deg, #f2cf22 0%, #f0921f 42%, #e8571b 72%, #e51f16 100%);
+  background: linear-gradient(90deg, #64f8ff 0%, #1fa5f0 42%, #060eff 72%, #280880 100%);
 }
 .vp-overlay.tv .vp-thumb {
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
   transform: translate(-50%, -50%) scale(1);
-  background: #e51f16;
-  /* The white glow the web thumb carries would ring a red disc in white and cost it its edge
-     against the played bar; a dark halo separates it from a bright frame instead. */
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, .35), 0 2px 8px rgba(0, 0, 0, .45);
+  background: #1d0aaa;
+  /* No halo: the disc is read off its own colour against the played bar, not off a ring. */
+  box-shadow: none;
 }
 
 /* THE TIMELINE TAKES NEITHER OF THE TWO FOCUS TREATMENTS — IT LIGHTS ITSELF UP.
@@ -3161,11 +3159,10 @@
    heaviest thing on a frame it is supposed to sit quietly on top of, and it read as a panel round
    the film rather than as a selected control.
 
-   Nothing was lost by dropping it, because the rules directly below were never the ring's
-   supporting act — they are a complete focus state on their own: the bar grows 8px → 12px, its
-   track brightens, it picks up a halo, and the playhead goes 20px → 26px. That is four changes to
-   the thing the eye is already on, which is a stronger signal at ten feet than an outline around
-   it, and it stays entirely inside the bar's own shape.
+   The grow-and-glow state that replaced it is gone too: the bar thickened, its track brightened,
+   it picked up a halo and the playhead jumped 15px → 26px, and the result was a heavier object
+   than the resting bar rather than the same bar marked as selected. What focus gets now is light
+   and nothing else — see the rules below the `outline: none`.
 
    `outline: none` is explicit rather than omitted, because leaving it off would let app.css's
    base ring (and the UA's) come straight back — see the note further down about focus states that
@@ -3173,16 +3170,67 @@
 .vp-overlay.tv .vp-progress:focus-visible {
   outline: none;
 }
-.vp-overlay.tv .vp-progress:focus-visible .vp-bar {
-  height: 14px;
-  background: rgba(255, 255, 255, .3);
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, .5);
+
+/* WHAT FOCUS DOES INSTEAD: it lights, it does not grow. Nothing here touches height, width or
+   layout — the bar is the same 5px object focused or not, so nothing under it shifts and the
+   playhead does not jump position when the remote lands on the timeline.
+
+   The glow-and-pulse version of this read cheap, and it is worth naming why, because "add more
+   light" is the obvious fix and it is the wrong one. A soft haze bleeding off the thumb has no
+   edge, and an edgeless shape at ten feet looks like a rendering artefact rather than a deliberate
+   state; a slow breathe on top of it turns a control into a notification. Expensive interfaces do
+   the opposite — they hold still and get SHARPER. So the playhead's tell is a hairline of pure
+   white ringing it exactly, sitting on a tight contact shadow that lifts the disc off the bar, and
+   the bar's tell is a 1px inner highlight along its top edge. Both are crisp, both are small.
+
+   The one moving part is a specular sheen: a narrow band of light that travels the played portion
+   once every few seconds and then rests, the way light crosses brushed metal when something turns.
+   It reads as material, not as an alert, and because it is masked to the played width it also
+   quietly re-states how far in the viewer is each time it runs. */
+.vp-overlay.tv .vp-bar,
+.vp-overlay.tv .vp-thumb {
+  transition: background-color .3s cubic-bezier(.22, .61, .36, 1), box-shadow .3s cubic-bezier(.22, .61, .36, 1);
 }
-.vp-overlay.tv .vp-progress:focus-visible .vp-thumb { width: 26px; height: 26px; }
-/* MID-SCRUB, and it has to be told apart from a red disc sitting still. The halo used to be the
-   accent at 50% — which was legible when the thumb was white and is nearly invisible now that the
-   thumb is red and the bar beneath it ends red. White is the one colour not already in play at
-   this end of the bar, so it is what the scrubbing state gets. */
+.vp-overlay.tv .vp-progress:focus-visible .vp-bar {
+  background: #3f9fdecc;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 1px 10px rgba(6, 14, 255, .3);
+}
+.vp-overlay.tv .vp-progress:focus-visible .vp-thumb {
+  box-shadow:
+    0 0 0 1.5px rgba(255, 255, 255, .95),
+    0 2px 6px rgba(0, 0, 0, .55),
+    0 0 14px rgba(31, 165, 240, .45);
+}
+
+/* The sheen rides inside the played fill, so it is clipped to the played width for free. */
+.vp-overlay.tv .vp-played { overflow: hidden; }
+.vp-overlay.tv .vp-progress:focus-visible .vp-played::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg,
+    rgba(255, 255, 255, 0) 42%,
+    rgba(255, 255, 255, .55) 50%,
+    rgba(255, 255, 255, 0) 58%);
+  /* Long tail on the keyframe, not a long duration: the band crosses briskly and then the element
+     sits idle for three seconds. A sweep that runs continuously is a loading bar. */
+  animation: tv-vp-sheen 4.4s cubic-bezier(.33, 0, .2, 1) infinite;
+}
+@keyframes tv-vp-sheen {
+  0% { transform: translateX(-110%); }
+  32%, 100% { transform: translateX(110%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vp-overlay.tv .vp-bar,
+  .vp-overlay.tv .vp-thumb { transition: none; }
+  .vp-overlay.tv .vp-progress:focus-visible .vp-played::after { animation: none; opacity: 0; }
+}
+/* MID-SCRUB, and it has to be told apart from a focused disc sitting still. White is the one
+   colour not already in play at this end of the bar — the thumb and the gradient beneath it are
+   both blue — so it is what the scrubbing state gets: a thicker, fully opaque ring where the
+   focused state carries only a hairline. Scrubbing always happens while focused, and this rule
+   wins on document order alone (same specificity as the focus rule, declared after it), so the
+   two never need to fight. */
 .vp-overlay.tv .vp-progress.seeking .vp-thumb {
   box-shadow: 0 0 0 4px rgba(255, 255, 255, .85), 0 0 16px rgba(0, 0, 0, .6);
 }
@@ -3202,9 +3250,122 @@
   padding: 0 clamp(9px, 1vw, 14px);
   border-width: 2px;
 }
-/* The scrub offset reads as the thing that is CHANGING rather than as part of the running time,
-   so it takes the colour of the bar's hot end — the same red as the playhead it is moving. */
-.vp-overlay.tv .vp-seekdelta { margin-left: 12px; color: #e51f16; font-variant-numeric: tabular-nums; }
+/* ---- THE SCRUB MOVES, IT DOES NOT TELEPORT --------------------------------------------------
+ *
+ * This is the single largest reason a rewind read as cheap. Every press rewrote `left` and `width`
+ * outright, so the playhead vanished and reappeared ten seconds away — six discrete teleports a
+ * second while a button is held. Nothing in the physical world moves like that, and the eye cannot
+ * track it, so a long scrub became a flickering dot rather than a thing travelling along a line.
+ *
+ * Easing the position instead lets the playhead SLIDE between presses. Because each press restarts
+ * the transition from wherever the last one had reached, a held button reads as one continuous
+ * glide that speeds up as the step grows, rather than as a sequence of jumps. 190ms is chosen
+ * against the ~160ms autorepeat of a TV remote: fast enough that the playhead is never lagging
+ * meaningfully behind the count, slow enough that consecutive presses overlap into one motion.
+ *
+ * It is scoped to `.seeking` on purpose. During ordinary playback the same properties are rewritten
+ * on every timeupdate, and a transition there would have the playhead permanently chasing the
+ * video — smooth, and wrong by a fifth of a second forever. */
+.vp-overlay.tv .vp-progress.seeking :is(.vp-played, .vp-seek-span, .vp-thumb, .vp-seek-cue) {
+  transition: left .19s cubic-bezier(.25, .8, .3, 1), width .19s cubic-bezier(.25, .8, .3, 1),
+              box-shadow .3s cubic-bezier(.22, .61, .36, 1);
+}
+
+/* WHILE THE BUTTON IS HELD, THE EASING CHANGES CHARACTER, and it has to. The curve above is an
+   ease-OUT: it decelerates into every new position, which is exactly right for a tap — the
+   playhead arrives and settles. Under the ramp a new position lands every ~55ms, so each one
+   would be a fresh deceleration that never completes, and continuous travel rendered as a chain
+   of half-finished stops reads as rubber-banding: the playhead appears to drag behind the number.
+   Linear, at just over the paint interval, is what makes those samples read as constant velocity —
+   the browser interpolates straight through them and the motion has no texture at all. */
+.vp-overlay.tv .vp-progress.ramping :is(.vp-played, .vp-seek-span, .vp-thumb, .vp-seek-cue) {
+  transition: left .07s linear, width .07s linear, box-shadow .3s cubic-bezier(.22, .61, .36, 1);
+}
+
+/* ---- NO LANDING RING. There was one here — a white circle thrown off the playhead when a seek
+   committed, meant to give the gesture a full stop. It read as a loading spinner: a ring appearing
+   around the playhead at the exact moment the picture stalls to decode is the universal sign that
+   something is WAITING, so the one frame it was supposed to reassure on is the one where it looked
+   like a fault. The commit is punctuated by the preview markers clearing and the picture cutting,
+   which is enough. `.landed` is still set on the element for anything that wants it. */
+
+/* ---- THE SCRUB READOUT ---------------------------------------------------------------------
+ *
+ * The old one was a red "−0:10" printed inline next to the elapsed time, and it was wrong twice.
+ * Structurally: it lived in the flex row that also holds the bar, so the bar lost length the
+ * moment the number appeared — the viewer was aiming at an element that resized under them. And
+ * visually: a saturated red number flashing on and off is an error colour on a control that is
+ * working perfectly, which is the cheapest thing an interface can do.
+ *
+ * The replacement is three quiet pieces that all sit OUT OF FLOW, so nothing in the row moves:
+ *
+ *   .vp-seek-span    the ground being covered, painted along the bar between where the video is
+ *                    and where it would land. The skip gets a LENGTH, not just a number — hold
+ *                    the button and the band grows, which is the actual feedback a viewer wants.
+ *   .vp-seek-origin  a hairline at the true playback position, so the band has a visible start
+ *                    and "back to here" stays legible while the playhead runs away from it.
+ *   .vp-seek-cue     the offset itself, floating above the playhead on smoked glass — white,
+ *                    tabular, with a single chevron for direction. It rides with the playhead
+ *                    rather than sitting in a corner, so the number is always where the eye is.
+ */
+.vp-overlay.tv .vp-seek-span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2.5px;
+  background: rgba(255, 255, 255, .3);
+  pointer-events: none;
+}
+.vp-overlay.tv .vp-seek-origin {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, .85);
+  pointer-events: none;
+}
+.vp-overlay.tv .vp-seek-cue {
+  position: absolute;
+  bottom: calc(100% - 2px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px clamp(13px, 1.3vw, 19px);
+  border-radius: 999px;
+  background: rgba(10, 14, 22, .62);
+  /* Hairline top edge only — a full border rings the pill and turns it into a box; a single lit
+     edge reads as a pane of glass catching the light above it. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 6px 20px rgba(0, 0, 0, .45);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(17px, 2.3vh, 26px);
+  font-weight: 500;
+  letter-spacing: .01em;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  /* Rises into place. Only the pill animates — the bar underneath is untouched. */
+  animation: tv-vp-seek-cue-in .22s cubic-bezier(.22, .61, .36, 1) both;
+}
+/* NO DIRECTION GLYPH. There was a chevron here, then an animated arrow, and neither earned its
+   place: the pill rides the playhead, and the playhead is already visibly travelling one way with
+   the covered band growing behind it. A symbol on top of that restates in 24px what the whole
+   width of the bar is saying, and it cost the pill a second element to keep sized, aligned and
+   mirrored. The number is the reading; the bar says which way. */
+
+@keyframes tv-vp-seek-cue-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vp-overlay.tv .vp-seek-cue { animation: none; }
+  .vp-overlay.tv .vp-progress:is(.seeking, .ramping) :is(.vp-played, .vp-seek-span, .vp-thumb, .vp-seek-cue) { transition: none; }
+}
 
 /* ---- FOCUS IS A FILL, NOT A RING ----------------------------------------------------------
  * A 3px white outline is what the rest of the TV build uses, and in the control bar it is the
@@ -3262,27 +3423,262 @@
   border-width: 2px;
 }
 
-/* ---- THE MENU DROPS DOWN, because its button is now in the top-right corner rather than at the
-   end of a row along the bottom. `.vp-menu` anchors itself to `bottom: 100%` — correct when it
-   had to open upwards out of the control bar, and off the top of the screen from up here. The
-   transform-origin has to follow, or the open animation scales out of a corner that is no longer
-   the one it is attached to. */
-.vp-overlay.tv .vp-top .vp-menu {
+/* ---- THE SETTINGS MENU IS A SHEET ON THE RIGHT EDGE ----------------------------------------
+ *
+ * It began as a popup hanging off its button, which is the right shape for a mouse: a small box
+ * near the cursor that closes the moment attention moves. None of that reasoning survives on a
+ * television. There is no cursor to be near, the "small box" is a list the remote has to WALK,
+ * and hanging it off a corner button meant its whole length was governed by how much room happened
+ * to be left below that corner — which is why it ran out of it, clipping its own content while
+ * three quarters of the screen sat empty beside it.
+ *
+ * A sheet inverts that: the panel owns a fixed column of the screen and the picture keeps the
+ * rest. Its height stops being a function of where a button sits, rows can be as tall as a
+ * ten-foot list needs, and — the part that matters for a D-pad — the geometry is CONSTANT, so
+ * walking down the list never moves the list.
+ *
+ * IT IS INSET FROM TOP AND BOTTOM RATHER THAN FULL-HEIGHT, which is the one deliberate departure
+ * from how these sheets are usually built. Full height would cover the right end of the scrubber
+ * and the duration beside it. The bar is the player's primary control and it stays readable — and
+ * reachable — with the menu open; the sheet is a guest on this screen, not a modal.
+ *
+ * `position: fixed` rather than absolute, because the anchor is now the screen instead of the
+ * button: staying inside `.vp-menu-wrap` would tie the sheet's box to a corner element's padding
+ * for no reason, and re-introduce exactly the dependency this is escaping.
+ *
+ * THE AUDIO PICKER IS EXCLUDED FROM ALL OF IT, hence the `:not()` on every rule — see its own
+ * block below for why the two menus want different shapes despite sharing a class. */
+.vp-overlay.tv .vp-top .vp-menu:not(.vp-audio-menu) {
+  position: fixed;
+  top: clamp(92px, 12.5vh, 148px);
+  bottom: clamp(104px, 14vh, 176px);
+  right: 0;
+  left: auto;
+  width: clamp(400px, 32vw, 600px);
+  max-height: none;
+  padding: clamp(14px, 1.6vh, 22px) clamp(12px, 1vw, 18px);
+  /* Flat against the edge it is attached to, rounded on the side it opens from — the shape says
+     which way it came in and which way Back sends it. */
+  border-radius: 22px 0 0 22px;
+  border-right: none;
+  background: rgba(8, 10, 14, .9);
+  backdrop-filter: blur(22px) saturate(130%);
+  -webkit-backdrop-filter: blur(22px) saturate(130%);
+  box-shadow: -30px 0 80px rgba(0, 0, 0, .55);
+  /* SLIDES, RATHER THAN SCALING OUT OF A CORNER. A scale-from-origin reads as something popping
+     out of the button that spawned it, which is a dropdown's gesture and a lie here — nothing on
+     screen is where this comes from. Travel says "off-screen", which is where it actually lives.
+     Opacity is deliberately quicker than the slide so the panel is solid for most of its journey
+     instead of arriving as a ghost. */
+  transform: translateX(100%);
+  transform-origin: center right;
+  /* `visibility` is the belt to opacity's braces. A fixed element parked at translateX(100%) sits
+     outside the viewport, and while modern engines do not let that grow the document's scroll
+     area, the overflow:hidden that clips the episode panel cannot help here — a fixed box is not
+     clipped by an ancestor's overflow. Taking it out of visibility when closed makes the question
+     moot on whatever engine the television is running. It steps down only after the slide has
+     finished, hence the delay, and back up instantly on open. */
+  visibility: hidden;
+  transition: transform .32s cubic-bezier(.22, .61, .36, 1), opacity .16s ease, visibility 0s linear .32s;
+}
+.vp-overlay.tv .vp-top .vp-menu:not(.vp-audio-menu).open {
+  transform: none;
+  visibility: visible;
+  transition: transform .32s cubic-bezier(.22, .61, .36, 1), opacity .16s ease, visibility 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vp-overlay.tv .vp-top .vp-menu:not(.vp-audio-menu) { transform: none; transition: opacity .16s ease, visibility 0s linear .16s; }
+  .vp-overlay.tv .vp-top .vp-menu:not(.vp-audio-menu).open { transition: opacity .16s ease, visibility 0s; }
+}
+
+/* The extra width is only worth taking if the rows use it. Wider gutters and a little air between
+   sections — at three feet this is a list; at ten it is a menu you read across a room. */
+.vp-overlay.tv .vp-top .vp-menu:not(.vp-audio-menu) .vp-acc-head { padding-left: clamp(14px, 1.1vw, 22px); padding-right: clamp(14px, 1.1vw, 22px); }
+.vp-overlay.tv .vp-top .vp-menu:not(.vp-audio-menu) .vp-opt { padding-left: clamp(20px, 1.6vw, 32px); padding-right: clamp(14px, 1.1vw, 22px); }
+.vp-overlay.tv .vp-top .vp-menu:not(.vp-audio-menu) .vp-acc + .vp-acc { margin-top: 6px; }
+
+/* ---- THE SETTINGS PANEL: ONE PICKER, THEN ITS LIST ----------------------------------------
+ *
+ * The chip names the section and sits alone at the top of the sheet; the section's options fill
+ * the space beneath it. See the note at the markup for why this beat both of the shapes that came
+ * before it (four accordions, then four label-and-chip rows).
+ *
+ * THE CHIP IS FULL WIDTH HERE, which is a deliberate break from every other place this control is
+ * used. Elsewhere it is a pill in a corner among other things; here it is the panel's only
+ * control and the heading for everything below it, so a small pill floating at the top left would
+ * read as a stray tag rather than as the thing the list belongs to. Stretching it also puts the
+ * chevron hard against the right edge, which is where a viewer looks for "this opens".
+ *
+ * The body does NOT scroll independently of the panel. A subtitle list long enough to overflow
+ * should move the whole sheet under the remote, not slide a window inside a window — two nested
+ * scroll regions on a D-pad is a way to lose track of where you are. */
+.vp-overlay.tv .vp-setpanel {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.4vh, 18px);
+}
+.vp-overlay.tv .vp-setpanel .tv-chipmenu { align-self: stretch; }
+.vp-overlay.tv .vp-setpanel .tv-chipmenu-btn {
+  width: 100%;
+  justify-content: space-between;
+  border-radius: 14px;
+  font-size: clamp(16px, 2vh, 22px);
+  font-weight: 600;
+  padding: clamp(11px, 1.4vh, 17px) clamp(16px, 1.2vw, 24px);
+  /* It grows about its own centre because it is centred in the panel — the edge-anchored origin
+     the corner chips use would shove a full-width control sideways under focus. */
+  transform-origin: 50% 50%;
+}
+/* The options list drops from the full-width chip and matches it, rather than shrink-wrapping its
+   longest label: a menu narrower than the control that opened it reads as a different object. */
+.vp-overlay.tv .vp-setpanel .tv-chipmenu-list {
+  left: 0;
+  right: 0;
+  min-width: 0;
+}
+.vp-overlay.tv .vp-setpanel .tv-chipmenu-opt {
+  font-size: clamp(15px, 1.9vh, 21px);
+  padding: clamp(9px, 1.2vh, 15px) clamp(14px, 1.1vw, 22px);
+}
+.vp-overlay.tv .vp-setbody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ---- LANGUAGE GROUPS IN THE SUBTITLE LIST, COLLAPSED UNTIL ASKED FOR ------------------------
+ *
+ * The heading was a label; it is a control now, and the two want opposite treatments. A label can
+ * be small, dim and letter-spaced because nothing lands on it. A row the remote stops at has to
+ * hold a focus state and read as pressable from a sofa — so this keeps the small uppercase
+ * lettering that makes it scannable as an index, and gains a surface, a count and a chevron that
+ * make it obviously a door rather than a caption.
+ *
+ * Sticky, so the language stays named while its own tracks scroll under it. Opaque rather than
+ * translucent for the same reason: option text sliding beneath a see-through heading is
+ * unreadable at ten feet. The fill is matched to the sheet's own so it does not read as a band. */
+.vp-overlay.tv .vp-subgroup + .vp-subgroup { margin-top: clamp(6px, .8vh, 12px); }
+.vp-overlay.tv .vp-subgroup-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, .8vw, 14px);
+  width: 100%;
+  padding: clamp(9px, 1.2vh, 15px) clamp(12px, .9vw, 18px);
+  border: none;
+  border-radius: 10px;
+  background: #0a0e14;
+  color: rgba(255, 255, 255, .62);
+  font: inherit;
+  font-size: clamp(12px, 1.4vh, 16px);
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+/* NAME · RULE · COUNT · CHEVRON. The rule takes all the slack, so the count and the chevron sit
+   hard against the right edge whatever the language is called — a one-word name and a long one
+   read as the same control. The order is set explicitly because `::after` is the element's last
+   child and would otherwise land after the chevron; ordering it into the second slot is cheaper
+   than a wrapper element that exists only to hold a line. */
+.vp-overlay.tv .vp-subgroup-name { order: 0; flex: 0 0 auto; }
+.vp-overlay.tv .vp-subgroup-head::after {
+  content: '';
+  order: 1;
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, .12);
+}
+.vp-overlay.tv .vp-subgroup-n {
+  order: 2;
+  flex: 0 0 auto;
+  font-size: .95em;
+  letter-spacing: .04em;
+  color: rgba(255, 255, 255, .4);
+}
+.vp-overlay.tv .vp-subgroup-chev { order: 3; flex: 0 0 auto; }
+/* Drawn from two borders rather than set as a glyph — the same call TvChipMenu documents: at this
+   size a chevron character is hairline, and a TV's system font may not carry it at all. */
+.vp-overlay.tv .vp-subgroup-chev {
+  width: .5em;
+  height: .5em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-.15em) rotate(45deg);
+  transition: transform .2s cubic-bezier(.2, .7, .2, 1);
+}
+.vp-overlay.tv .vp-subgroup.open .vp-subgroup-chev { transform: translateY(.1em) rotate(225deg); }
+/* An open group says so even when the remote has walked down into its tracks. */
+.vp-overlay.tv .vp-subgroup.open .vp-subgroup-head { color: rgba(255, 255, 255, .9); }
+@media (prefers-reduced-motion: reduce) {
+  .vp-overlay.tv .vp-subgroup-chev { transition: none; }
+}
+
+/* ---- THE PANEL CHIP DOES NOT ZOOM AND DOES NOT CHANGE SHAPE ------------------------------
+ *
+ * Two rules aimed at the corner chips reach this one and both are wrong here. `.tv-chipmenu.is-open
+ * .tv-chipmenu-btn` scales it to 1.04, and the focus rules restore the 999px pill — sized and
+ * shaped for a control that sits among other things in a corner, where a little swell is how it
+ * says the remote arrived and a pill is what it has always been.
+ *
+ * This chip is full width and alone at the top of the panel. There is nothing beside it for a zoom
+ * to distinguish it FROM, so the scale is not a focus signal — it is the heading of the whole panel
+ * lurching outward and then springing back, and at 1.04 across 600px that is a visible 24px of
+ * travel. The pill is worse: the resting control is a 14px rounded rectangle matching the sheet it
+ * sits in, so pressing OK re-cuts its corners into a lozenge. The inversion to white is signal
+ * enough, and it is already what "the remote is here" means everywhere in this build.
+ *
+ * Both are pinned rather than unset — `transform: none` would drop the compositor layer the chip
+ * rests on and re-rasterise its text on different subpixels, which is the jump the base rule
+ * documents at length. It keeps a transform start to finish; that transform is just always 1. */
+.vp-overlay.tv .vp-setpanel .tv-chipmenu-btn,
+.vp-overlay.tv .vp-setpanel .tv-chipmenu-btn:focus-visible,
+.vp-overlay.tv .vp-setpanel .tv-chipmenu.is-open .tv-chipmenu-btn {
+  transform: scale(1);
+  border-radius: 14px;
+}
+
+/* The player's blanket focus rule (`:is(a, button, [tabindex]):focus-visible` further down) fills
+   whatever the remote is on with white and squares it to 4px. That is right for the icon buttons
+   it was written for and wrong for these two shapes: a pill flattening into a rounded rectangle at
+   the moment focus lands is a shape change nobody asked for. Restating the radii keeps the chip a
+   pill and the options rows. The white fill itself is kept — it is what "the remote is here" means
+   everywhere in this build, and it is what the season picker does on the title screen. */
+.vp-overlay.tv .tv-chipmenu-btn:focus-visible { border-radius: 999px; }
+.vp-overlay.tv .tv-chipmenu-opt:focus-visible,
+.vp-overlay.tv .tv-chipmenu-opt:focus { border-radius: 10px; }
+
+/* ---- THE AUDIO PICKER STAYS A DROPDOWN, and the difference is not inconsistency — it is what
+   the two menus ARE. Settings is a browsable structure: four sections, each opening a list, and
+   the remote lives in it for a while. The audio picker is one short list of tracks that is nearly
+   always answered with a single press, and dressing that up as a sheet costs a 320ms slide and a
+   third of the screen to change something the viewer had already decided before pressing the
+   button.
+
+   What it does need is what the old shared block gave it: it hangs off a button in the TOP-right
+   corner, so it opens DOWNWARDS. app.css anchors `.vp-menu` to `bottom: 100%` — correct when this
+   button was at the end of the control row and the menu had to open upwards out of it, and off
+   the top of the screen from up here. The transform-origin follows the anchor, or the open
+   animation scales out of a corner the panel is no longer attached to. */
+.vp-overlay.tv .vp-top .vp-audio-menu {
   top: calc(100% + 12px);
   bottom: auto;
+  max-height: 76vh;
   transform-origin: top right;
   transform: translateY(-8px) scale(.98);
 }
-.vp-overlay.tv .vp-top .vp-menu.open { transform: none; }
-/* Up here the cap is measured from the top of the screen, not the bottom, so it can be generous:
-   whatever the list's length, it now grows downwards into the picture rather than off-panel. */
-.vp-overlay.tv .vp-top .vp-menu { max-height: 76vh; }
+.vp-overlay.tv .vp-top .vp-audio-menu.open { transform: none; }
+
 /* The corner group is two buttons at most now (audio, then ⋯), sitting beside the status text. */
 .vp-overlay.tv .vp-top-right { display: flex; align-items: center; gap: clamp(6px, .8vw, 14px); }
 
-/* ---- The gear menu. Wider, with taller rows, because every row is now a D-pad stop that has to
-   be legible from a sofa. Capped at 60vh so a long subtitle list scrolls rather than running off
-   the top of the screen — TvSpatialNav scrolls it as focus walks down. */
+/* ---- The shared menu box. Superseded outright by the sheet rules for the settings panel; what
+   is left here is what the audio dropdown (and any `.vp-menu` mounted elsewhere on a TV build)
+   uses — wider than the web's, with rows tall enough to be legible from a sofa, because every row
+   is a D-pad stop rather than a click target. */
 .vp-overlay.tv .vp-menu {
   width: clamp(340px, 30vw, 520px);
   max-height: 60vh;
@@ -3329,8 +3725,10 @@
    TV), so its hover growth has nothing to respond to and its cursor means nothing. The overlay
    hides the cursor outright: a set with no pointer still paints one if the WebView was ever
    given a mouse position, and it sits on the picture forever. */
-.vp-overlay.tv .vp-center { cursor: default; width: clamp(90px, 11vh, 120px); height: clamp(90px, 11vh, 120px); }
-.vp-overlay.tv .vp-center svg { width: 40%; height: 40%; }
+/* `.vp-center` was sized here — a 90-120px disc holding the play glyph. The element is no longer
+   rendered on this build at all (see its note in VideoPlayer): the control bar's own disc already
+   says "paused", in the place the viewer is looking and on something they can press, so the second
+   copy was a dark circle parked over the middle of the picture saying it again. */
 .vp-overlay.tv { cursor: none; }
 
 /* ============================================================================
@@ -3419,20 +3817,94 @@
   border-radius: 50%;
   background: #fff;
   color: #0b0b0b;
-  box-shadow: 0 2px 14px rgba(0, 0, 0, .45);
+  /* Two shadows doing two jobs. The wide soft one lifts the whole disc off the picture, which is
+     what it always did; the tight offset one under it gives the white circle an EDGE on a bright
+     frame, where a diffuse glow alone leaves it merging into whatever it is sitting on. */
+  box-shadow: 0 2px 14px rgba(0, 0, 0, .45), 0 4px 8px rgba(0, 0, 0, .28);
 }
 .vp-overlay.tv .vp-play-disc svg {
-  width: 42%;
-  height: 42%;
-  /* The play triangle is optically left-heavy inside a circle; nudging it right is the standard
-     correction and the pause bars, being symmetric, must not get it. */
-  margin-left: 6%;
-}
-.vp-overlay.tv .vp-play-disc.playing svg { margin-left: 0; }
+  /* 68%, up from 42% by way of 55%. The disc is unchanged throughout — this is the mark filling
+     it rather than floating in a white field, which is what made it look small and cheap next to
+     a reference drawn at roughly this ratio.
 
-/* ---- The clocks, one at each end of the bar. Fixed-width so the bar's ends do not shuffle
-   sideways as the digits change — a scrubber that shifts every time 9:59 becomes 10:00 is the
-   kind of small wrongness that is hard to name and impossible to unsee. */
+     This is close to the ceiling. The glyph is stroked (see IcPlay), so its corner radii scale
+     with it and the artwork stays clean at any size — but the triangle's point reaches the disc's
+     edge somewhere past ~75%, and a mark touching the circle it sits in stops reading as a mark
+     on a button and starts reading as a shape that has outgrown it.
+
+     The `margin-left: 6%` that used to sit here is gone. It corrected a triangle for optical
+     centring, but the path was already offset inside its own viewBox, so the two nudges stacked
+     and pushed the glyph off to the right — and the pause bars, which must never take that
+     correction, were only spared by a second rule undoing it. The offset belongs to the artwork
+     and now lives there (see IcPlay); the disc's `place-items: center` does the rest for both. */
+  width: 100%;
+  height: 100%;
+  /* THE GLYPH CASTS ITS OWN SHADOW down and to the right, so the mark reads as a solid sitting
+     ON the disc rather than as ink printed into it.
+
+     `drop-shadow` and not a `box-shadow`, because these are SVG paths: box-shadow would trace the
+     element's rectangle and put a soft square behind a triangle. Three offsets rather than the
+     dozen a true flat long-shadow needs — each is a full re-rasterisation of the glyph, and the
+     effect budget at the top of this file is the reason this build looks the way it does on a
+     television. Stepping the alpha down 20 → 13 → 8 across the three reads as one shadow fading
+     out, which is all the original was doing with its long taper. */
+  filter:
+    drop-shadow(1px 1.5px 0 rgba(0, 0, 0, .2))
+    drop-shadow(2px 3px 1px rgba(0, 0, 0, .13))
+    drop-shadow(4px 5px 3px rgba(0, 0, 0, .08));
+}
+/* ---- PLAY BECOMES PAUSE, RATHER THAN BEING REPLACED BY IT ---------------------------------
+ *
+ * The two glyphs are stacked in the same grid cell (see the markup for why both are mounted) and
+ * cross over each other: the outgoing one shrinks and turns slightly away as it fades, the
+ * incoming one arrives from the mirror of that. The rotation is deliberately small — 22° is
+ * enough to say the mark MOVED rather than dissolved, where a quarter turn would read as a
+ * novelty and start competing with the film behind it.
+ *
+ * THE TWO HALVES ARE NOT THE SAME LENGTH. Opacity runs 140ms and the transform 240ms, so the
+ * arriving glyph is fully opaque while it is still settling — it lands, rather than fading into
+ * place. Equal durations are the default and they always look soft.
+ *
+ * `scale`, not `width` — this animates on the compositor and never asks the layout engine
+ * anything, which is what makes it free on a television. Both discs keep a transform at rest for
+ * the reason written against the chip menu: an element that has no transform when it settles
+ * hands back its layer and re-rasterises, and the small snap that causes is exactly what this
+ * transition exists to avoid. */
+.vp-overlay.tv .vp-play-disc > span {
+  /* One cell, two children: they occupy the same space without either being taken out of flow,
+     so the disc still sizes itself from its content. */
+  grid-area: 1 / 1;
+  display: flex;
+  width: 68%;
+  height: 68%;
+  transform: scale(1) rotate(0deg);
+  transition: opacity .14s ease, transform .24s cubic-bezier(.2, .7, .2, 1);
+}
+.vp-overlay.tv .vp-play-disc .ic-pause { opacity: 0; transform: scale(.55) rotate(22deg); }
+.vp-overlay.tv .vp-play-disc.playing .ic-play { opacity: 0; transform: scale(.55) rotate(-22deg); }
+.vp-overlay.tv .vp-play-disc.playing .ic-pause { opacity: 1; transform: scale(1) rotate(0deg); }
+@media (prefers-reduced-motion: reduce) {
+  .vp-overlay.tv .vp-play-disc > span { transition: none; }
+  /* Still hidden, just not turned or shrunk on the way — a transform that never animates is a
+     glyph sitting permanently askew for anyone who reads this state mid-change. */
+  .vp-overlay.tv .vp-play-disc .ic-pause,
+  .vp-overlay.tv .vp-play-disc.playing .ic-play { transform: scale(1) rotate(0deg); }
+}
+
+/* `.vp-play-disc.playing svg { margin-left: 0 }` was here — the rule that took the triangle's
+   optical nudge back off the pause bars. With the nudge moved into the play path itself there is
+   nothing left to undo, and a state class that exists only to cancel another rule is one more
+   thing to remember when either of them changes. */
+
+/* ---- The clocks, one at each end of the bar. Their width is pinned to the DURATION's length
+   (`minWidth` at the markup, in ch) rather than left to their own contents, so the bar's ends do
+   not shuffle sideways as the digits change — a scrubber that shifts every time 9:59 becomes 10:00
+   is the kind of small wrongness that is hard to name and impossible to unsee, and it is worst
+   during a scrub, when the thing being aimed at moves under the aim. `tabular-nums` handles the
+   other half of it: equal digit widths, so the text does not jitter inside the cell either.
+
+   Each clock is aligned to the edge it defends — elapsed to the right, duration to the left — so
+   any slack in the cell falls away from the bar rather than between the number and the track. */
 .vp-overlay.tv .vp-t {
   flex: none;
   font-size: clamp(15px, 2vh, 21px);
@@ -3440,7 +3912,8 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.vp-overlay.tv .vp-t-dur { color: rgba(255, 255, 255, .62); }
+.vp-overlay.tv .vp-t-cur { text-align: right; }
+.vp-overlay.tv .vp-t-dur { color: rgba(255, 255, 255, .62); text-align: left; }
 
 /* ---- The shelf. Its height is a variable because two boxes have to agree on it: the rail
    itself, and the distance the control bar lifts to sit clear of it. */

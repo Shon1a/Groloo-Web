@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useSeason } from '../../lib/queries';
 import { useT } from '../../i18n/i18n';
+import { epLabel } from '../../lib/utils';
 import type { Episode } from '../../lib/types';
 import type { PlaySeries } from '../../stores/player';
 import { scrollCardToSlot } from './railScroll';
@@ -64,7 +65,7 @@ function Card({ item, series, now, live, stagger, onPick }: { item: RailItem; se
       {now && <span className="vp-epcard-badge">{t('player.now_playing')}</span>}
       <span className="vp-epcard-meta">
         {series.title && <span className="vp-epcard-show">{series.title}</span>}
-        <span className="vp-epcard-num">S{season} EP{ep.episode}</span>
+        <span className="vp-epcard-num">{epLabel(season, ep.episode)}</span>
         <span className="vp-epcard-desc">{ep.overview || name}</span>
       </span>
     </button>
