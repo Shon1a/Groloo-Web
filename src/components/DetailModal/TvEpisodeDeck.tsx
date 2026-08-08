@@ -352,6 +352,7 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
    * moved to a sibling card" (still ours) from "focus left entirely". */
   const [lifted, setLifted] = useState(false);
   const deckRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);   // the row the season chip sits in — Up's destination
 
   /* ---- THE DEAL: the deck arrives one card at a time -----------------------------------------
    *
@@ -498,13 +499,25 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
   };
 
   /* Up/Down walk the deck and are consumed so the global D-pad handler does not ALSO try to move
-   * focus through a stack of overlapping cards. At either end they are left alone, which is how
-   * the remote gets back out — up to the season pills, or down to whatever is below. */
+   * focus through a stack of overlapping cards. At the BOTTOM the key is left alone, which is how
+   * the remote gets down to whatever is below.
+   *
+   * AT THE TOP IT IS AIMED AT THE SEASON CHIP RATHER THAN RELEASED. Letting it go handed the press
+   * to TvSpatialNav, which scores the head row by geometry and answers with the ✕ in the far
+   * corner — it is genuinely the nearest candidate above a full-width card, and it closes the
+   * title the viewer was picking an episode from. The chip is what Up MEANS here: it is the head
+   * of this panel, it names what the deck is showing, and every other control in the head row is
+   * one press sideways from it. The source list makes the same correction for the same reason —
+   * see `leaveList` in TvDetail. */
   const onKey = (e: ReactKeyboardEvent) => {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    if (!step(e.key === 'ArrowDown' ? 1 : -1)) return;
+    if (step(e.key === 'ArrowDown' ? 1 : -1)) { e.preventDefault(); e.stopPropagation(); return; }
+    if (e.key !== 'ArrowUp') return;                 // the bottom of the deck stays a way out
+    const chip = headRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn');
+    if (!chip) return;                               // no head to go back to; leave the key alone
     e.preventDefault();
     e.stopPropagation();
+    chip.focus({ preventScroll: true });
   };
 
   const win = episodes.slice(Math.max(0, active - DECK_ABOVE), active + DECK_BELOW + 1);
@@ -512,7 +525,7 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
 
   return (
     <>
-      <div className="tv-det-panel-head tv-ep-head">
+      <div className="tv-det-panel-head tv-ep-head" ref={headRef}>
         {/* THE "EPISODES" HEADING IS STILL HERE, JUST NOT DRAWN. On screen it was a label on a
             column of episode cards — it named what was already obvious, in the corner where the
             season chip does real work. Deleting the element outright is the tempting version and
