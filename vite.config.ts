@@ -79,14 +79,17 @@ export default defineConfig(({ mode }) => ({
         globPatterns: ['**/*.{js,css,html,woff2,svg,ico,webmanifest,wasm}'],
         // Big, rarely-touched, or not needed offline — fetched normally instead.
         //
-        // /assets/heart/ IS GONE, and the ignore that used to be here went with it. It was the
-        // pre-groloo-core Heart build, superseded by /assets/groloo-core/ and imported by nothing
-        // (`grep -rn "assets/heart" src/` returned nothing then and returns nothing now). The
-        // precache did not care about that — the js/wasm globPattern above matched it on name
-        // alone — so this list carried an entry whose only job was to stop 277 KB of dead
-        // vendored bytes being stored on every first visit. Kept for a while in case a rollback
-        // wanted the folder back; it has not, and 272 KB of unreachable payload in the deploy is
-        // the wrong shape of insurance. The folder is deleted, so there is nothing left to ignore.
+        // /assets/heart/ IS THE OLD CORE AND NO APPLICATION CODE IMPORTS IT — but it is NOT dead,
+        // and deleting it breaks a gate in another repository. It is the pre-groloo-core Heart
+        // build, and `Groloo-Heart/tests/differential` loads it as the OLD side of the comparison
+        // (see cores.mjs `OLD_DIR`); with the folder gone that suite refuses to run at all, which
+        // is how this was found — `grep -rn "assets/heart" src/` is clean and says nothing about
+        // it, because the consumer is a test harness in a sibling checkout. DO NOT DELETE.
+        //
+        // The precache is a different question and the ignore below is still the answer to it:
+        // the js/wasm globPattern above matches this folder on name alone, so without the entry
+        // every first visit downloads and stores 277 KB (a 244 KB .wasm plus its glue) for a
+        // module the app can never instantiate. Kept out of the precache, kept on disk.
         /* THE LAST ENTRY IS THE DOLBY DECODER, AND THE BUILD FAILS WITHOUT IT.
          * It is 32 MB — sixteen times workbox's 2 MiB per-asset limit — and unlike the
          * silent drop described above, an asset that large makes `generateSW` throw and the
@@ -94,7 +97,7 @@ export default defineConfig(({ mode }) => ({
          * it exists for AC-3/DTS files only, most visitors never open one, and forcing 32 MB
          * onto every first visit to serve a minority is the opposite of what lazy-loading
          * it in `lib/wasmAudio.ts` is for. Excluded here, fetched on demand. */
-        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/ffmpeg/**'],
+        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**', '**/ffmpeg/**'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [
