@@ -56,6 +56,19 @@ interface Layer { fn: BackHandler; z: number }
 
 const handlers: Layer[] = [];
 
+/* Something opened or closed. Watched by the history guard below, which has to arm itself the
+ * moment a layer goes up rather than when the press arrives — by then the browser has already
+ * navigated. A plain callback set: the guard is the only subscriber and this file is deliberately
+ * outside React. */
+const layerListeners = new Set<() => void>();
+const notifyLayers = () => { layerListeners.forEach((fn) => fn()); };
+
+/** Run `fn` whenever a layer opens or closes. Returns the unsubscribe. */
+export function subscribeLayers(fn: () => void): () => void {
+  layerListeners.add(fn);
+  return () => { layerListeners.delete(fn); };
+}
+
 /**
  * Register a layer that is not backed by a store — in practice VideoPlayer's gear menu and its
  * episode panel, and the title screen's chip menu and episode view. `z` is the stacking level of
@@ -66,9 +79,11 @@ const handlers: Layer[] = [];
 export function registerBackHandler(fn: BackHandler, z: number = BACK_LAYER.modal): () => void {
   const entry: Layer = { fn, z };
   handlers.push(entry);
+  notifyLayers();
   return () => {
     const i = handlers.indexOf(entry);
     if (i >= 0) handlers.splice(i, 1);
+    notifyLayers();
   };
 }
 
@@ -293,33 +308,114 @@ export function installTvKeys(): () => void {
   window.addEventListener('keydown', onKey, true);
 
   /* ---- THE BROWSER'S BACK, ROUTED INTO THE SAME CHAIN -------------------------------------
-   * Alt+Left (and the mouse's back button, and a trackpad swipe) is Back as far as anyone using
-   * it is concerned — but it is history navigation, and this app deliberately keeps modal state
-   * OUT of history: syncAddressBar mirrors the open title with `replaceState`, so no entry is
-   * ever pushed for it (see the note there, and A.6). The consequence is the reported bug: from
-   * a title's sources view, Alt+Left skipped the sources, skipped the episode deck, skipped the
-   * title, and landed on whatever page was open before the modal.
    *
-   * The fix is NOT to start pushing entries — that would make the modal route-backed, which is
-   * the thing A.6 rules out, and would put entries between the viewer and the launcher on a TV
-   * where "enough Back presses must exit" is a certification requirement. Instead the pop is
-   * UNDONE and handed to `handleBack`, so Alt+Left steps the layers exactly as the remote's Back,
-   * Escape and Backspace already do: sources → deck → close → then, with nothing layered, out.
+   * BACK IS NOT ALWAYS A KEY WE GET TO SEE. In a packaged app the remote's Back arrives as a
+   * keydown (461 / 10009) and the listener above answers it. In a TV BROWSER it does not: the
+   * browser owns that button as its own back-navigation accelerator, so the page is never told
+   * the press happened and `preventDefault` has nothing to prevent. The reported bug is exactly
+   * that — on the LG browser, Back with the genre board open left the page instead of closing the
+   * board, because the only carrier that arrived was a history navigation. Alt+Left, the mouse's
+   * back button and a trackpad swipe are the same press by another route.
    *
-   * HISTORY DEPTH IS UNCHANGED, which is what makes this safe to do on every press. `back()`
-   * moved us to entry N-1 with N still ahead; pushing the mirrored URL truncates that forward
-   * entry and re-adds it with the same address. Popped one, pushed one, same stack, same URLs —
-   * so the exit path still takes exactly as many presses as it did before.
+   * UNDOING THE POP AFTERWARDS CANNOT WORK, and that is what used to be here. By the time
+   * `popstate` fires the browser is already on the previous entry, so "put it back" has to guess
+   * what the address WAS — this file asked `mirroredHref`, which only the detail overlay maintains
+   * (see syncAddressBar). With any other layer open — a chip menu, the genre board — that string
+   * is stale or empty, the restore was a no-op, and HashRouter, listening to the same event,
+   * changed the route out from under a menu that was being closed on the very same press.
    *
-   * Only when something is actually layered. With nothing open the listener stands aside and the
-   * browser navigates normally, which is what Back means on a page. */
+   * SO THE PRESS IS ABSORBED BEFORE IT NAVIGATES. While anything is layered, one extra history
+   * entry sits on the stack with the SAME address as the page under it. Back pops that instead of
+   * the route: the URL does not change, the router sees nothing to do, and the press arrives here
+   * as an ordinary popstate to hand to `handleBack`. If a second layer is still showing the guard
+   * re-arms, so each press steps exactly one layer, which is the behaviour the keydown path has
+   * always had.
+   *
+   * THIS IS NOT "MAKING THE MODAL ROUTE-BACKED", which A.6 rules out and which the note on
+   * syncAddressBar explains: the entry carries no address of its own and nothing can navigate TO
+   * it, so a modal still cannot be bookmarked, refreshed into or reached by Forward. It is a press
+   * absorber, not a location.
+   *
+   * AND THE EXIT COUNT IS UNCHANGED, which is the certification requirement in the note above.
+   * Every guard entry is consumed by the one press that closes the layer it was pushed for, so a
+   * viewer with nothing open has exactly as many entries between them and the launcher as before.
+   * A layer dismissed some other way (arrowing off an open menu, a click outside) leaves its guard
+   * behind for a moment — `dropGuard` takes it straight back off the stack, and the 60ms it waits
+   * first is there for the platform that delivers BOTH carriers: the pop cancels the drop, so a
+   * set that sends a keydown AND navigates spends one press rather than two. */
+  let guarded = false;   // one absorber of ours is on top of the stack
+  let ours = 0;          // pops we asked for ourselves, to be ignored when they arrive
+  let dropTimer = 0;
+
+  const armGuard = () => {
+    if (guarded || !layerOpen()) return;
+    try {
+      /* The router's own state is carried across rather than replaced. HashRouter reads `idx` off
+       * `history.state` to work out how far a pop travelled; a guard entry pushed with a null
+       * state reads as "index unknown", which it recovers from but need not be asked to. Same idx
+       * as the entry below means the pop measures as a distance of zero, which is the truth. */
+      const state = { ...(history.state as object | null), grolooGuard: true };
+      history.pushState(state, '', location.href);
+      guarded = true;
+    } catch { /* a browser refusing pushState (file://, some kiosk shells) simply gets no guard */ }
+  };
+
+  const dropGuard = () => {
+    dropTimer = 0;
+    if (!guarded || layerOpen()) return;
+    /* ONLY IF IT IS STILL OURS TO TAKE. Anything that pushed an entry after ours — a route change
+     * made while a layer was open — would make `back()` a real navigation rather than a tidy-up.
+     * The marker is the evidence; without it the guard is abandoned, which costs one inert Back
+     * press at worst and can never take the viewer somewhere they did not ask to go. */
+    guarded = false;
+    if (!(history.state as { grolooGuard?: boolean } | null)?.grolooGuard) return;
+    ours += 1;
+    try { history.back(); } catch { ours -= 1; }
+  };
+
+  const syncGuard = () => {
+    if (layerOpen()) {
+      if (dropTimer) { window.clearTimeout(dropTimer); dropTimer = 0; }
+      armGuard();
+    } else if (guarded && !dropTimer) {
+      dropTimer = window.setTimeout(dropGuard, 60);
+    }
+  };
+
   const onPop = () => {
+    if (ours > 0) { ours -= 1; return; }
+    // The platform navigated for itself, so there is nothing left for us to take back.
+    if (dropTimer) { window.clearTimeout(dropTimer); dropTimer = 0; }
+
+    if (guarded) {
+      guarded = false;
+      // The address never moved, so this press is ours to spend on the layers — or on nothing at
+      // all, if a keydown for the same press has already closed them.
+      if (layerOpen()) { handleBack(); syncGuard(); }
+      return;
+    }
+    /* No guard and something open is the case a browser that refused pushState leaves us in, plus
+     * the first press of a session that began deep-linked into a modal. The old restore is still
+     * the best available answer there, and it is now the fallback rather than the mechanism. */
     if (!layerOpen()) return;
     const restore = mirroredHref() || location.href;
     try { history.pushState(null, '', restore); } catch { /* non-fatal — the step below still runs */ }
     handleBack();
   };
   window.addEventListener('popstate', onPop);
+
+  /* WHAT COUNTS AS A LAYER, WATCHED AT ITS SOURCE. `layerOpen` reads five things and four of them
+   * are stores; the fifth is the handler list, which now says when it changes. Fullscreen is the
+   * odd one out and has its own event. All of them settle on the same `syncGuard`, which is
+   * idempotent — it is a statement of what the stack should look like, not a step. */
+  const unsubs = [
+    subscribeLayers(syncGuard),
+    usePlayer.subscribe(syncGuard),
+    useAuth.subscribe(syncGuard),
+    useReport.subscribe(syncGuard),
+    useModal.subscribe(syncGuard),
+  ];
+  document.addEventListener('fullscreenchange', syncGuard);
 
   /* The Android shell has no key to send, so give it a function to call. Named rather than
    * anonymous so `GrolooBack.handle()` reads the same from Kotlin as it does here. */
@@ -328,6 +424,11 @@ export function installTvKeys(): () => void {
   return () => {
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('popstate', onPop);
+    document.removeEventListener('fullscreenchange', syncGuard);
+    unsubs.forEach((off) => off());
+    if (dropTimer) window.clearTimeout(dropTimer);
+    // Leaving an absorber on the stack would cost the next page one inert Back press.
+    dropGuard();
     delete (window as unknown as { GrolooBack?: unknown }).GrolooBack;
   };
 }

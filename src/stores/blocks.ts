@@ -43,7 +43,7 @@ const stillMine = (owner: string) => identity() === owner;
 export type BlockMap = Record<string, number>;
 
 /** Build the key for an add-on publisher. Origin only — never a full manifest URL,
- *  which by Stremio convention carries the user's API key in its path. */
+ *  which by add-on protocol convention carries the user's API key in its path. */
 export const addonKey = (origin: string) => 'addon:' + String(origin || '').replace(/\/+$/, '');
 /** Build the key for a single catalogue title. */
 export const titleKey = (id: string | number) => 'title:' + String(id ?? '');

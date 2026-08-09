@@ -119,8 +119,9 @@
 .tv-shell .hero { --hero-rail-pull: 0px; margin-top: calc(var(--tv-topnav-h) * -1) !important; }
 
 /* The bar itself — fixed, full width, floating over the content on a top-down black wash so
-   the page reads through beneath it (Netflix-style). Laid out as three columns so the centre
-   group stays dead-centre regardless of how wide the sides are. */
+   the page reads through beneath it, which is the convention on every ten-foot interface worth
+   the name. Laid out as three columns so the centre group stays dead-centre regardless of how
+   wide the sides are. */
 .tv-shell .tv-topnav {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -697,10 +698,11 @@
    see the note there */
 /* THE PICTURE CHANGES ALMOST AT ONCE — 90ms, which is three frames.
    This was a half-second dissolve, on the reasoning that a slow cross-fade is gentler than a cut.
-   The reference says otherwise and it is worth stating plainly: measured frame by frame, Netflix
-   swaps the billboard's artwork in about TWO frames. It reads as instant, and it is right that it
-   does — the picture is answering the press, and the press was instant. What is drawn out is
-   everything AFTER it (the wordmark, then the copy), which is what gives the change its shape.
+   Watching how a well-made ten-foot interface actually behaves says otherwise, and it is worth
+   stating plainly: the artwork wants to swap in about TWO frames. It reads as instant, and it is
+   right that it does — the picture is answering the press, and the press was instant. What is
+   drawn out is everything AFTER it (the wordmark, then the copy), which is what gives the change
+   its shape.
    A slow dissolve here does the opposite: it delays the answer and then has nothing left to
    stagger against.
    Fixed rather than tied to `--sp-slide`, because this is a reaction and not a journey — it
@@ -956,7 +958,7 @@
    horizontal offset is EXACTLY 0 on every single one, while the same test finds a clean 24px drift
    on the artwork. The picture moves; the words do not. A sideways slide was added here on the
    theory that direction should be legible — it is moving letters, which the eye tries to read
-   while they travel, and it is not what Netflix does.
+   while they travel, and no interface built for a sofa asks that of anyone.
 
    THEY DO NOT CROSS-FADE EITHER. The old copy fades out and is gone before the new one starts.
    Overlapping two blocks of body text means several frames of one paragraph legible through

@@ -29,8 +29,8 @@ const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080'
  * This filtered out languages no source could "deliver" — meaning the language was on a
  * non-default audio track and this browser cannot switch tracks. The reasoning was sound
  * and the result was worse than the bug: The Mentalist S04E16 has a `[TB+] Torrentio 720p`
- * release flagged 🇬🇧/🇷🇺 whose English track Stremio plays perfectly, and this dropped it
- * from the English tab entirely — leaving FEWER sources than Stremio lists and still no
+ * release flagged 🇬🇧/🇷🇺 whose English track other add-on clients play perfectly, and this dropped it
+ * from the English tab entirely — leaving FEWER sources than other clients list and still no
  * English. Removing a real option is not an improvement over mislabelling it.
  *
  * So the list matches what the add-on actually offers, `forRender` puts the sources that
@@ -569,7 +569,7 @@ export default function DetailModal() {
       return;
     }
     /* A torrent has no address until a streaming server is known — `torrentUrl` builds
-     * Stremio's `/<infoHash>/<fileIdx>?tr=…`, or answers null when none is reachable. The
+     * the streaming server's `/<infoHash>/<fileIdx>?tr=…`, or answers null when none is reachable. The
      * row is already labelled in that case (see `needsServer` in the list), so this is the
      * belt to that braces rather than the place the user finds out. */
     const url = s.kind === 'torrent' ? torrentUrl(s) : s.url;

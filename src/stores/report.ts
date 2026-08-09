@@ -10,7 +10,7 @@ export type ReportKind = 'addon' | 'title' | 'stream';
 export interface ReportTarget {
   kind: ReportKind;
   /** Identifies the thing reported: an origin for an add-on, an id for a title/stream.
-   *  Sent verbatim as `targetKey`. Never a full manifest URL — by Stremio convention
+   *  Sent verbatim as `targetKey`. Never a full manifest URL — by add-on protocol convention
    *  that path carries the user's own API key, which must not ride into a report. */
   targetKey: string;
   /** Display-only, so the sheet and the admin queue can name the thing without a lookup. */

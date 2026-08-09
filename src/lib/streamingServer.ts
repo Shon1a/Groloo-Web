@@ -3,7 +3,7 @@
  * Everything else in this app has taken as given that a web page cannot choose the audio
  * track of a downloaded file: Chrome, Edge and Firefox implement no `HTMLMediaElement.
  * audioTracks`, and they ship no Dolby or DTS decoder. Both facts are true and neither is
- * the whole picture, because Stremio Web does it in the same Chrome — and it does it by
+ * the whole picture, because the reference web client does it in the same Chrome — and it does it by
  * not asking the browser. It routes playback through a native transcoding server running
  * on localhost, which demuxes the container itself and re-serves it as HLS.
  *
@@ -44,7 +44,7 @@
  *
  *   /streaming-server   the vite dev proxy. Same-origin, so CORS never applies — but it
  *                       proxies through the DEV SERVER, which only exists on localhost.
- *   :11470              Stremio's own server. Reachable only from Stremio's own origins,
+ *   :11470              the streaming server itself. Reachable only from its vendor's own
  *                       so this succeeds in almost no real setup; it is kept because it
  *                       costs one failed fetch and covers anyone who has allowlisted us. */
 const ABSOLUTE_HTTP = /^https?:\/\//i;
@@ -161,7 +161,7 @@ export function needsServer(probe: Probe): boolean {
   return !OK_FORMAT.test((probe.format?.name || '').toLowerCase());
 }
 
-/* `videoCodecs` and `audioCodecs` are REPEATED keys, not one comma-joined value. Stremio's
+/* `videoCodecs` and `audioCodecs` are REPEATED keys, not one comma-joined value. The reference client's
  * client appends them in a loop and the server reads them as a list; joining them yields a
  * playlist that transcodes when it did not need to. */
 function hlsQuery(mediaURL: string, maxAudioChannels: number): string {
@@ -191,7 +191,7 @@ export async function hlsFor(mediaURL: string, maxAudioChannels = 2): Promise<st
  * The streaming server does more than transcode: it is a torrent client with an HTTP face,
  * and `GET /<infoHash>/<fileIdx>` is a plain progressive-download URL for one file inside
  * one torrent. That single endpoint is the whole of what an `infoHash` stream needs, and
- * it is why every torrent add-on works in Stremio and listed nothing here.
+ * it is why every torrent add-on works in other clients and listed nothing here.
  *
  * THE URL SHAPE IS STREMIO'S, not invented: `stremio-core`'s deep-link builder joins the
  * hex hash and the file index as two path segments and appends one `tr` query parameter per
@@ -208,7 +208,7 @@ export async function hlsFor(mediaURL: string, maxAudioChannels = 2): Promise<st
 /** Play URL for a torrent source, or null when no streaming server is reachable.
  *
  *  `<video>` is not subject to CORS, so this plays even against a server that sends no
- *  cross-origin headers — which is why it works against Stremio's own :11470 and does not
+ *  cross-origin headers — which is why it works against the streaming server's own :11470 and does not
  *  depend on the helper. The helper still matters for everything that must be READ rather
  *  than played (probing, demuxing, subtitle sync), which is why it proxies these paths too. */
 export function torrentUrl(t: { infoHash?: string; fileIdx?: number; announce?: string[] }): string | null {
@@ -232,7 +232,7 @@ export async function resolvePlayback(
    *  this. Routed through the server without consulting the probe, because the probe answers
    *  what the CONTAINER holds and this is a claim about something else (a codec profile the
    *  panel refuses, a server that needs the referer, an MKV Chrome will not open at all).
-   *  Stremio treats the flag the same way: it is the add-on's word, not a hint to weigh. */
+   *  Other clients treat the flag the same way: it is the add-on's word, not a hint to weigh. */
   forceServer = false,
 ): Promise<{ url: string; kind: 'hls' | 'url'; via: boolean }> {
   const direct = { url, kind: (kind || 'url') as 'hls' | 'url', via: false };

@@ -38,7 +38,7 @@ export interface PlaySource {
    * cannot play this file directly. Carried through so `resolvePlayback` routes it via the
    * streaming server WITHOUT consulting the probe — the probe reports what the container
    * holds, and this is a claim about everything else (a codec profile the panel refuses, an
-   * origin that needs a referer, an MKV Chrome will not open at all). Stremio treats it the
+   * origin that needs a referer, an MKV Chrome will not open at all). Other clients treat it the
    * same way: the add-on's word, not a hint to weigh. */
   notWebReady?: boolean;
   /* The audio language the user PICKED for this playback (the language bucket in the

@@ -2680,7 +2680,7 @@
        padding-top (band width = full-bleed 100vw → 56.25vw tall), then let the title
        block flow in normal order right after it. A small negative margin laps it up into
        the trailer's bottom fade so the title sits at the very bottom of the trailer slot
-       (Netflix-style overlay) instead of stranded on the hero floor. position:relative +
+       (overlaid on the artwork) instead of stranded on the hero floor. position:relative +
        z-index keeps it above the scrim's bottom black band. */
     .m-hero{min-height:0;max-height:none;height:auto;padding-top:56.25vw}
     .m-hero-inner{position:relative;z-index:3;inset:auto;

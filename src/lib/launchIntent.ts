@@ -223,7 +223,13 @@ export function syncAddressBar(target: ModalTarget | null): void {
     ? mediaPath({ id: String(target.id), type: target.type, season: target.resumeEp?.season, episode: target.resumeEp?.episode })
     : basePath;
   if (location.pathname !== path) {
-    try { history.replaceState(null, '', `${path}${location.search}${location.hash}`); } catch { /* non-fatal */ }
+    /* THE ENTRY'S STATE IS CARRIED ACROSS, NOT CLEARED. Only the address is this function's
+     * business, and `replaceState(null, …)` was quietly throwing away whatever else was recorded
+     * against the entry — HashRouter's `idx`, and the marker tvKeys writes on the history entry it
+     * pushes to absorb a browser Back while a layer is open. Losing the marker means that guard
+     * can no longer be identified as ours to take back off the stack, so closing a title any way
+     * other than with Back left a spare entry behind and the next Back press did nothing. */
+    try { history.replaceState(history.state, '', `${path}${location.search}${location.hash}`); } catch { /* non-fatal */ }
   }
   mirrored = location.href;
 }

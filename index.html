@@ -37,7 +37,37 @@
     <link rel="preload" href="/assets/fonts/poppins-600-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/assets/fonts/poppins-300-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/assets/fonts/poppins-700-latin.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/assets/fonts/bpg-nino-mtavruli.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- THE ქართული FACE IS PRELOADED ONLY FOR SOMEONE WHO HAS CHOSEN A LANGUAGE, and it is the
+         one entry in this list that could not be justified by the rule above it. Measured on the
+         TV build's English home screen, this file was fetched on every cold start — a preload
+         overrides the `unicode-range` on its @font-face, which is the mechanism that would
+         otherwise have skipped it, so the bytes were spent on the first screen for a face with no
+         glyph anywhere on it. Small (6.6 KB), but it is bandwidth taken from the artwork during
+         the exact moment the home screen is filling in, on a device that is often on wifi.
+
+         NOBODY LOSES THE PRELOAD WHO WAS USING IT. `sf-lang` is unset until a language is picked
+         (see i18n.tsx), and until then the UI is English — so the only load this skips is one with
+         no Georgian on screen to flash. Pick ქართული and every load from then on preloads exactly
+         as before. The check is deliberately "not English" rather than a list of Georgian codes:
+         the language list comes from the translations repo at runtime, so this file cannot know
+         what Georgian is called there, and being wrong in this direction costs one 6.6 KB fetch
+         while being wrong in the other costs a visible reflow.
+
+         Inline and synchronous so the link still lands in the head before the parser reaches the
+         stylesheet — a deferred injection would be a preload that arrives after the request it
+         was meant to get ahead of. `script-src 'unsafe-inline'` is already granted in
+         vercel.json for the media-query swap on the line below. -->
+    <script>
+      try {
+        if ((localStorage.getItem('sf-lang') || 'en') !== 'en') {
+          var l = document.createElement('link');
+          l.rel = 'preload'; l.as = 'font'; l.type = 'font/woff2';
+          l.crossOrigin = 'anonymous';
+          l.href = '/assets/fonts/bpg-nino-mtavruli.woff2';
+          document.head.appendChild(l);
+        }
+      } catch (e) { /* storage denied — English default, no preload, unicode-range still covers it */ }
+    </script>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Georgian:wght@400;500;700&display=swap" media="print" onload="this.media='all'" />
     <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Georgian:wght@400;500;700&display=swap" /></noscript>
   </head>
