@@ -55,9 +55,9 @@
  * runtime by the manifest fallback below on an origin with no SubtleCrypto.
  *
  * All four lines are printed together by the build script; bump them together. */
-const CORE_BUILD = '0.2.0-7cdf240dab134b89';
+const CORE_BUILD = '0.2.0-26543c128f6036dd';
 const CORE_VERSION = '0.2.0';
-const CORE_WASM_SHA256 = '7cdf240dab134b8922b8db17c2fa55cfb384d6181a2c92db64e41fc314346051';
+const CORE_WASM_SHA256 = '26543c128f6036dd3ce1b9f9d87aecff762a2d2a841dfeceda0f76073f6d0e22';
 const CORE_JS = `/assets/groloo-core/${CORE_BUILD}/groloo_core.js`;
 /* The glue derives these two itself (`new URL('groloo_core_bg.wasm', import.meta.url)`),
  * so naming them again here is a second copy — but the verifier has to fetch the bytes
