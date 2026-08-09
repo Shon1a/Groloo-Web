@@ -6,6 +6,7 @@ import { useReport } from '../stores/report';
 import { useHomeConfig, OFFICIAL_KEYS, type OfficialKey } from '../stores/homeConfig';
 import { useOfficial, type OfficialAddon } from '../stores/official';
 import { CATALOG_CATS, PROVIDER_CATS } from '../lib/home';
+import { isOkKey, openTvKeyboard } from '../lib/tvIme';
 import ConfigModal, { type ConfigTarget } from '../components/ConfigModal';
 import PreviewModal from '../components/PreviewModal';
 
@@ -204,6 +205,17 @@ export default function Addons() {
    * single-line input do nothing at all, so moving focus to the button beside it is a small
    * improvement there and a rescue here. */
   const onUrlKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    /* ON A TV, OK OPENS THE KEYBOARD RATHER THAN INSTALLING — the field is unusable otherwise (see
+     * tvIme.ts: a TV raises its IME on an activation, and nothing this app does to a field counts
+     * as one). Nothing is lost by not submitting from here: INSTALL sits immediately beside the
+     * box and Down already reaches it, so the press that used to install is one press away, and a
+     * URL that cannot be typed is not a URL that can be installed either. */
+    if (IS_TV && isOkKey(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      openTvKeyboard(urlRef.current);
+      return;
+    }
     if (e.key === 'Enter') { onInstall(); return; }
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
     e.preventDefault();
@@ -234,7 +246,7 @@ export default function Addons() {
   };
 
   /* THE ORIGIN, NEVER THE URL. An installed record's `url` is the full manifest URL, and
-   * by the Stremio convention this file already documents twice, its PATH is where the
+   * by the add-on protocol's convention this file already documents twice, its PATH is where the
    * user's provider API key lives. Blocking and reporting both key on the publishing host
    * alone, so both go through here — a report carrying the raw URL would put a debrid key
    * into a document an admin reads and a backup that leaves the box.

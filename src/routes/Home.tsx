@@ -19,7 +19,7 @@ import type { MediaItem } from '../lib/types';
 /* Home = the featured hero + the categorised rows (via /api/home): Hero,
  * the Upcoming marquee, Continue Watching, and gated catalog/add-on rows. */
 
-/* TV build swaps the web Hero for the Netflix-style full-width billboard. Compile-time
+/* TV build swaps the web Hero for the full-width billboard a ten-foot layout wants. Compile-time
  * constant, so the branch (and TvHero) is dropped from the web bundle. The rows below swap
  * too, but that happens inside Row — see the note there. */
 const IS_TV = import.meta.env.MODE === 'tv';

@@ -73,7 +73,7 @@ export function useMeta(id: string | number | undefined, type?: MediaItem['type'
  * carries whatever id the add-on publishes — `kitsu:44081`, `mal:1535`, anything — and for
  * those the endpoint 404s, which is why such a card opened to an empty modal and, because the
  * stream fan-out was keyed on `meta.imdb`, to no sources at all. `collectAddonMeta` asks the
- * add-ons instead, which is what Stremio does and the only thing that CAN answer.
+ * add-ons instead, which is what every add-on client does and the only thing that CAN answer.
  *
  * TWO CONDITIONS, and the second matters as much as the first:
  *

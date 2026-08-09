@@ -1,6 +1,6 @@
 /* AUDIO-TRACK SWITCHING WITH NOTHING INSTALLED.
  *
- * Every other route to this feature needs something on the viewer's machine — Stremio's
+ * Every other route to this feature needs something on the viewer's machine — a local
  * streaming server, or our own helper. This one needs nothing: the page opens the container
  * itself, keeps the video plus the ONE audio track the viewer asked for, and hands
  * MediaSource a stream with no choice left to make. The browser is not being asked to switch

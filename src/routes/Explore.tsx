@@ -7,6 +7,7 @@ import CatalogGrid from '../components/CatalogGrid';
 import TvCatalogRow from '../components/TvCatalogRow';
 import TvChipMenu from '../components/DetailModal/TvChipMenu';
 import TvMultiMenu from '../components/TvMultiMenu';
+import { isOkKey, openTvKeyboard, isImeRefocus } from '../lib/tvIme';
 import type { GridDesc } from '../lib/grid';
 import type { MediaItem } from '../lib/types';
 
@@ -211,7 +212,7 @@ export default function Explore() {
      * gives a sideways key up when the caret has nowhere left to go in that direction: no
      * selection, and the cursor already at the end it is being pushed against. An empty field is
      * trivially at both ends, so Right off an untouched field is the plain move to the filters it
-     * looks like. `selectionEnd` is null on input types that do not support a selection — `search`
+     * looks like. `selectionEnd` is null on input types that do not support a selection — `text`
      * does, but a null there must not read as "caret at 0".
      * Up and Down are above this deliberately: neither means anything to a caret on one line. */
     if (ae === inputRef.current) {
@@ -384,6 +385,10 @@ export default function Explore() {
       onFocus={(e) => place(e.target as HTMLElement)}
       onBlur={(e) => {
         if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        /* A field being re-entered to raise the keyboard blurs on its way back into itself, and
+           that is not the remote leaving the row — dropping the pill for it would blink the
+           selection off and on under every press of OK. */
+        if (isImeRefocus()) return;
         setMark(null);
         setArmed(false);
       }}
@@ -411,11 +416,30 @@ export default function Explore() {
               answer to a question already answered twice — and it is the longest run of type on
               the row, which made the one empty control the loudest thing on it. The aria-label
               still carries the full wording for a screen reader. */}
+          {/* `text`, NOT `search`, AND ONLY ON THE TV. The type is what a platform reads to decide
+              which keyboard to offer, and `search` is the one several TV IMEs have no layout for —
+              on those sets it is not "a keyboard without a magnifier on the Done key", it is no
+              keyboard at all. The web build keeps `search` (it is what the native clear ✕ and the
+              browser's own history hang off, and a desktop has nothing to raise); here the
+              inputMode says the same thing to anything that reads it, without betting the field on
+              a type. `enterKeyHint` labels the IME's confirm key, which is the only place the word
+              "search" was doing any work anyway. */}
           <input
-            id="searchInput" ref={inputRef} type="search" autoComplete="off" spellCheck={false}
+            id="searchInput" ref={inputRef} type="text" inputMode="search" enterKeyHint="search"
+            autoComplete="off" spellCheck={false} autoCapitalize="off" autoCorrect="off"
             aria-label={t('search.aria')}
             value={raw} onChange={(e) => setRaw(e.target.value)}
             tabIndex={0}
+            /* OK ASKS FOR THE KEYBOARD — see the note in tvIme.ts for why the field has to ask at
+               all. Consumed so the press cannot also reach the page behind it; without this an
+               Enter that meant "let me type" would bubble up as an activation of whatever else
+               happens to be listening. */
+            onKeyDown={(e) => {
+              if (!isOkKey(e)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              openTvKeyboard(inputRef.current);
+            }}
           />
         </div>
       </div>

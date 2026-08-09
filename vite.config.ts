@@ -79,13 +79,14 @@ export default defineConfig(({ mode }) => ({
         globPatterns: ['**/*.{js,css,html,woff2,svg,ico,webmanifest,wasm}'],
         // Big, rarely-touched, or not needed offline — fetched normally instead.
         //
-        // /assets/heart/ IS THE OLD CORE AND NOTHING IMPORTS IT. It is the pre-groloo-core Heart
-        // build, superseded by /assets/groloo-core/; `grep -rn "assets/heart" src/` returns
-        // nothing, so no code path can ever ask for it. The precache did not care about that: the
-        // js/wasm globPattern above matched it on name alone, so every first visit downloaded and
-        // stored 277 KB (a 244 KB .wasm plus its glue) for a module that will never be
-        // instantiated. Ignored rather than deleted so the vendored folder stays available if a
-        // rollback ever wants it; it is safe to delete public/assets/heart/ outright.
+        // /assets/heart/ IS GONE, and the ignore that used to be here went with it. It was the
+        // pre-groloo-core Heart build, superseded by /assets/groloo-core/ and imported by nothing
+        // (`grep -rn "assets/heart" src/` returned nothing then and returns nothing now). The
+        // precache did not care about that — the js/wasm globPattern above matched it on name
+        // alone — so this list carried an entry whose only job was to stop 277 KB of dead
+        // vendored bytes being stored on every first visit. Kept for a while in case a rollback
+        // wanted the folder back; it has not, and 272 KB of unreachable payload in the deploy is
+        // the wrong shape of insurance. The folder is deleted, so there is nothing left to ignore.
         /* THE LAST ENTRY IS THE DOLBY DECODER, AND THE BUILD FAILS WITHOUT IT.
          * It is 32 MB — sixteen times workbox's 2 MiB per-asset limit — and unlike the
          * silent drop described above, an asset that large makes `generateSW` throw and the
@@ -93,7 +94,7 @@ export default defineConfig(({ mode }) => ({
          * it exists for AC-3/DTS files only, most visitors never open one, and forcing 32 MB
          * onto every first visit to serve a minority is the opposite of what lazy-loading
          * it in `lib/wasmAudio.ts` is for. Excluded here, fetched on demand. */
-        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**', '**/ffmpeg/**'],
+        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/ffmpeg/**'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [
@@ -280,12 +281,12 @@ export default defineConfig(({ mode }) => ({
         changeOrigin: true,
         secure: true,
       },
-      /* The LOCAL Stremio streaming server, proxied for one reason: its CORS allowlist.
+      /* The LOCAL streaming server, proxied for one reason: its CORS allowlist.
        *
        * It re-serves a downloaded file as HLS with one audio rendition per track — which is
-       * the only way a browser gets audio-track switching, and how Stremio Web does it in the
+       * the only way a browser gets audio-track switching, and how the reference web client does it in the
        * same Chrome that has no `HTMLMediaElement.audioTracks`. But it answers
-       * `Access-Control-Allow-Origin` only for Stremio's own origins:
+       * `Access-Control-Allow-Origin` only for its vendor's own origins:
        *
        *   Origin: https://web.stremio.com  ->  Access-Control-Allow-Origin: *
        *   Origin: http://localhost:5174    ->  (nothing)

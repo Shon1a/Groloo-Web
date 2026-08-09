@@ -11,7 +11,7 @@ import { useAuth } from './auth';
  * The server only stores that list; it never fetches an add-on. Guests stay purely
  * local.
  *
- * THE MANIFEST URL SYNCS TOO, AND THAT IS THE POINT. By Stremio convention a configured
+ * THE MANIFEST URL SYNCS TOO, AND THAT IS THE POINT. By add-on protocol convention a configured
  * community add-on packs its secrets into the path (`https://host/<provider>=<KEY>/
  * manifest.json`). The server used to store the ORIGIN and never the URL, so no debrid
  * key existed on that side — structurally safe, and structurally useless: a second
@@ -215,7 +215,7 @@ function serverRemove(id: string, owner: string) {
  *  string INCLUDING THE QUERY, so it never matched a `?`-suffixed URL and appended a second
  *  segment: "https://a.co/addon?x=1" became ".../addon?x=1/manifest.json", which cannot
  *  resolve. The core tests the parsed pathname and inserts the segment BEFORE the query —
- *  "https://a.co/addon/manifest.json?x=1". By the Stremio convention documented at the top
+ *  "https://a.co/addon/manifest.json?x=1". By the add-on protocol's convention documented at the top
  *  of this file the URLs that carry a query are exactly the CREDENTIALED ones, so the copy
  *  removed here mangled precisely the debrid add-ons a user paid for; a `|`-packed config
  *  AND a query together was simply uninstallable. Those users can install now. (Declared
@@ -412,7 +412,7 @@ export const useAddons = create<AddonsState>((set, get) => ({
        * `origin` RIDES ALONG BUT MUST NEVER BE FETCHED — it matters only for the rows
        * that still have no URL, and for those the temptation is to close the gap with no
        * UI at all: try `<origin>/manifest.json`, promote whatever answers, done; the
-       * origin holds no secrets, so it reads as free. It is not. By the same Stremio
+       * origin holds no secrets, so it reads as free. It is not. By the same protocol
        * convention that puts the key in the path, the UNCONFIGURED add-on sitting at the
        * bare origin serves a manifest with the SAME id as the user's configured one. The
        * promotion would "succeed", the row would leave this list, and the user would be
