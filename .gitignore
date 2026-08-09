@@ -60,3 +60,6 @@ dev-dist
 
 # ffmpeg.wasm core — 32 MB, copied from node_modules by scripts/copy-ffmpeg.mjs
 public/ffmpeg/
+
+# webOS packaging output
+webos/out/
