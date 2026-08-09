@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>GROLOO</title>
+<style>
+  /* Black from the first painted frame. The set shows this document for a beat before the
+     navigation completes, and a white flash on a 10-foot screen in a dark room is the most
+     noticeable thing the app could possibly do. */
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center;
+         font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  #msg { display: none; text-align: center; max-width: 720px; padding: 0 48px; }
+  #msg h1 { font-size: 34px; font-weight: 700; margin: 0 0 14px; }
+  #msg p  { font-size: 20px; line-height: 1.5; color: rgba(255,255,255,.72); margin: 0; }
+  #msg.on { display: block; }
+</style>
+</head>
+<body>
+  <div id="msg" role="status">
+    <h1>No connection</h1>
+    <p>GROLOO needs the internet to start. Check the television&rsquo;s network and this
+       screen will continue on its own.</p>
+  </div>
+
+<script>
+/* ── THE SHELL ────────────────────────────────────────────────────────────────
+ *
+ * This package is an ICON AND A REDIRECT. It carries no application code: it
+ * navigates to the deployed app and gets out of the way.
+ *
+ * NAVIGATION, NOT AN IFRAME, and that is forced twice over. vercel.json sets
+ * `frame-ancestors 'none'`, so the site refuses to be framed at all — but even
+ * without that, framing would keep the packaged app's own origin, and the origin
+ * is the whole point:
+ *
+ *   - The API answers only origins on CORS_ORIGINS (server.js). A packaged app
+ *     sends `file://` or `null`, which is not on that list, so every catalog call
+ *     would fail preflight and the app would come up empty with nothing on screen
+ *     to explain why.
+ *   - Service workers do not run from packaged files, so the offline cache — the
+ *     thing that makes a sleeping backend survivable — would be silently off.
+ *
+ * After this navigation the app IS https://web.groloo.com as far as the engine is
+ * concerned, so both problems simply do not exist and the TV behaves exactly like
+ * the browser it was tested in.
+ *
+ * THE COST, STATED PLAINLY: it needs the network to start. That is the trade a
+ * shell makes, and it is why the offline card above exists rather than a blank
+ * screen. A fully packaged build removes the dependency and takes on both problems
+ * listed above instead — see webos/README.md.
+ *
+ * `location.replace`, not `href`: the shell must not sit in the history stack.
+ * The app's own Back chain walks its layers and then hands the last press to the
+ * platform (see lib/tvKeys.ts) — with this document behind it, that final press
+ * would land back here and the app would appear to relaunch itself instead of
+ * closing. `disableBackHistoryAPI` in appinfo.json is the other half of the same
+ * arrangement: webOS keeps its hands off Back and lets the app answer 461. */
+var APP_URL = 'https://web.groloo.com/';
+
+var msg = document.getElementById('msg');
+var went = false;
+
+function go() {
+  if (went) return;
+  went = true;
+  location.replace(APP_URL);
+}
+
+function offline() {
+  msg.className = 'on';
+  /* Retry on the platform's own signal AND on a timer. `online` is the clean answer
+     and some sets never fire it; a slow poll costs nothing on a screen that is doing
+     nothing else, and it is what makes "plug the cable in" work without a relaunch. */
+  window.addEventListener('online', go);
+  setInterval(function () { if (navigator.onLine !== false) go(); }, 3000);
+}
+
+/* `navigator.onLine === false` is the only value worth trusting. `true` means "there
+   is an interface", not "there is internet", so it is not treated as a green light —
+   we navigate and let the engine's own error page handle a dead link. Reading it as a
+   veto rather than a permission is what keeps this correct on a set that reports
+   optimistically, which most do. */
+if (navigator.onLine === false) offline();
+else go();
+</script>
+</body>
+</html>
