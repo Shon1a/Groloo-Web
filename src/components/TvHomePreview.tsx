@@ -23,7 +23,7 @@ import { useT } from '../i18n/i18n';
  *   · the strip takes `poster || backdrop`, the same order the real strip's tiles use;
  *   · the wordmark falls back to the title set in type, exactly as the real title plate does;
  *   · billboard and posters are the SAME HEIGHT, because in `tv.css` both are sized off one
- *     `--spot-h` (16:9 for the billboard, 0.6 of it for a poster).
+ *     `--spot-h` (16:9 for the billboard, 0.61 of it for a poster).
  * If any of those four change in TvSpotlight, this is the file that goes stale with it. */
 
 /** One row of the preview: a heading, the billboard its first title would fill, and the strip. */
