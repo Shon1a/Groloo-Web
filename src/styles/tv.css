@@ -96,27 +96,123 @@
    subset of the web look). Stage 1: the top menu bar that replaces the left rail.
    ============================================================================ */
 
+/* THE CARD IS THE UNIT. EVERY OTHER NUMBER ON THIS SCREEN IS A FRACTION OF IT.
+   ---------------------------------------------------------------------------------------------
+   These sizes used to be fixed pixels chosen against a desktop window. A 1080p television is not
+   a big monitor: it is a small screen viewed from across a room, so what matters is the angle a
+   thing subtends — its share of the screen — and a card that is 35% of one panel and 47% of
+   another is two different interfaces. Everything below is therefore a ratio.
+
+   THE CARD IS SIZED OFF THE VIEWPORT'S WIDTH, NOT ITS HEIGHT, and that is the correction that
+   matters most here. Stated in vh it was right on a 16:9 panel and wrong everywhere else, because
+   the thing a viewer actually reads off a row is HOW MANY POSTERS ARE BESIDE THE BILLBOARD, and
+   that count is set by width ÷ card:
+
+       posters ≈ (usable width − 16/9 of the card) ÷ (0.615 of the card)
+
+   Height is not in that expression. So on a 1920x1080 panel 47.5vh gave a 513px card and 2.8
+   posters — correct — while in a 1920x980 browser window the SAME 47.5vh gave 466px and 3.3, and
+   the row visibly became a shelf. 26.5vw is 509px on both, which is what makes the two agree.
+   `min(…, 52vh)` is the guard for the opposite case, a window short enough that a width-derived
+   card would not fit above the copy; on any real 16:9 panel the width term is what applies.
+
+   THE COPY IS MEASURED AGAINST THE CARD TOO, for the same reason and against an earlier mistake.
+   Sized in vh, the type held still while the card moved, so every change to the card silently
+   restyled the text beside it. A viewer does not compare the synopsis to the panel — they compare
+   it to the picture directly above it. Stating both in one unit is what makes the row a row.
+
+   THE RATIOS, all as a fraction of the card's height, measured off the reference:
+     billboard 16:9      poster 0.615      gap 0.0316
+     heading 0.060       metadata 0.0475   synopsis 0.055 at 1.42 line-height, three lines
+     heading→cards 0.0205   cards→metadata 0.042   metadata→synopsis 0.0145   row→row 0.073
+     side gutter 3.4vw (of width, since it is a margin against the screen edge)
+
+   EACH TYPE SIZE IS THE MIDPOINT OF TWO MEASUREMENTS THAT DISAGREE, which is worth recording
+   because the disagreement is not error. A run of type can be sized off a screenshot by the height
+   of its ink or by the width of its line, and the two agree only for the same typeface. The
+   reference sets a narrower face than Poppins, so its line width implies a size ~13% under what
+   its ink height implies — a floor and a ceiling rather than two attempts at one number. The
+   middle is the size at which Poppins occupies the reference's space, which is what is actually
+   being compared from a sofa. */
 .tv-shell {
-  --tv-topnav-h: 76px;
-  /* the desktop hero pulls itself up by --topbar-h to bleed under a top bar; point that at
-     our bar height so the same math tucks content under the new nav instead of the old one */
-  --topbar-h: var(--tv-topnav-h);
+  /* THE BAR'S BOX AND THE SPACE IT RESERVES ARE TWO DIFFERENT NUMBERS, and separating them is what
+     brought the first row up to where the reference puts it.
+
+     They used to be one. `main` cleared the WHOLE bar, so the page began below the bar's bottom
+     edge — which is not where the bar visually ends. The bar is a gradient that fades to nothing
+     well before its box does, and the last thing a viewer can actually see in it is the pill. The
+     reference starts its first heading 8% of a card below the PILL; ours started that far below the
+     box, and the bar's bottom half — pure padding, invisible — sat between them as dead screen.
+
+     So: --tv-topnav-h is the bar's box (the gradient's extent and what centres the pill inside it),
+     and --tv-topbar-pad is what the page clears, which is the pill's bottom edge. Content slides
+     under the transparent tail of the gradient, which is what a floating ten-foot bar is for. */
+  --tv-topnav-h: clamp(76px, calc(var(--spot-h) * 0.252), 170px);
+  --tv-topbar-pad: calc((var(--tv-topnav-h) + var(--tv-nav-item-h)) / 2);
+  /* the desktop hero pulls itself up by --topbar-h to bleed under a top bar; point that at the
+     RESERVED height so the same math tucks content under the new nav instead of the old one */
+  --topbar-h: var(--tv-topbar-pad);
+
+  /* The gutter and the page's top padding come from the shared web sheet, where they are 85px and
+     24px. Both are re-stated here as the ten-foot layout wants them: a narrower gutter (the cards
+     are the content, the margin is not) and NO top padding at all, because the bar above already
+     reserves its own height and the first row carries its own margin — a third gap between the
+     two is what put the first heading a fifth of a card lower than the reference's. */
+  --page-pad: clamp(40px, 3.4vw, 78px);
+  --page-top: 0px;
+
+  /* The nav's type drives the bar: an item is font-size (line-height 1) plus the padding below,
+     so one number moves the labels, the pills, the search glyph and the bar's own height
+     together. The multipliers are what keep the pill the shape it is at any size, and 2.67 is the
+     total — it is stated here as well because --tv-topbar-pad has to know how tall a pill is
+     without measuring one. Sized against the card like everything else: the reference's pill is
+     12.1% of a card tall, which lands on 4.52% of a card for the type inside it. */
+  --tv-nav-fs: clamp(16px, calc(var(--spot-h) * 0.0452), 30px);
+  --tv-nav-item-h: calc(var(--tv-nav-fs) * 2.67);
 
   /* ONE CARD GEOMETRY FOR THE WHOLE TV HOME. These started life inside .tv-spot, scoped to the
      spotlight. They live here now because the ordinary rails below are sized off the SAME
      numbers — the spotlight's poster strip and every rail card are meant to be visibly the same
      tile, and two independent sets of numbers is how that quietly stops being true. Change the
      card size in one place and the whole screen follows. */
-  --spot-h: clamp(240px, 38vh, 380px);        /* card height = billboard height */
+  --spot-h: clamp(240px, min(26.5vw, 52vh), 1100px);  /* card height = billboard height */
   --sp-wl: calc(var(--spot-h) * 16 / 9);      /* billboard (landscape) width */
-  --sp-wp: calc(var(--spot-h) * 0.6);         /* poster (portrait) width */
-  --sp-gap: 14px;
+  --sp-wp: calc(var(--spot-h) * 0.615);       /* poster (portrait) width */
+  /* The gap tracks the card rather than standing still. Held at 14px it was a wide channel beside
+     a 240px card and a hairline beside a 520px one; this is the one proportion that looks like the
+     same gap on both. */
+  --sp-gap: calc(var(--spot-h) * 0.0316);
+
+  /* Copy under the billboard. Three sizes, because they are three different jobs — the row's name,
+     the facts line, the synopsis. See the block above for where the numbers come from and why they
+     are fractions of the card rather than of the screen. */
+  --sp-title: calc(var(--spot-h) * 0.060);
+  --sp-meta: calc(var(--spot-h) * 0.0475);
+  --sp-plot: calc(var(--spot-h) * 0.055);
+  --sp-plot-lh: 1.42;
+  /* The heading sits CLOSE to its cards. A row is a heading and the pictures it names, and a wide
+     channel between them reads as two things. These are the MARGINS, not the visible gaps: the
+     reference's heading-to-artwork distance is 0.047 of a card, of which the heading's own descent
+     space already supplies about half. */
+  --sp-title-gap: calc(var(--spot-h) * 0.0205);
+  --sp-info-gap: calc(var(--spot-h) * 0.042);
+  /* Metadata to synopsis. Small, because the metadata line's own descent and the synopsis's
+     leading already separate them; a full margin on top of both opens a hole in the block. */
+  --sp-plot-gap: calc(var(--spot-h) * 0.0145);
+  /* THE ROW GAP IS SPLIT IN TWO, and the split is what fixes the first row on the page.
+     One row's distance to the next is the sum of both, so the rhythm down the page is unchanged —
+     but the FIRST row pays only the top half, where a single margin-top made it sit a fifth of a
+     card lower than the reference with nothing above it to be separated from. Putting it all on
+     margin-bottom instead would have collapsed the gap under the featured billboard, which does
+     need separating. Half each is the arrangement that is right in both places. */
+  --sp-row-gap-t: calc(var(--spot-h) * 0.042);
+  --sp-row-gap-b: calc(var(--spot-h) * 0.031);
 }
 
 /* The rail is not rendered in the TV build, so drop the left gutter it reserved and let the
    hero run edge-to-edge. */
-.tv-shell main { margin-left: 0 !important; padding-top: var(--tv-topnav-h); }
-.tv-shell .hero { --hero-rail-pull: 0px; margin-top: calc(var(--tv-topnav-h) * -1) !important; }
+.tv-shell main { margin-left: 0 !important; padding-top: var(--tv-topbar-pad); }
+.tv-shell .hero { --hero-rail-pull: 0px; margin-top: calc(var(--tv-topbar-pad) * -1) !important; }
 
 /* The bar itself — fixed, full width, floating over the content on a top-down black wash so
    the page reads through beneath it, which is the convention on every ten-foot interface worth
@@ -164,7 +260,7 @@
      makes the group the items' offsetParent, which is where TvTopNav reads offsetLeft/offsetWidth
      from. Without it both the pill and the measurements would fall through to the page. */
   position: relative;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: calc(var(--tv-nav-fs) * 0.55);
   transform-origin: 50% 50%;
   transform: scale(1);
   will-change: transform;
@@ -219,7 +315,7 @@
   position: relative;
   z-index: 1;
   font: inherit;
-  font-size: 18px;
+  font-size: var(--tv-nav-fs);
   font-weight: 500;
   line-height: 1;
   color: rgba(255,255,255,0.62);
@@ -236,14 +332,18 @@
      item's HEIGHT is unchanged — which matters because TvTopNav sizes the travelling pill from
      this element's offsetHeight, and a taller item would simply move the problem into the pill.
 
-     THE VERTICAL PADDING ABSORBED THE TYPE GOING FROM 21px TO 18. It is not comfort, it is the
-     bar's ONE height: a text item is line-height (1 × the font size) + this padding, and the
-     search glyph next to it is padded to match at 39px (see .tv-nav-search for what a 3px
-     disagreement did to the travelling pill). 18 + 11 + 10 keeps that 39 exactly, so the smaller
-     type cost the bar nothing — only the ring of white around each label grew, which is what a
-     lighter, smaller label wants anyway. Change the font size here and these two numbers move
-     with it. */
-  padding: 11px 18px 10px;
+     THE PADDING IS A MULTIPLE OF THE TYPE, NOT A PIXEL COUNT, so "change the font size and these
+     two numbers move with it" is no longer an instruction anyone has to remember — it is what the
+     rule does. A text item is line-height (1 × the font size) + this padding, and the search glyph
+     beside it is padded to the same total (see .tv-nav-search for what a 3px disagreement did to
+     the travelling pill); expressed as ratios the two stay equal at every size the clamp on
+     --tv-nav-fs can produce.
+
+     THE RING OF WHITE AROUND A LABEL IS WIDER THAN IT WAS, and that is the pill the reference
+     draws: measured against the panel its pill is a third again as tall as the cap height inside
+     it, where ours was barely a quarter. 0.87 above and 0.80 below puts the item at 2.67× its
+     type, which is that proportion. */
+  padding: calc(var(--tv-nav-fs) * 0.87) calc(var(--tv-nav-fs) * 1.35) calc(var(--tv-nav-fs) * 0.80);
   cursor: pointer;
   display: inline-flex; align-items: center;
   transition: color .22s ease, background-color .22s ease;
@@ -292,7 +392,12 @@
    7.5px of vertical padding puts the glyph's box at 39 as well: every item is now the same
    height, every `offsetTop` is 0, and both problems stop existing rather than being corrected
    for. Horizontal padding stays at 12 — the icon needs less side room than a word. */
-.tv-nav-search { padding: 7.5px 12px; color: rgba(255,255,255,0.72); }
+/* The glyph is authored at 24px and sized in `em` here rather than in the markup, so it grows with
+   the labels beside it — 1.2em is 24px at the 20px the bar settles on for a 1080p panel. The
+   padding then closes the difference between the glyph's box and a label's, which is what keeps
+   both items the same height and the travelling pill the same shape as it crosses between them. */
+.tv-nav-search { padding: calc(var(--tv-nav-fs) * 0.735) calc(var(--tv-nav-fs) * 0.6); color: rgba(255,255,255,0.72); }
+.tv-nav-search svg { width: 1.2em; height: 1.2em; }
 .tv-nav-search:hover { color: #fff; }
 
 /* ---- THE FEATURED BILLBOARD (TvHero) — the top of the home screen, and nothing else -------
@@ -473,9 +578,19 @@
    so a row gaining focus cannot move the rows under it — on a page this long that would be a
    whole-document layout pass on every keypress, which is the one cost a TV cannot pay. */
 .tv-spot {
-  --sp-info-h: 84px;             /* reserved in both states; see above */
+  /* RESERVED IN BOTH STATES (see above) — and now COMPUTED rather than declared, because it is not
+     a design decision, it is the height of what goes in it: one metadata line, the gap under it,
+     and three lines of synopsis. Held at a flat 84px it silently truncated the moment the type
+     grew with the panel, which is exactly when a viewer is furthest away and least able to guess
+     the missing words. */
+  --sp-info-h: calc(var(--sp-meta) * 1.5 + var(--sp-plot-gap) + var(--sp-plot) * var(--sp-plot-lh) * 3);
   padding-top: 6px;
-  margin-top: 24px;
+  /* Rows breathe far further apart than they did. At the old 24px the synopsis of one row sat
+     nearer the heading BELOW it than the pictures it belonged to, which is the wrong grouping —
+     the gap between rows has to be the largest gap on the screen or the page reads as a list of
+     paragraphs with pictures in them. Split top/bottom; see the note on --sp-row-gap-t. */
+  margin-top: var(--sp-row-gap-t);
+  margin-bottom: var(--sp-row-gap-b);
 }
 
 /* A PAGE THAT IS ONE ROW CENTRES IT. Series / Movies / Anime render a single billboard row
@@ -493,17 +608,17 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: calc(100vh - var(--tv-topnav-h));
+  min-height: calc(100vh - var(--tv-topbar-pad));
   padding-top: 0;
   padding-bottom: 0;
 }
-.tv-shell .tv-onerow .tv-spot { margin-top: 0; }
+.tv-shell .tv-onerow .tv-spot { margin-top: 0; margin-bottom: 0; }
 
 /* The dimmed/bright title is how a viewer finds the row they are on before they read anything
    else on it — the same job the focus ring does for a tile. */
 .tv-spot-rowtitle {
-  margin: 0 0 14px;
-  font-size: 20px; font-weight: 700;
+  margin: 0 0 var(--sp-title-gap);
+  font-size: var(--sp-title); font-weight: 700;
   color: rgba(255,255,255,0.55);
   transition: color .22s ease;
 }
@@ -944,7 +1059,12 @@
    below it; `relative` because the two copy blocks stack inside it. */
 .tv-spot-info {
   position: relative;
-  max-width: 720px; margin-top: 18px;
+  /* A MEASURE, NOT A PIXEL WIDTH. 720px is a comfortable column on a desktop and a narrow one on a
+     panel where the billboard beside it is a thousand pixels across — the synopsis has to stay in
+     proportion to the picture it describes, so it is stated as a share of the screen and capped
+     for anything unusually wide. */
+  max-width: min(52vw, 1000px);
+  margin-top: var(--sp-info-gap);
   height: var(--sp-info-h);
   overflow: hidden;
   opacity: 0;
@@ -1006,14 +1126,20 @@
 }
 .tv-spot-meta {
   display: flex; align-items: center; flex-wrap: wrap;
-  font-size: 16px; font-weight: 600; color: #d6d6d6;
+  font-size: var(--sp-meta); font-weight: 600; color: #d6d6d6;
 }
-.tv-spot-meta span + span::before { content: "•"; margin: 0 10px; opacity: 0.5; }
+.tv-spot-meta span + span::before { content: "•"; margin: 0 0.6em; opacity: 0.5; }
+/* THREE LINES, NOT TWO, AND LOOSER. Two lines cut most synopses mid-sentence, and the cut always
+   lands in the same place — a viewer learns the panel is lying to them and stops reading it. The
+   third line is what the reference gives it, and the wider leading is measured off the same
+   screen: at a distance, lines set tight enough to read on a desk merge into a grey block. The
+   margin above is small on purpose — the metadata line's own descent and this line's leading
+   already separate the two, and a real margin on top of both opens a hole. */
 .tv-spot-plot {
-  margin: 10px 0 0;
-  max-width: 640px;
-  font-size: 16px; line-height: 1.5; color: rgba(255,255,255,0.82);
-  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2;
+  margin: var(--sp-plot-gap) 0 0;
+  max-width: min(50vw, 960px);
+  font-size: var(--sp-plot); line-height: var(--sp-plot-lh); color: rgba(255,255,255,0.82);
+  display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3;
   -webkit-box-orient: vertical; overflow: hidden;
 }
 
@@ -1041,7 +1167,8 @@
    size everything else uses, or the one remaining rail is visibly the odd one out.
 
    The web card is 200x300 with a 15px caption — sized for a monitor at arm's length, and next
-   to the spotlight's 228x380 strip poster it reads as a different, smaller component. Every
+   to the spotlight's strip poster — two fifths of the panel tall — it reads as a different,
+   smaller component. Every
    rail card is re-sized off the SAME --spot-h / --sp-wp the spotlight uses, so the Featured
    strip and the rails below are one tile at one size.
 
@@ -1058,8 +1185,9 @@
 .tv-shell .pcard .cap { display: none; }
 
 /* NO MOUSE CHROME ON THE RAILS — this is what actually stops a rail reading as a different
-   component from Featured. The card box already matches it exactly (228x380, 10px radius,
-   14px gap, same left edge); the mismatch is three affordances the web rail grows the instant
+   component from Featured. The card box already matches it exactly (same --sp-wp x --spot-h,
+   10px radius, same --sp-gap, same left edge); the mismatch is three affordances the web rail
+   grows the instant
    a pointer crosses it and the spotlight strip never has at all:
      - the left/right chevrons, each sitting on a 129px-wide dark edge gradient that dims the
        first and last card in the row
@@ -1077,14 +1205,15 @@
   box-shadow: none !important;
 }
 
-/* Match the spotlight's title→cards gap (14px). The rail's is 16px, made of a 16px heading
-   margin, a -14px rail pull and 14px of row padding — so it is corrected on the heading. */
-.tv-shell .strip-head { margin-bottom: 14px; }
+/* Match the spotlight's title→cards gap. The rail's is 16px, made of a 16px heading margin, a
+   -14px rail pull and 14px of row padding — so it is corrected on the heading, against the same
+   variable the spotlight's heading uses rather than a copy of its value. */
+.tv-shell .strip-head { margin-bottom: var(--sp-title-gap); }
 
 /* Row headings match the spotlight's "Featured" — same size and weight, and NOT upper-cased.
    The web rails shout in caps; beside a mixed-case "Featured" that reads as two designs. */
 .tv-shell .strip-head .mono {
-  font-size: 20px;
+  font-size: var(--sp-title);
   font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
