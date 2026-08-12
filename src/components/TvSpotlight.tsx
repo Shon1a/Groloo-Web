@@ -62,7 +62,32 @@ export const SPOT_MAX = 10;
  * TRAILER_PREFETCH_SPAN) — walking onto an adjacent card hits a cache rather than the network — so
  * the timer is free to shrink toward the only job it still has, which is the embed. 500ms is above
  * a deliberate walk and comfortably above a held key, and 300ms of pure dead time is gone. */
-const TRAILER_DWELL = 500;
+/* MEASURED AND RAISED FROM 500. At 500ms this fired while somebody was still BROWSING: a
+ * deliberate press lands about 900ms after the last, so the dwell always elapsed, a <video> always
+ * mounted, and the next press always destroyed it. One media pipeline acquired and released per
+ * keypress, on the weakest hardware the app runs on.
+ *
+ * A/B on the television, both arms with the preview ON, order reversed between rounds:
+ *
+ *              worst frame    frames on time
+ *   500ms       78, 73ms       82.9%, 80.9%
+ *   1200ms      52, 53ms       92.6%, 90.4%
+ *
+ * Ten points and 23ms of worst frame, for one constant — and it recovers essentially all of what
+ * turning the preview OFF entirely was worth (93% / 57ms), so the feature costs nothing now.
+ *
+ * IT ALSO EXPLAINS THE RESULT THAT DEFEATED EVERY OTHER THEORY. Turning off all eleven of the
+ * row's animations left the worst frame unchanged to the millisecond. A platform media call has no
+ * CSS surface to remove, which is why nothing on the style side ever moved it.
+ *
+ * NOT the teardown specifically: deferring the `load()` that destroys the pipeline was built and
+ * measured and came back flat, so the cost is the mount, or simply having a video on the row at
+ * all. Raising the dwell avoids all of it by only ever starting one when the viewer has genuinely
+ * stopped, which is what the feature was always for.
+ *
+ * THE COST, STATED PLAINLY: a preview now begins 1.2s after you settle rather than 0.5s. That is
+ * the whole of the trade. */
+const TRAILER_DWELL = 1200;
 /* How far either side of the resting title to warm the next preview's data. One card each way,
  * because one card each way is what a press of Left or Right reaches, and the point is to have the
  * trailer in hand BEFORE the next rest rather than to cache the row. */

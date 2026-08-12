@@ -126,7 +126,20 @@ function labelWidth(label: string): number {
 }
 
 /** Pick the rendition to play for a box needing `neededPx` device pixels of width. */
-export function pickTrailerRendition(
+export /* ASKED ONCE PER PAGE, NOT ONCE PER PREVIEW. This built a throwaway <video> on every call — a
+ * second media element created and dropped inside the same keypress already paying to mount the
+ * real one. The answer is a property of the engine and cannot change while the app runs.
+ * (Unmeasured on its own; it is strictly less work rather than a tuning choice.) */
+let hlsAnswer: boolean | null = null;
+function hlsSupported(): boolean {
+  if (hlsAnswer === null) {
+    hlsAnswer = typeof document !== 'undefined'
+      && !!document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+  }
+  return hlsAnswer;
+}
+
+function pickTrailerRendition(
   urls: Record<string, string> | undefined,
   neededPx: number,
   fallback?: string,
@@ -135,8 +148,7 @@ export function pickTrailerRendition(
   /* AUTO is an HLS playlist, not a file. A <video> plays it natively on the TV platforms and on
    * Safari, and not at all in Chrome — so it is only ever a candidate where the browser says it
    * can, and even then only as a last resort behind every progressive rendition. */
-  const canHls = typeof document !== 'undefined'
-    && !!document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+  const canHls = hlsSupported();
   const ladder = Object.keys(urls)
     .filter((l) => l !== 'AUTO' && labelWidth(l) > 0)
     .sort((a, b) => labelWidth(a) - labelWidth(b));
