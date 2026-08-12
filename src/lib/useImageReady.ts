@@ -60,6 +60,14 @@ import { useEffect, useState } from 'react';
 /** How many decoded pictures the whole app keeps alive. One row's walk touches the rested title
  *  and one card either way, each with a backdrop and a wordmark — six — so this covers the working
  *  set with headroom and still caps the app at roughly 10MB of pixmap in the worst case. */
+/* MEASURED AND LEFT AT 10. Raising it to 24 — enough to hold a whole row's backdrops and
+ * wordmarks instead of about five cards' worth — cut image decoding from 108.3ms per press to
+ * 16.8ms, an 85% reduction, and moved the frames NOT AT ALL: held-key on-time 89.2/91.2% at 10
+ * against 87.6/84.8% at 24, identical p95 (33ms), identical worst frame, identical heap.
+ *
+ * So decode is real work that is not on the critical path — it runs off the main thread and in the
+ * gaps between presses, where the row is idle anyway. Freeing it frees time nothing was waiting
+ * for. Worth recording precisely because the 85% looks like it ought to matter. */
 const RETAIN_MAX = 10;
 
 /** Insertion-ordered, so the first key is always the least recently retained. */

@@ -1038,6 +1038,16 @@
  * you actually stop on arrives with the full cascade intact.
  *
  * `.tv-spot-strip` is deliberately absent: it is the slide, and the slide is the thing being kept. */
+/* THE STRIP GLIDES WHILE THE KEY IS HELD. The row's own curve decelerates — right for a single
+   press that should arrive and settle, wrong for a hold, where it slows almost to a stop before
+   the next repeat relaunches it and the eye reads a sequence of little arrivals as stepping.
+   Linear, re-targeted in flight by the next step, is one continuous movement instead. The duration
+   that pairs with this is HELD_SLIDE_MS in TvSpotlight, deliberately longer than the step pace so
+   the transition never completes and stalls mid-hold. */
+.tv-spot.is-fast .tv-spot-strip {
+  transition-timing-function: linear !important;
+}
+
 .tv-spot.is-fast .tv-spot-layer,
 .tv-spot.is-fast .tv-spot-plate,
 .tv-spot.is-fast .tv-spot-plate.on,
