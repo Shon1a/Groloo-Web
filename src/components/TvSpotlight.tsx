@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
+import { retainImage, isDecoded } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
@@ -104,6 +105,20 @@ const SLIDE_MS = 430;
 const SLIDE_MS_CHAINED = 320;
 /** Under this gap between presses, the remote is being held rather than tapped. */
 const SLIDE_CHAIN_WINDOW = 320;
+
+/* How long the focus state waits before committing — see `setOpenNow`.
+ *
+ * NOT TvSpatialNav's SCROLL_MS, which is what it was first set to and which is subtly wrong. That
+ * constant is the ease's NOMINAL duration; the scroll measured on the television actually spans
+ * 478-489ms, because the ease cannot finish until it has been given its last frame and the page is
+ * not painting every frame. Committing at 420ms therefore dropped two row re-renders into the tail
+ * of the very glide they were deferred to stay out of.
+ *
+ * MEASURED AND REVERTED: pushing it to 700ms to clear that span changed nothing — 15.25 painted
+ * scroll frames at 420ms against 14.95 at 700ms, inside the noise. The two deferred re-renders are
+ * evidently not what the scroll is losing frames to, so the constant stays at the ease's own
+ * duration rather than carrying an unexplained margin. */
+const OPEN_COMMIT_MS = 420;
 
 /* How long a press will wait for the incoming billboard to be decoded before dissolving anyway.
  * The full reasoning is on the swap gate; the number is "comfortably under half of SLIDE_MS", so
@@ -272,6 +287,38 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
    *  Up here with the other refs because `step` is defined past an early return. */
   const lastStepAt = useRef(0);
+  /* ---- WHERE THE WALK ACTUALLY IS, WHILE THE KEY IS HELD -------------------------------------
+   * A chained press no longer calls setActive (see `step`), so for the length of a hold the React
+   * state is stale on purpose and THIS is the truth. `chaining` says a commit is owed; `endChain`
+   * pays it when the remote lets go. Everything that must not lag behind a hold — OK opening a
+   * title, chiefly — reads `liveActive` rather than `active`. */
+  const liveActive = useRef(0);
+  const chaining = useRef(false);
+  /** The dwell timer, hoisted out of its effect so a held key can cancel it without a re-render. */
+  const dwellId = useRef(0);
+  /** One in-flight tile promotion at a time — see `promoteSoon`. */
+  const promoteId = useRef(0);
+  /* ---- THE ACTIVE-ROW HIGHLIGHT IS A CLASS, NOT A RENDER ------------------------------------
+   * `open` drives two quite different things: the LOOK of the focused row (a class, and every
+   * `.tv-spot.is-open` rule hanging off it) and the BEHAVIOUR of being focused — arming the
+   * trailer dwell, the neighbour prefetches, the red-button listener, the duplicate-strip latch.
+   * The look has to be instant. The behaviour does not: all of it is work that happens half a
+   * second later anyway.
+   *
+   * MEASURED: an up/down press re-rendered TWO whole rows — the one being left and the one being
+   * arrived at — each rebuilding its art layers, plates and info panel purely to change which one
+   * looks active. ~74-85ms of style and ~100-146ms of script per press, and at that cost the set
+   * paints only 8 of the ~25 frames of the 420ms scroll ease. That is the "vertical jumps instead
+   * of gliding" complaint, in numbers.
+   *
+   * So the class goes straight to the node on focus, costing nothing, and the state commit that
+   * re-arms the behaviour waits for the scroll to land. `openRef` is the truth in between, and a
+   * layout effect re-asserts the class after any render so React cannot take it back. Same shape
+   * as `--active` and `liveActive` above — one idea, applied twice. */
+  const openRef = useRef(false);
+  const openCommit = useRef(0);
+  /** Clears `is-fast` once the remote stops chaining — see the note in `step`. */
+  const fastOff = useRef(0);
   const railRef = useRef<HTMLDivElement>(null);
   const prevActiveRef = useRef(0);
 
@@ -357,6 +404,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   useEffect(() => {
     const root = sectionRef.current;
     if (!root || reduceMotion) return;
+    /* NOT WHILE THE KEY IS HELD. The drift is 3.2% of the card and it costs two composited
+     * animations per press; on a chained press nobody can see 24px of travel that is replaced
+     * 120ms later, so it is spent for nothing. See the note in `step`. */
+    if (root.classList.contains('is-fast')) return;
     const cs = getComputedStyle(root);
     const dir = Number(cs.getPropertyValue('--sp-dir')) || 0;
     if (!dir) return;   // the first paint of a row was not reached by a press; nothing to explain
@@ -413,8 +464,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     setVideoFailed(false);
     setMetaImdb(undefined);
     if (!rowTrailers || !open || !resting) return;
-    const id = window.setTimeout(() => setDwelt(resting), TRAILER_DWELL);
-    return () => window.clearTimeout(id);
+    /* HELD IN A REF so a chained press can cancel it without going through React — during a hold
+     * this effect does not re-run at all (`active` is deliberately not moving), and the dwell must
+     * still be dropped on every press or a trailer would arm for a card already scrolled past. */
+    dwellId.current = window.setTimeout(() => { dwellId.current = 0; setDwelt(resting); }, TRAILER_DWELL);
+    return () => { window.clearTimeout(dwellId.current); dwellId.current = 0; };
     // Keyed on the title's ID rather than the object: the rows arrive inside a fresh array on
     // every render of Home, and re-arming this timer each time would mean it never fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -632,7 +686,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
             <img
               className="tv-spot-thumbimg"
               data-src={src}
-              loading="lazy"
               decoding="async"
               alt=""
               /* NOT `useImageReady` HERE, and that is deliberate rather than an oversight. These
@@ -699,8 +752,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    *
    * `loading="lazy"` DOES NOT COVER THIS, which is the whole reason this exists. Lazy loading is
    * about the VIEWPORT, and these tiles are inside it — they are only clipped horizontally by an
-   * ancestor's overflow, which the browser does not treat as off-screen. The attribute stays on
-   * anyway; it still earns its keep for rows below the fold.
+   * ancestor's overflow, which the browser does not treat as off-screen.
+   *
+   * AND THE ATTRIBUTE IS NOW GONE, WHICH REVERSES WHAT THIS NOTE USED TO SAY. It said lazy stayed
+   * on because it "still earns its keep for rows below the fold". It does not, and cannot: a tile
+   * only ever receives a `src` from the effect below, the effect returns early unless `visible`,
+   * and `visible` is an IntersectionObserver latch. A row below the fold therefore has no `src` on
+   * any tile, and `loading` on an image with no source is inert — there was nothing left for it to
+   * defer. `content-visibility: auto` on the rail covers those rows besides.
+   *
+   * What it DID still cost is registration: every promoted tile joined Blink's internal lazy-load
+   * observer, on a screen carrying ~121 images, and a trace of an eight-press walk put
+   * `IntersectionObserverController::computeIntersections` at 36.5ms per press — during a
+   * HORIZONTAL walk, where nothing scrolls and no intersection can have changed. Removing a
+   * redundant observer registration per tile is the cheapest thing on that line. Unmeasured as
+   * yet; it wants the same four-arm treatment as the rest.
    *
    * DONE ON THE NODES, NOT THROUGH RENDER, and that is the constraint that shaped it. The strip
    * is memoised precisely so a keypress does not rebuild 24 buttons (see the note on `thumbs`),
@@ -717,6 +783,40 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * shows its gradient plate for a beat rather than a hole. */
   const THUMB_AHEAD = 9;
   const THUMB_BEHIND = 2;
+  /* ---- ONE PROMOTION IN FLIGHT, AND IT READS THE WALK WHEN IT FIRES -------------------------
+   * This used to be an effect keyed on `active`: every press cancelled the pending idle callback
+   * and armed a new one, so at a held key's ~120ms cadence the callback was cancelled and rebuilt
+   * before it could ever run — thirty presses of scheduling for zero promotions, then one at the
+   * end. Pure churn on the frame that can least afford it.
+   *
+   * Now `step` calls this directly and it is idempotent: if one is already scheduled, nothing
+   * happens. The window is computed from `liveActive` INSIDE the callback rather than captured
+   * when it was scheduled, so the one that eventually runs promotes where the walk actually
+   * ENDED UP rather than where it was thirty presses ago — which is the tile the viewer is
+   * looking at. */
+  const promoteSoon = () => {
+    if (promoteId.current) return;
+    const track = trackRef.current;
+    if (!track || !visible) return;
+    const run = () => {
+      promoteId.current = 0;
+      const tiles = track.children;
+      const at = liveActive.current;
+      const from = Math.max(0, at - THUMB_BEHIND);
+      const to = Math.min(tiles.length - 1, at + THUMB_AHEAD);
+      for (let i = from; i <= to; i++) {
+        const img = tiles[i]?.querySelector<HTMLImageElement>('img[data-src]');
+        if (!img) continue;                     // the see-all card, or a tile already promoted
+        img.src = img.dataset.src || '';
+        delete img.dataset.src;
+      }
+    };
+    const ric = window.requestIdleCallback;
+    promoteId.current = typeof ric === 'function'
+      ? ric(run, { timeout: 600 })
+      : window.setTimeout(run, 120);
+  };
+
   useEffect(() => {
     if (!visible) return;
     const track = trackRef.current;
@@ -802,6 +902,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * not a frame's delay against the old behaviour. */
   /* What the walk is currently pointing AT, as a stable string. `end` is its own value because the
    * end card is a real stop with no id of its own. */
+  /* The committed state is the source of truth whenever React DOES commit; `liveActive` only runs
+   * ahead of it during a hold. Re-syncing here keeps a deliberate press, a catalogue change and the
+   * load-more reset from leaving the two disagreeing. */
+  if (!chaining.current) liveActive.current = active;
+
   const activeSlot = slotAt(active);
   const activeKey = activeSlot === 'end' ? 'end' : String(activeSlot?.id ?? '');
 
@@ -877,12 +982,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     // wordmark is a card that falls back to type and must not hold the picture behind it.
     const done = () => { if (--left <= 0) flip(); };
     for (const url of urls) {
-      const img = new Image();
-      img.decoding = 'async';
-      img.src = url;
-      if (img.complete && img.naturalWidth > 0) { done(); continue; }
+      /* THROUGH THE RETAINED CACHE, not a fresh Image per press. This gate, the warm-ahead below
+       * and FadeBg's `useImageReady` all used to build their own element for the same URL, so one
+       * press could ask the engine to decode one backdrop three times over — ~130ms per press of
+       * decoding on a warm row, measured. They now share one element, so the warm-ahead's decode
+       * IS this gate's decode, and the common case here is the synchronous hit below. */
+      const img = retainImage(url);
+      if (isDecoded(img)) { done(); continue; }
       if (typeof img.decode === 'function') img.decode().then(done, done);
-      else { img.onload = done; img.onerror = done; }
+      else {
+        // addEventListener rather than onload: the element is shared, and assigning would unhook
+        // whichever other waiter registered first.
+        const off = () => { img.removeEventListener('load', off); img.removeEventListener('error', off); done(); };
+        img.addEventListener('load', off);
+        img.addEventListener('error', off);
+      }
     }
     /* THE CAP IS WHAT KEEPS A GATE FROM BECOMING A STALL. A cold row on a slow set must not leave
      * the billboard on the title you just walked off — past this the swap happens anyway and the
@@ -951,9 +1065,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           for (const url of [billboardUrl(art), logoOf(art) || '']) {
             if (!url || warmed.has(url)) continue;
             warmed.add(url);
-            const img = new Image();
-            img.decoding = 'async';
-            img.src = url;
+            /* RETAINED NOW, WHICH IS THE POINT OF THE WARM. Dropping the element the moment it had
+             * decoded — what this did — made the decoded frame immediately evictable, so the warm
+             * bought a cached BYTE RANGE and the gate one press later paid for the decode anyway.
+             * Holding it in the bounded LRU is what turns the warm into a warm. The ceiling lives
+             * on RETAIN_MAX and is global, so this no longer scales with rows on screen, which is
+             * what the old note was right to worry about. */
+            const img = retainImage(url);
             if (typeof img.decode === 'function') img.decode().catch(() => { /* 404 / expired signature — the gate's cap covers it */ });
           }
         }
@@ -980,6 +1098,61 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
     }
   }, [active]);
+
+  /* ---- THE STRIP'S POSITION IS WRITTEN TO THE NODE, NOT RENDERED --------------------------
+   * `--active` used to be an inline style on the strip, which meant moving the row required a
+   * React render. A held key is ~8 presses a second and each one cost two commits (setActive, then
+   * setXfade from the swap gate) — measured at ~20.5ms of script per press, which became the
+   * largest single item once the animation work was cut.
+   *
+   * So during a hold `step` writes this property straight to the node and React is not involved at
+   * all. This hook exists for the OTHER direction: whenever a render does happen — mount, a new
+   * catalogue, a deliberate press, the row lengthening — it re-asserts the committed value, so the
+   * node and the state can never disagree.
+   *
+   * `useLayoutEffect` and NO dependency array, deliberately. Layout-effect so there is no frame
+   * where a freshly mounted strip sits at the property's initial value; no deps because it must
+   * follow every commit, and during a hold there are no commits, so it costs nothing.
+   *
+   * ABOVE `if (!n) return null` because that is an early return and a hook below it would not run
+   * on an empty row — the rules-of-hooks trap this file's shape sets for exactly this change. */
+  useLayoutEffect(() => {
+    trackRef.current?.style.setProperty('--active', String(liveActive.current));
+    /* `is-open` is owned by the node too, for the reason above: it is deliberately NOT in the
+     * rendered className, so a render triggered by anything else cannot write a stale value over
+     * the class the focus handler already set. */
+    sectionRef.current?.classList.toggle('is-open', openRef.current);
+  });
+
+  /* ---- FOCUS PAINTS IMMEDIATELY, COMMITS LATER ----------------------------------------------
+   * The class is the whole visible effect of gaining or losing focus, and it costs one classList
+   * write. The state commit behind it re-runs the effects that arm the preview, the prefetches and
+   * the duplicate strip — none of which anyone can perceive inside half a second — so it is held
+   * until the scroll ease has finished rather than landing in the middle of it.
+   *
+   * OPEN_COMMIT_MS tracks TvSpatialNav's SCROLL_MS. Holding a direction keeps re-scheduling it, so
+   * a run down the page produces ONE commit per row that is actually stopped on, instead of two
+   * full row re-renders per press on the way past. */
+  const setOpenNow = (v: boolean) => {
+    openRef.current = v;
+    sectionRef.current?.classList.toggle('is-open', v);
+    if (openCommit.current) window.clearTimeout(openCommit.current);
+    openCommit.current = window.setTimeout(() => {
+      openCommit.current = 0;
+      setOpen(v);
+    }, OPEN_COMMIT_MS);
+  };
+
+  /* Chained presses leave a commit owed; if the row unmounts mid-hold the timer must not fire. */
+  useEffect(() => () => {
+    if (fastOff.current) window.clearTimeout(fastOff.current);
+    if (dwellId.current) window.clearTimeout(dwellId.current);
+    if (openCommit.current) window.clearTimeout(openCommit.current);
+    if (promoteId.current) {
+      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(promoteId.current);
+      else window.clearTimeout(promoteId.current);
+    }
+  }, []);
 
   if (!n) return null;
   /** True while the walk is parked on the end card rather than on a title. */
@@ -1029,9 +1202,89 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * +1 is rightward. The COPY does not use it: measured across every frame of the reference,
        * the text's horizontal offset is exactly 0. */
       el.style.setProperty('--sp-dir', delta > 0 ? '1' : '-1');
+      /* ---- A HELD KEY GETS THE SLIDE AND NOTHING ELSE -------------------------------------
+       * One press starts ELEVEN animations, measured off `document.getAnimations()` on the
+       * television: the strip's own transform, two parallax drifts on the artwork, two layer
+       * dissolves, two title plates, two synopsis blocks and the info panel. Exactly ONE of those
+       * is the row moving; the other ten decorate it. Turning all of them off was the only arm of
+       * six to escape the noise band — frames over 33ms 75.5% -> 41.0%, median 41.7 -> 16.7ms.
+       *
+       * So they come off WHILE THE KEY IS HELD, which is the only time the lag is felt, and come
+       * straight back for a deliberate press, which is when the cascade is what makes the row feel
+       * like it has weight. Same `chained` test that already picks the slide duration — no new
+       * idea, just applied to the decoration rather than only to its timing.
+       *
+       * The class is cleared on a timer rather than on the next press, so letting go of the button
+       * restores the full effect for the card you actually stop on. */
+      el.classList.toggle('is-fast', chained);
+      if (fastOff.current) window.clearTimeout(fastOff.current);
+      fastOff.current = window.setTimeout(endChain, SLIDE_CHAIN_WINDOW);
     }
-    setActive((a) => (a + delta + stops) % stops);
+
+    const next = (liveActive.current + delta + stops) % stops;
+    liveActive.current = next;
+
+    /* A DELIBERATE PRESS IS UNCHANGED — same single setActive it always did, so everything that
+     * hangs off it (the cross-dissolve, the wordmark, the synopsis, the warm-ahead) behaves
+     * exactly as measured. Only a HELD key takes the path below. */
+    if (!chained) { setActive(next); return; }
+
+    /* ---- A HELD PRESS DOES NOT RENDER ------------------------------------------------------
+     * The row moves by writing the property the transform reads, and that is the whole press:
+     * no setState, no reconcile, no commit, and none of the effects keyed on `active` — the swap
+     * gate, the warm-ahead, the prefetches — which at this cadence all produce work that is
+     * replaced before it can be seen. `endChain` commits once, on release.
+     *
+     * The wrap suppression is done inline here rather than left to the effect above, because that
+     * effect is keyed on `active` and `active` is deliberately standing still. `prevActiveRef` is
+     * moved with it so the commit at the end sees a delta of zero and does not kill the transition
+     * a second time for a jump that already happened. */
+    chaining.current = true;
+    if (dwellId.current) { window.clearTimeout(dwellId.current); dwellId.current = 0; }
+    const track = trackRef.current;
+    if (track) {
+      if (Math.abs(next - prevActiveRef.current) > 1) {
+        track.style.transition = 'none';
+        requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
+      }
+      track.style.setProperty('--active', String(next));
+    }
+    prevActiveRef.current = next;
+    promoteSoon();
   };
+
+  /* ---- PAYING THE COMMIT THE HOLD RAN UP ---------------------------------------------------
+   * Fires SLIDE_CHAIN_WINDOW after the last press, i.e. when the remote has actually let go. It
+   * restores the full cascade (drops `is-fast`, puts the deliberate durations back) and then hands
+   * React the position the walk really reached, which re-arms the artwork, the wordmark, the
+   * synopsis and the dwell for the one card the viewer has stopped on.
+   *
+   * `setActive` with an unchanged value is a React bailout — no render, and therefore no effect
+   * re-run — which happens whenever a hold wraps exactly back to where it started. The dwell is
+   * armed by hand in that case, because the effect that normally does it is keyed on the resting
+   * title's id and that id has not moved. */
+  function endChain() {
+    const el = sectionRef.current;
+    if (el) {
+      el.classList.remove('is-fast');
+      el.style.setProperty('--sp-slide', `${SLIDE_MS}ms`);
+      el.style.setProperty('--sp-art-fade', `${ART_FADE_MS}ms`);
+    }
+    if (!chaining.current) return;
+    chaining.current = false;
+    const at = liveActive.current % stops;
+    liveActive.current = at;
+    if (at === active) {
+      const rest = at < n ? list[at] : undefined;
+      /* `openRef`, not `open` — a hold can end before the focus commit has landed, and the state
+       * would still say the row is not focused when it plainly is. */
+      if (rowTrailers && openRef.current && rest && !dwellId.current) {
+        dwellId.current = window.setTimeout(() => { dwellId.current = 0; setDwelt(rest); }, TRAILER_DWELL);
+      }
+      return;
+    }
+    setActive(at);
+  }
 
   /* Until the row is near the viewport the layer keeps the branded gradient and requests no
    * bitmap at all — see the memory note in the header. */
@@ -1080,18 +1333,29 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * already declined once for the same reason. `useVideoTrailer` accordingly has no `detach` any
    * more: this row owns its preview from the dwell that starts it to the teardown that ends it,
    * and nothing takes it anywhere. */
+  /* READS `liveActive`, NOT `active`, AND THAT IS THE ONE CORRECTNESS BUG THIS CHANGE COULD HAVE
+   * SHIPPED. During a hold the committed state lags on purpose, so OK pressed within
+   * SLIDE_CHAIN_WINDOW of releasing the button would have opened the title the hold STARTED on —
+   * the viewer looking straight at one poster and getting another. The pending commit is flushed
+   * first so the row is left in a consistent state either way. */
   const openTitle = () => {
-    if (onSeeAllCard) { goEnd(); return; }
-    onSelect?.(cur);
+    if (chaining.current) endChain();
+    const at = liveActive.current;
+    if (hasEnd && at >= n) { goEnd(); return; }
+    onSelect?.(list[Math.min(at, n - 1)] || list[0]);
   };
 
   return (
     <section
       ref={sectionRef}
-      className={`tv-spot${open ? ' is-open' : ''}${reduceMotion ? ' no-anim' : ''}`}
+      /* `is-open` is absent here ON PURPOSE — the layout effect above owns it, so a render cannot
+       * write a stale value over the class focus just set. `is-settled` is the opposite: it is the
+       * DEFERRED half, rendered from state, and it carries the three compositor promotions so they
+       * land after the scroll instead of during it (see the note in tv.css). */
+      className={`tv-spot${open ? ' is-settled' : ''}${reduceMotion ? ' no-anim' : ''}`}
       aria-label={heading}
-      onFocus={() => setOpen(true)}
-      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }}
+      onFocus={() => setOpenNow(true)}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpenNow(false); }}
     >
       {/* A plain heading. The web rail's "see all" lives here; on a TV it is the card at the end
           of the strip instead — see the note above `canSeeAll`. */}
@@ -1103,7 +1367,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         <div className="tv-spot-rail" ref={railRef}>
           {/* STRIP TRACK — all titles, portrait; translated so the focused one hides behind the
               billboard and its successors peek to the right. `--active` drives the transform. */}
-          <div className="tv-spot-strip" ref={trackRef} style={{ '--active': active } as CSSProperties} role="list">
+          <div className="tv-spot-strip" ref={trackRef} role="list">
             {/* The list is rendered TWICE so the up-next area is never empty near the end: when
                 `active` reaches the last real title, the successors come from the second copy,
                 giving the reference's endless loop. tabindex -1 → the strip is a preview, not a

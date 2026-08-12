@@ -27,31 +27,103 @@ import { useEffect, useState } from 'react';
  * every caller draws its own fallback when the URL is empty or the bitmap turns out to be broken.
  * ==========================================================================*/
 
+/* ============================================================================
+ * ONE Image PER URL, AND IT IS KEPT — the decode cache this file used to defeat.
+ *
+ * MEASURED ON THE TELEVISION. A trace of an eight-press walk along a warm row spent ~1,039ms
+ * inside image decoding across `ImageDecodeTask`, `Decode LazyPixelRef` and `Decode Image` —
+ * ~130ms per press, the largest single app-attributable cost on the profile, and larger than the
+ * style recalculation everyone was looking at. On a WARM row, where every byte is already in the
+ * HTTP cache. Bytes were never the problem; DECODED FRAMES were.
+ *
+ * WHY IT WAS DECODING AT ALL. Three places wanted the same picture and each built its own
+ * `new Image()` for it — this hook, TvSpotlight's swap gate, and its warm-ahead — so a single
+ * press could ask the engine to decode one backdrop three separate times. Worse, every one of
+ * them dropped the element as soon as `decode()` resolved, which is what makes the decoded frame
+ * immediately evictable: `decode()` guarantees a frame is ready, not that anything will keep it.
+ * The warm-ahead's note says the dropping was deliberate — a retained pixmap is ~1.4MB and
+ * thirteen rows of neighbours would be exactly the passive load that component is arranged to
+ * avoid. That reasoning is right about thirteen rows and wrong about the working set, which is
+ * one row's walk.
+ *
+ * SO THE CAP IS GLOBAL AND SMALL. A bounded, module-scoped LRU: every caller asking for the same
+ * URL gets the same element, and only the last RETAIN_MAX are held. That is a fixed ceiling for
+ * the whole application rather than a cost that scales with rows on screen — the thing the old
+ * note was actually protecting against. Backdrops dominate it (~1.4MB each at w780); wordmarks are
+ * ~20KB and effectively free.
+ *
+ * EVICTION DROPS THE REFERENCE AND NOTHING ELSE. `src` is deliberately not cleared on the way out:
+ * the bytes stay in the HTTP cache, which is the expensive half of coming back, and clearing it
+ * on a shared element that some layer might still be painting is how you get a blank billboard.
+ * ==========================================================================*/
+
+/** How many decoded pictures the whole app keeps alive. One row's walk touches the rested title
+ *  and one card either way, each with a backdrop and a wordmark — six — so this covers the working
+ *  set with headroom and still caps the app at roughly 10MB of pixmap in the worst case. */
+const RETAIN_MAX = 10;
+
+/** Insertion-ordered, so the first key is always the least recently retained. */
+const retained = new Map<string, HTMLImageElement>();
+
+/** The one `Image` for this URL, created on first ask and kept until it falls out of the LRU. */
+export function retainImage(url: string): HTMLImageElement {
+  const hit = retained.get(url);
+  if (hit) {
+    // Re-insert so the most recently wanted picture is the last to be evicted.
+    retained.delete(url);
+    retained.set(url, hit);
+    return hit;
+  }
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = url;
+  retained.set(url, img);
+  while (retained.size > RETAIN_MAX) {
+    const oldest = retained.keys().next().value;
+    if (oldest === undefined) break;
+    retained.delete(oldest);
+  }
+  return img;
+}
+
+/** Decoded and paintable right now — the synchronous answer, worth one fewer frame of nothing. */
+export function isDecoded(img: HTMLImageElement): boolean {
+  return img.complete && img.naturalWidth > 0;
+}
+
 export function useImageReady(url: string | undefined | null): boolean {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (!url) { setReady(false); return; }
     let cancelled = false;
-    setReady(false);
     const done = () => { if (!cancelled) setReady(true); };
 
-    const img = new Image();
-    img.decoding = 'async';
-    img.src = url;
+    const img = retainImage(url);
 
     /* Already in the cache AND already decoded — the common case walking back to a row that has
-     * been seen. `complete` is checked before `decode()` rather than relying on the promise
-     * resolving instantly, because a synchronous answer here is one fewer frame of nothing. */
-    if (img.complete && img.naturalWidth > 0) { setReady(true); return; }
+     * been seen, and now also the common case walking FORWARD onto a card the warm-ahead already
+     * retained. Checked before `decode()` rather than relying on the promise resolving instantly,
+     * because a synchronous answer here is one fewer frame of nothing. */
+    if (isDecoded(img)) { setReady(true); return; }
+    setReady(false);
 
     if (typeof img.decode === 'function') {
-      // Chromium 64+, comfortably inside this build's 87 floor. The `.then(done, done)` pair is
-      // the failure rule above: a rejected decode still stops the wait.
+      /* Chromium 64+, comfortably inside this build's 87 floor. The `.then(done, done)` pair is
+       * the failure rule above: a rejected decode still stops the wait. Safe on a SHARED element —
+       * `decode()` hands back a fresh promise per call, so two layers waiting on one picture do
+       * not interfere. */
       img.decode().then(done, done);
     } else {
-      img.onload = done;
-      img.onerror = done;
+      // addEventListener, not onload: the element is shared now, and an assignment would silently
+      // unhook whichever other caller got there first.
+      img.addEventListener('load', done);
+      img.addEventListener('error', done);
+      return () => {
+        cancelled = true;
+        img.removeEventListener('load', done);
+        img.removeEventListener('error', done);
+      };
     }
     return () => { cancelled = true; };
   }, [url]);
