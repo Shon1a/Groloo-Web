@@ -365,6 +365,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * either side of that swap, so the re-seat cannot be seen and the lurch is gone.
    * `stripPos` drives the node; `liveActive` stays the truth about where the walk is. */
   const stripPos = useRef(0);
+  /* Where the strip was standing when a hold ended, or -1. Consumed by the layout effect that owns
+   * `--active`, which uses it to hop invisibly before animating the press itself. */
+  const silentFrom = useRef(-1);
   const reseatId = useRef(0);
   /* ---- THE ACTIVE-ROW HIGHLIGHT IS A CLASS, NOT A RENDER ------------------------------------
    * `open` drives two quite different things: the LOOK of the focused row (a class, and every
@@ -472,12 +475,20 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   useEffect(() => {
     const root = sectionRef.current;
     if (!root || reduceMotion) return;
-    /* THIS USED TO BAIL OUT ON A HELD KEY, and the reasoning has expired. It said nobody could
-     * see 24px of drift that was replaced 120ms later — true when a hold ran at the platform's
-     * ~8 presses a second and the billboard was frozen anyway. A hold is now paced to ~4.5
-     * (HELD_STEP_MIN_MS) and the billboard tracks the walk, so the drift is on screen long enough
-     * to read, and its absence is what the row looks wrong without. Two composited transform
-     * animations; the cheap kind. */
+    /* NO DRIFT WHILE THE KEY IS HELD — and this is a correction of a correction, so the reasoning
+     * is worth keeping straight.
+     *
+     * The drift was originally suppressed on a held key. That was removed because the billboard had
+     * nothing at all when you held a direction, which read as broken. But restoring it for HOLDS
+     * TOO was the wrong half of the fix: `Element.animate` RESTARTS on every press, so the artwork
+     * is yanked back to its 3.2% offset and released again, over and over. Measured on the
+     * television: the artwork jumped by more than 8px 69 times in 12.6 seconds — about five resets
+     * a second, up to 62px each. That is not drift, it is a shudder, and it is why it looks fine on
+     * a PC (where presses are slower and each animation gets to finish) and bad on a TV.
+     *
+     * A settle needs time to settle. So the drift belongs to a considered press, where it has the
+     * full slide to play out, and a hold gets a clean linear slide with the picture held still. */
+    if (root.classList.contains('is-fast')) return;
     const cs = getComputedStyle(root);
     const dir = Number(cs.getPropertyValue('--sp-dir')) || 0;
     if (!dir) return;   // the first paint of a row was not reached by a press; nothing to explain
@@ -977,8 +988,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * load-more reset from leaving the two disagreeing. */
   if (!chaining.current) liveActive.current = active;
   /* Not while a wrap re-seat is pending: the strip is parked on the duplicate for the length of
-   * that glide, and a render landing mid-way must not drag it back. */
-  if (!chaining.current && !reseatId.current) stripPos.current = liveActive.current;
+   * that glide, and a render landing mid-way must not drag it back.
+   *
+   * WHEN A HOLD ENDS THE STRIP MAY BE DEEP IN THE DUPLICATE, and this line hauls it back to the
+   * walk's own index in one go. Left to the layout effect that writes `--active`, that is an
+   * ANIMATED slide across fifteen posters — measured at 4935px over 483ms, the row visibly
+   * rewinding after the button is released. The distance is recorded here so the write can be split
+   * into an invisible hop and the ordinary one-tile glide. */
+  if (!chaining.current && !reseatId.current) {
+    if (stripPos.current !== liveActive.current) silentFrom.current = stripPos.current;
+    stripPos.current = liveActive.current;
+  }
 
   const activeSlot = slotAt(active);
   const activeKey = activeSlot === 'end' ? 'end' : String(activeSlot?.id ?? '');
@@ -1160,13 +1180,34 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, active, stops, artById]);
 
-  // Suppress the strip's scroll animation on a wrap / multi-step jump, so it resets instead of
-  // rewinding through every card.
+  /* Suppress the strip's scroll animation on a wrap / multi-step jump, so it resets instead of
+   * rewinding through every card.
+   *
+   * TWO COORDINATE SYSTEMS SHARED ONE REF, AND THAT IS WHAT KILLED THE GLIDE. `prevActiveRef` is
+   * written by `step()` as a STRIP index, which is deliberately allowed to run on into the
+   * duplicate copy (17…33 on an extended row); `active` is the WALK index and stays inside
+   * 0…stops-1. Comparing one against the other made `Math.abs` large on nearly every press, so this
+   * effect turned the transition off constantly and every step became a hard cut.
+   *
+   * It only began firing when the billboard was made to track a hold: before that `active` stood
+   * still for the whole hold and this effect never ran. And it bites hardest right after "load
+   * more", because from then on the walk spends almost all its time in the duplicate — which is
+   * exactly where the row was reported as jumping instead of sliding. Measured on the television:
+   * 55% of steps completed in a single frame, against 10-28 frames for a real slide.
+   *
+   * So: a ref of its own for the commit-to-commit comparison, and no interference at all while a
+   * hold is running, when `step()` owns the node and the strip is not React's to animate. */
+  const prevCommitRef = useRef(active);
   useEffect(() => {
+    const prev = prevCommitRef.current;
+    prevCommitRef.current = active;
+    if (chaining.current) return;
     const track = trackRef.current;
-    const prev = prevActiveRef.current;
+    const jumped = Math.abs(active - prev) > 1;
+    /* Re-sync the strip's own ref on the way past: a deliberate press never enters the duplicate,
+     * so the two systems agree here and the next held press starts from a truthful value. */
     prevActiveRef.current = active;
-    if (track && Math.abs(active - prev) > 1) {
+    if (track && jumped) {
       track.style.transition = 'none';
       requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
     }
@@ -1190,7 +1231,30 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * ABOVE `if (!n) return null` because that is an early return and a hook below it would not run
    * on an empty row — the rules-of-hooks trap this file's shape sets for exactly this change. */
   useLayoutEffect(() => {
-    trackRef.current?.style.setProperty('--active', String(stripPos.current));
+    const t = trackRef.current;
+    if (t) {
+      /* THE HOP IS SILENT, THE PRESS IS NOT. Tile i and tile i+stops are the same picture, so
+       * bringing the strip back inside the real range is invisible as long as it does not animate —
+       * and the press that triggered this commit still gets its own one-tile slide, because the hop
+       * is flushed first and the real value written after. Writing only the final value made the
+       * row rewind across the whole duplicate in plain sight. */
+      const from = silentFrom.current;
+      silentFrom.current = -1;
+      if (from >= 0 && stops > 0) {
+        const same = ((from % stops) + stops) % stops;   // same artwork, inside the real range
+        /* Compared against where the strip PHYSICALLY is, not against where it is going. Comparing
+         * it to the destination skipped the hop whenever the press happened to land on the parked
+         * position's own equivalent — and then the write animated the entire rewind, 4606px over
+         * 900ms of the row running backwards. */
+        if (same !== from) {
+          t.style.transition = 'none';
+          t.style.setProperty('--active', String(same));
+          void t.offsetWidth;
+          t.style.transition = '';
+        }
+      }
+      t.style.setProperty('--active', String(stripPos.current));
+    }
     /* `is-open` is owned by the node too, for the reason above: it is deliberately NOT in the
      * rendered className, so a render triggered by anything else cannot write a stale value over
      * the class the focus handler already set. */
@@ -1431,18 +1495,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       /* Judged on the STRIP's own movement. A wrap into the duplicate is one ordinary tile and
        * must keep its transition; only a genuine hop (running out of copy, or a multi-card jump)
        * gets suppressed. */
-      if (rebased) {
-        /* TWO WRITES, NOT ONE, and that is what keeps the glide. Suppressing the transition for the
-         * whole step — which is what the branch below does — makes the wrap SNAP by a tile instead
-         * of sliding. So the rebase is written first with the transition off and flushed, putting
-         * the strip on the identical picture one copy back; the ordinary one-tile glide then runs
-         * from there with the transition restored. The reflow costs a layout flush once per lap,
-         * roughly one press in seventeen. */
-        track.style.transition = 'none';
-        track.style.setProperty('--active', String(base));
-        void track.offsetWidth;
-        track.style.transition = '';
-      } else if (ranOut || Math.abs(stripPos.current - prevActiveRef.current) > 1) {
+      /* THE REBASE IS INSTANT, NOT ANIMATED. Writing it with the transition off and flushing before
+       * the real write was meant to keep the press's own slide, but measured on the television the
+       * flush did not reliably take: the strip animated the whole way back instead — 5264px in
+       * 217ms, the row rewinding sixteen posters in front of the viewer. An instant hop cannot be
+       * seen at all, because tile i and tile i+stops are the same picture; the only cost is that
+       * this ONE press does not slide, and it happens about once every sixteen. A press that does
+       * not animate is a far smaller thing than the row running backwards. */
+      if (rebased || ranOut || Math.abs(stripPos.current - prevActiveRef.current) > 1) {
         track.style.transition = 'none';
         requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
       }
