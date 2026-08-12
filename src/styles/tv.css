@@ -687,6 +687,28 @@
   content-visibility: auto;
 }
 
+/* ---- `--active` IS DECLARED SO IT STOPS INHERITING -----------------------------------------
+ * An UNREGISTERED custom property inherits, so writing one dirties style for the element's whole
+ * subtree — and this one is written on `.tv-spot-strip`, whose subtree is the 21-24 poster tiles
+ * and their images. Every press therefore invalidated ~113 elements to move ONE transform.
+ *
+ * Nothing below the strip reads it. Grepped: `--active` appears exactly twice, on the inline write
+ * in TvSpotlight and in the transform on this rule — so the inheritance was never wanted, only
+ * inherited by default.
+ *
+ * `inherits: false` confines the invalidation to the strip itself. `<integer>` also makes the value
+ * typed rather than a token re-parsed on every use.
+ *
+ * Chromium 85+, comfortably inside this build's 87 floor (the same floor `content-visibility` is
+ * taken against below). An engine that does not know `@property` ignores the block and the property
+ * behaves exactly as it did before — the transform still works, it is only the blast radius that
+ * goes back to being wide. */
+@property --active {
+  syntax: '<integer>';
+  inherits: false;
+  initial-value: 0;
+}
+
 /* strip track — translated so [0..active] hide left/behind the billboard, [active+1..] peek */
 .tv-spot-strip {
   position: absolute; left: 0; top: 0; height: 100%;
@@ -718,7 +740,23 @@
    which would each hold a permanent layer the size of the screen. That is GPU memory a TV does
    not have, and paying it on every row made the page scroll worse, not better: the fix for a
    janky scroll here was to promote LESS, not more. */
-.tv-spot.is-open .tv-spot-strip { will-change: transform; }
+/* ---- WHY THE PROMOTIONS MOVED OFF `is-open` ------------------------------------------------
+ * MEASURED: a plain page of the same shape — nine rows, 905px cards, six posters each, real
+ * backdrops — scrolls at 24 of ~25 frames on this set with 0.0ms of style recalc. The app managed
+ * 10-13. So the panel can glide; the app was spending ~95ms of style and ~130ms of script per
+ * up/down press and leaving no time to paint.
+ *
+ * `is-open` is toggled on TWO sections per press (the row being left and the one arrived at), and
+ * every descendant rule hanging off it is therefore invalidated twice per press. Three of the five
+ * were `will-change` promotions — creating and destroying compositor layers in the middle of the
+ * very scroll they were meant to help.
+ *
+ * They are preparation for the HORIZONTAL slide, which cannot begin until the viewer has settled
+ * on the row, so they belong on the settled state rather than the instant one. `is-settled` is
+ * rendered from React state and commits after the scroll (OPEN_COMMIT_MS in TvSpotlight); the
+ * instant `is-open` class is left carrying only the two cheap visual rules — the heading colour
+ * and the info panel. */
+.tv-spot.is-settled .tv-spot-strip { will-change: transform; }
 .tv-spot-thumb {
   position: relative;
   flex: 0 0 auto;
@@ -807,7 +845,7 @@
   transform-origin: 50% 50%;
   transition: transform .34s cubic-bezier(.2, .7, .2, 1);
 }
-.tv-spot.is-open .tv-spot-hero { will-change: transform; }
+.tv-spot.is-settled .tv-spot-hero { will-change: transform; }
 .tv-shell .tv-spot-hero:focus-visible { transform: scale(1.03); }
 /* focus ring lives in the stage-5 section at the foot of this file — it has to be INSET here,
    see the note there */
@@ -962,6 +1000,52 @@
   background-size: cover;
   background-repeat: no-repeat;
   background-position: center;
+}
+/* ---- THE PHOTOGRAPH KEEPS ITS LAYER WHILE THE ROW IS OPEN ----------------------------------
+ * Both of these are driven by `Element.animate` on every press (the parallax in TvSpotlight), and
+ * an animated transform with no resting transform means the same thing every press: promote a
+ * layer, animate it, throw it away. A trace of an eight-press walk put `Layerize` at 42.4ms per
+ * press, which is that cycle happening twice a press on the two art layers.
+ *
+ * THIS IS THE FIX `.tv-nav-items` ALREADY CARRIES, and the note there is the full reasoning: a
+ * transform that ENDS hands the layer back and repaints on different subpixels, so the resting
+ * state keeps a transform and `will-change` keeps it composited throughout. One rasterisation,
+ * start to finish. `translateZ(0)` rather than `scale(1)` only because nothing here is scaled.
+ *
+ * SCOPED TO THE OPEN ROW, which is the whole difference between this and the thing the file warns
+ * about two hundred lines down. A permanent layer on every `.tv-spot-art` would be two per row
+ * times thirteen rows of ~977x509 artwork — precisely the GPU memory the strip's own note says a
+ * television does not have. Two at a time is the same budget `.tv-spot-strip` and `.tv-spot-hero`
+ * already spend, and it is handed back when the remote leaves the row.
+ *
+ * IT MOVES THE CHURN RATHER THAN DELETING IT: a vertical press still promotes two elements on the
+ * arriving row and releases two on the leaving one. That is the right trade only because walking
+ * ALONG a row is the common motion and walking BETWEEN rows is not — which is exactly why the
+ * horizontal path is the one this targets. Unmeasured as yet; it needs the four-arm treatment. */
+.tv-spot.is-settled .tv-spot-art {
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* ---- HOLDING THE BUTTON: THE ROW MOVES, NOTHING ELSE ANIMATES -------------------------------
+ * `is-fast` is set by `step` for the length of a chained press (see the note there). Eleven
+ * animations run on a normal press and exactly one of them is the row sliding; these are the ten
+ * that decorate it. Held down, they overlap each other four deep, never finish, and cost a style
+ * recalculation per element per frame for a cascade nobody can perceive at 120ms a card.
+ *
+ * The pictures and the plates still CHANGE — they simply cut instead of dissolving, which at this
+ * speed is what the eye reads anyway. Let go and the class clears on its own timer, so the card
+ * you actually stop on arrives with the full cascade intact.
+ *
+ * `.tv-spot-strip` is deliberately absent: it is the slide, and the slide is the thing being kept. */
+.tv-spot.is-fast .tv-spot-layer,
+.tv-spot.is-fast .tv-spot-plate,
+.tv-spot.is-fast .tv-spot-plate.on,
+.tv-spot.is-fast .tv-spot-info,
+.tv-spot.is-fast .tv-spot-infoblk,
+.tv-spot.is-fast .tv-spot-art,
+.tv-spot.is-fast .tv-spot-art .art-photo {
+  transition: none !important;
 }
 /* text-align IS LOAD-BEARING, and it is a reset rather than a style choice. `.tv-spot-hero` is a
    real <button>, and the UA stylesheet gives every button `text-align: center` — which is
