@@ -85,11 +85,52 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
+  /* ---- IT ONLY ROTATES WHILE IT IS ON SCREEN --------------------------------------------------
+   *
+   * MEASURED ON THE TELEVISION, and it was rotating in the background the whole time. A trace of a
+   * walk along a row two screens down caught FIVE of this component's animations running inside
+   * somebody else's keypress: `tv-hero-layer` twice at 600ms, `art-photo` at 450ms, `tv-hero-copy`
+   * at 500ms and `tv-hero-logo` at 400ms. Blink runs a style recalculation for every animating
+   * element on every frame it animates, so a rotation that lands mid-press adds a second train of
+   * them to a frame budget that is already the thing being complained about. Turning every
+   * animation on the focused row off — the one arm of six that escaped the noise band — took frames
+   * over 33ms from 75.5% to 41.0% and the median from 41.7ms back to 16.7ms.
+   *
+   * `focused` was never the right test on its own. It answers "is the remote on the billboard",
+   * which is exactly when rotation must stop — but the case that costs is the opposite one, where
+   * the remote is far away and this is off screen entirely, advancing every seven seconds into a
+   * screen nobody is looking at.
+   *
+   * DELIBERATELY NOT LATCHED, unlike the observers in TvSpotlight. Those answer "has this row ever
+   * come near the viewport" and must never go back, because unlatching would throw decoded bitmaps
+   * away. This one answers "is it on screen RIGHT NOW", which is a question with two answers, and
+   * the whole point is that it becomes false again when the page scrolls down.
+   *
+   * NO rootMargin, for the same reason: a screenful of margin would keep it rotating exactly where
+   * it is invisible and expensive. It resumes when it is genuinely back in view. */
+  const sectionRef = useRef<HTMLElement>(null);
+  const [onScreen, setOnScreen] = useState(true);
   useEffect(() => {
-    if (focused || reduceMotion || n < 2) return;
+    const el = sectionRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    /* MOSTLY ON SCREEN, not merely touching it. At `threshold: 0` a sliver of the billboard still
+     * counted as visible, so standing on the first row below it — where a strip of the hero is
+     * usually still showing — kept the whole rotation running: five animations landing inside
+     * somebody else's keypress. 0.6 means it rotates when you are actually looking at it and
+     * stops as soon as you have moved down past it. */
+    const io = new IntersectionObserver(
+      (entries) => { for (const e of entries) setOnScreen(e.intersectionRatio >= 0.6); },
+      { threshold: [0, 0.6] },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (focused || reduceMotion || n < 2 || !onScreen) return;
     const id = window.setTimeout(() => setActive((a) => (a + 1) % n), ADVANCE_MS);
     return () => window.clearTimeout(id);
-  }, [active, focused, reduceMotion, n]);
+  }, [active, focused, reduceMotion, n, onScreen]);
 
   if (!n) return null;
   const cur = list[active] || list[0];
@@ -132,6 +173,7 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
 
   return (
     <section
+      ref={sectionRef}
       className={`tv-hero${focused ? ' is-focused' : ''}`}
       aria-label={t('ui.featured_title')}
       onFocus={() => setFocused(true)}
