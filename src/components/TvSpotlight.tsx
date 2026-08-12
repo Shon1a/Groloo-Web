@@ -1226,9 +1226,23 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    *
    * So the strip is re-seated onto the real index the moment the count changes. Invisible: titles
    * are APPENDED and keep their positions (see the note on `all`), so the card at `liveActive` is
-   * the same picture it was a frame ago — only its index in the rebuilt strip has moved. */
+   * the same picture it was a frame ago — only its index in the rebuilt strip has moved.
+   *
+   * `useLayoutEffect`, AND THAT IS THE WHOLE FIX RATHER THAN A DETAIL. As a passive effect this ran
+   * after the browser had already painted, and the layout effect above had by then written the OLD
+   * `stripPos` to a strip that no longer means the same thing at that index — so one frame showed
+   * the wrong card and the correction that followed was a teleport. Measured on the television with
+   * the row lengthening MID-HOLD: 22.6 px/ms, against ~1.3 for a legal step. Running before paint
+   * means the two writes land in the same frame and the viewer sees only the settled one.
+   *
+   * DECLARED BELOW THE HOOK THAT WRITES `--active` ON EVERY COMMIT, deliberately: layout effects run
+   * in declaration order, so this one has the last word in the commit that rebuilt the strip.
+   *
+   * The earlier version of this test loaded more while PARKED and reported clean, which is why the
+   * fault survived a round. Loading more mid-hold is the case that matters — a parked walk has
+   * `stripPos === liveActive` and takes the early return below without doing anything at all. */
   const prevN = useRef(n);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (prevN.current === n) return;
     prevN.current = n;
     if (stripPos.current === liveActive.current) return;
@@ -1350,7 +1364,30 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * stays the truth about which title is showing. */
     const track0 = trackRef.current;
     const tiles = track0 ? track0.children.length : stops;
-    let sp = stripPos.current + delta;
+    /* ---- WRAP WHILE THE UP-NEXT AREA IS STILL FULL, NOT AT THE LAST TILE --------------------
+     * Letting `stripPos` run all the way to `tiles - 1` puts the walk on the FINAL tile of the
+     * strip, where there is nothing to its right at all. The previews therefore thin out — six
+     * ahead, then four, then one, then none — and only afterwards does the wrap snap them back.
+     *
+     * That is what "the glide breaks after see more" is. Loading more makes it far worse for a
+     * reason that is not obvious: the end card DISAPPEARS once the row has been extended, so the
+     * strip goes from [10 titles][+][10 titles] to [17 titles][17 titles] — measured on the
+     * television — and the duplicate the walk may run into grows from ten tiles to seventeen. The
+     * empty stretch goes from a flicker to something like a second and a half of watching the row
+     * empty itself.
+     *
+     * Rebasing is a VISUAL NO-OP: tile i and tile i+stops are the same picture. That was checked
+     * against the DOM rather than assumed — all 34 pairs identical, none different — because the
+     * whole trick collapses if it is ever false.
+     *
+     * HELD PRESSES ONLY. A deliberate press re-syncs `stripPos` from `liveActive` further up, so it
+     * is never in the duplicate to begin with, and the early return below would leave a rebase to
+     * be written by the layout effect WITH its transition on — a full-width slide across the row. */
+    const AHEAD = 8;
+    let base = stripPos.current;
+    let rebased = false;
+    if (chained && base >= stops && base + AHEAD > tiles - 1) { base -= stops; rebased = true; }
+    let sp = base + delta;
     let ranOut = false;
     if (sp > tiles - 1) { sp -= stops; ranOut = true; }   // past the last duplicate tile
     if (sp < 0) { sp += stops; ranOut = true; }           // off the front, where there is no copy
@@ -1394,7 +1431,18 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       /* Judged on the STRIP's own movement. A wrap into the duplicate is one ordinary tile and
        * must keep its transition; only a genuine hop (running out of copy, or a multi-card jump)
        * gets suppressed. */
-      if (ranOut || Math.abs(stripPos.current - prevActiveRef.current) > 1) {
+      if (rebased) {
+        /* TWO WRITES, NOT ONE, and that is what keeps the glide. Suppressing the transition for the
+         * whole step — which is what the branch below does — makes the wrap SNAP by a tile instead
+         * of sliding. So the rebase is written first with the transition off and flushed, putting
+         * the strip on the identical picture one copy back; the ordinary one-tile glide then runs
+         * from there with the transition restored. The reflow costs a layout flush once per lap,
+         * roughly one press in seventeen. */
+        track.style.transition = 'none';
+        track.style.setProperty('--active', String(base));
+        void track.offsetWidth;
+        track.style.transition = '';
+      } else if (ranOut || Math.abs(stripPos.current - prevActiveRef.current) > 1) {
         track.style.transition = 'none';
         requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
       }
