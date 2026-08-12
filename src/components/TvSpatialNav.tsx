@@ -153,7 +153,28 @@ function pick(dir: Dir, from: DOMRect, cands: Cand[]): HTMLElement | null {
 /** Breathing room kept between the selection and the edge of a scrolling modal pane. */
 const TV_EDGE_PAD = 56;
 const SCROLL_MS = 420;        // a settled, deliberate move
-const SCROLL_MS_CHAINED = 260; // already moving — keep up with the remote
+/* SCROLL_MS_CHAINED (260ms of the SAME settling curve) is gone. Keeping the curve's shape for a
+ * chained scroll is exactly what made a hold read as a series of arrivals; see below. */
+/* ---- A HELD KEY GLIDES DOWN THE PAGE, AT THE SAME PACE AS A ROW WALKS SIDEWAYS -------------
+ * The row's held-key work is in TvSpotlight (HELD_STEP_MIN_MS / HELD_SLIDE_MS) and this is the
+ * same three ideas applied to the page:
+ *
+ *   PACE. The set repeats a held key about every 120ms, so vertical was moving ~8 ROWS a second —
+ *   the whole home screen in about two. Limited to one row per HELD_ROW_MIN_MS, which is the same
+ *   figure sideways uses, so the two directions feel like one interface rather than two.
+ *
+ *   CURVE. `easeInOutCubic` decelerates into every target, which is right for a single press that
+ *   should arrive and settle and wrong for a hold, where the page slows almost to a stop and is
+ *   then relaunched by the next repeat. That is what reads as stepping. Held presses run LINEAR.
+ *
+ *   DURATION. Slightly longer than the pace, so a chained scroll is always re-aimed while still in
+ *   flight and never completes and stalls between rows.
+ *
+ * MUST TRACK TvSpotlight's HELD_STEP_MIN_MS. Two files, one feel; if one moves, move both. */
+const HELD_ROW_MIN_MS = 220;
+/** Beyond this gap the remote was tapped, not held. Mirrors SLIDE_CHAIN_WINDOW in TvSpotlight. */
+const CHAIN_WINDOW_MS = 320;
+const HELD_SCROLL_MS = 260;
 /* ---- THE CURVE STARTS SLOW NOW, AND THAT REVERSES WHAT THE NOTE ABOVE SAYS ------------------
  *
  * The note argues against an ease-in-out because "its easing starts slow, which reads as lag on
@@ -240,21 +261,24 @@ function makeScroller() {
     raf = 0; guard = 0; running = false;
   };
 
-  const to = (container: Scrollable, y: number, instant: boolean) => {
+  const to = (container: Scrollable, y: number, instant: boolean, held = false) => {
     // Switching surfaces mid-flight would interpolate one container's position onto another.
     if (container !== box) { stop(); box = container; }
     const target = Math.max(0, Math.min(scrollMax(container), y));
     if (instant) { stop(); box = container; scrollSet(container, target); return; }
     const from = scrollPos(container);
     if (Math.abs(target - from) < 1) { stop(); return; }
-    const dur = running ? SCROLL_MS_CHAINED : SCROLL_MS;
+    /* Held: constant velocity and a duration that outlives the pace, so consecutive presses chain
+     * into one movement. Otherwise the settling curve, unchanged. */
+    const dur = held ? HELD_SCROLL_MS : SCROLL_MS;
+    const ease = held ? ((t: number) => t) : easeInOutCubic;
     const t0 = performance.now();
     if (raf) cancelAnimationFrame(raf);
     if (guard) window.clearTimeout(guard);
     running = true;
     const tick = (now: number) => {
       const p = Math.min(1, (now - t0) / dur);
-      scrollSet(container, from + (target - from) * easeInOutCubic(p));
+      scrollSet(container, from + (target - from) * ease(p));
       if (p < 1) { raf = requestAnimationFrame(tick); } else { stop(); }
     };
     raf = requestAnimationFrame(tick);
@@ -488,7 +512,7 @@ export default function TvSpatialNav() {
     };
 
     /** One step of focus movement in `dir`. Returns whether it consumed the input. */
-    const move = (dir: Dir): boolean => {
+    const move = (dir: Dir, held = false): boolean => {
       const ae = document.activeElement as HTMLElement | null;
       const layer = topLayer();
 
@@ -621,15 +645,15 @@ export default function TvSpatialNav() {
           scroller.to(null, 0, !smoothScroll);
         } else if (vertical && park) {
           const pr = park === next ? r : park.getBoundingClientRect();
-          scroller.to(null, window.scrollY + pr.top - scrollMarginTop(park), !smoothScroll);
+          scroller.to(null, window.scrollY + pr.top - scrollMarginTop(park), !smoothScroll, held);
         } else {
           // Nudge-into-view only, and on the same easing so it never feels like a different app.
           // Both edges read the element's own scroll-margin now — see scrollMarginBottom for the
           // half of that which used to be a constant.
           const overTop = r.top - scrollMarginTop(next);
           const overBottom = r.bottom + scrollMarginBottom(next) - window.innerHeight;
-          if (overTop < 0) scroller.to(null, window.scrollY + overTop, !smoothScroll);
-          else if (overBottom > 0) scroller.to(null, window.scrollY + overBottom, !smoothScroll);
+          if (overTop < 0) scroller.to(null, window.scrollY + overTop, !smoothScroll, held);
+          else if (overBottom > 0) scroller.to(null, window.scrollY + overBottom, !smoothScroll, held);
           // horizontal clipping (a rail scrolled sideways) is still the browser's job
           next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         }
@@ -638,11 +662,25 @@ export default function TvSpatialNav() {
       return false;
     };
 
+    /* When the last vertical move was accepted. Only ACCEPTED moves advance it, so the limiter
+     * paces from what the viewer last saw rather than from what the platform last sent. */
+    let lastVert = 0;
     const onKey = (e: KeyboardEvent) => {
       const dir = DIRS[e.key];
       if (!dir || e.altKey || e.ctrlKey || e.metaKey) return;
       if (standDown()) return;
-      if (move(dir)) e.preventDefault();
+      const vertical = dir === 'up' || dir === 'down';
+      let held = false;
+      if (vertical) {
+        const now = performance.now();
+        const since = now - lastVert;
+        held = since < CHAIN_WINDOW_MS;
+        /* A repeat arriving faster than the page is allowed to travel. Swallowed, not queued —
+         * queued repeats would keep the page moving after the button is released. */
+        if (held && since < HELD_ROW_MIN_MS) { e.preventDefault(); return; }
+        lastVert = now;
+      }
+      if (move(dir, held)) e.preventDefault();
     };
 
     /* ---- THE REMOTE'S WHEEL ------------------------------------------------------------------

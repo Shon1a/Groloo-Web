@@ -56,7 +56,17 @@
  * would land back here and the app would appear to relaunch itself instead of
  * closing. `disableBackHistoryAPI` in appinfo.json is the other half of the same
  * arrangement: webOS keeps its hands off Back and lets the app answer 461. */
-var APP_URL = 'https://web.groloo.com/';
+/* tv., NOT web. — `IS_TV` is `import.meta.env.MODE === 'tv'`, a compile-time constant, so the URL
+ * alone decides whether the television gets the TV interface or the desktop site with its icon
+ * rail. web.groloo.com serves the desktop build, which is what this pointed at.
+ *
+ * TO TEST THE WORKING TREE ON REAL HARDWARE, point this at this PC's LAN address (e.g.
+ * 'http://192.168.0.7:4173/') and serve the real build with `npx vite preview --mode tv --host`.
+ * The dev server is not a place to judge performance — React's dev build is roughly 5x off on
+ * this device. Private addresses are treated as local by `resolveApiBase()` in lib/api.ts, so the
+ * catalog goes through the proxy instead of failing Render's CORS allowlist. PUT THIS BACK BEFORE
+ * PACKAGING FOR ANYONE ELSE — `npm run tv:package` bakes in whatever is on this line. */
+var APP_URL = 'https://tv.groloo.com/';
 
 var msg = document.getElementById('msg');
 var went = false;

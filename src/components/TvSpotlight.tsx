@@ -125,11 +125,46 @@ const PARALLAX_EASE = 'cubic-bezier(.25, .46, .45, .94)';
  *  is half-travelled at frame 4 — so ~430ms with the curve below, checked against our own running
  *  page rather than assumed. */
 const SLIDE_MS = 430;
-/** A press that arrived while the last was still travelling — a held key. Roughly half, so a hold
- *  keeps up without the curve losing its shape. */
-const SLIDE_MS_CHAINED = 320;
+/* SLIDE_MS_CHAINED IS GONE, and what replaced it is the point. It was 320ms of the same
+ * decelerating curve — "roughly half, so a hold keeps up without the curve losing its shape". The
+ * curve was the problem: keeping its shape is what made a hold read as a sequence of arrivals
+ * rather than one movement. A held key now uses HELD_SLIDE_MS with linear timing instead; a
+ * deliberate press is unchanged and still uses SLIDE_MS. */
 /** Under this gap between presses, the remote is being held rather than tapped. */
 const SLIDE_CHAIN_WINDOW = 320;
+
+/* ---- HOW FAST A HELD KEY IS ALLOWED TO WALK -------------------------------------------------
+ * The television repeats a held key about every 120ms (the figure this file already records at
+ * ART_FADE_MS). One step per repeat is therefore about EIGHT posters a second, and once the held
+ * path stopped rendering — which is what took it from 52% of frames on time to 97% — that rate
+ * stopped being hidden behind the stutter and became the thing you notice: the row bolts.
+ *
+ * A ten-title row wraps in a little over a second, which is not browsing, it is a blur. The
+ * reference paces a held key at roughly four or five titles a second, slow enough to read a poster
+ * as it goes by.
+ *
+ * So repeats that arrive sooner than this are SWALLOWED rather than queued. Swallowed matters:
+ * queueing them would make the row keep travelling after the button is released, which is the
+ * thing that feels broken on a remote. `lastStepAt` is only moved by an ACCEPTED step, so the
+ * limiter measures from the last thing the viewer actually saw.
+ *
+ * Deliberately below SLIDE_CHAIN_WINDOW (320ms), so an accepted held step still counts as chained
+ * and keeps the fast slide, the suppressed decoration and the `is-fast` class. */
+const HELD_STEP_MIN_MS = 220;
+
+/* ---- AND WHY A HELD KEY GLIDES RATHER THAN STEPS --------------------------------------------
+ * Pacing alone did not fix the feel. Each press eases with `cubic-bezier(.25,.46,.45,.94)`, which
+ * is a DECELERATING curve — it is most of the way there in the first third and then crawls. That
+ * is exactly right for a single deliberate press, where the row should arrive and settle. Held, it
+ * means the strip slows almost to a stop and is then re-launched by the next repeat, and a
+ * sequence of little arrivals is what reads as stepping.
+ *
+ * So while the key is held the strip moves LINEARLY (see `.tv-spot.is-fast .tv-spot-strip` in
+ * tv.css) and its duration is set a little LONGER than the pace, so the transition is always
+ * re-targeted while still in flight and never completes and stalls. Constant velocity, no arrival,
+ * no relaunch: one glide for as long as the button is down. Let go and the last step lands on the
+ * deliberate curve, so the row still settles rather than stopping dead. */
+const HELD_SLIDE_MS = 260;
 
 /* How long the focus state waits before committing — see `setOpenNow`.
  *
@@ -165,7 +200,7 @@ const SWAP_WAIT_CAP = 200;
  * not short of pictures, it was short of TIME TO SHOW THEM.
  *
  * So the fade follows the pressing, exactly as the slide already does (SLIDE_MS /
- * SLIDE_MS_CHAINED, same `chained` test, same one idea about how this build answers a held key).
+ * HELD_SLIDE_MS, same `chained` test, same one idea about how this build answers a held key).
  * A deliberate press keeps the full 450ms, which is the settle the reference has and what makes a
  * single press feel like weight rather than a cut. A chained press gets a fade that FITS INSIDE
  * one press, so every card you fly past is a picture at full strength instead of a fifth of one. */
@@ -323,6 +358,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const dwellId = useRef(0);
   /** One in-flight tile promotion at a time — see `promoteSoon`. */
   const promoteId = useRef(0);
+  /* ---- THE STRIP'S POSITION IS NOT ALWAYS THE WALK'S POSITION -----------------------------
+   * They agree everywhere except one press: stepping RIGHT off the end card. The walk wraps to 0,
+   * but the strip glides FORWARD onto `stops` — the first tile of the duplicate copy, which is the
+   * same picture — and is then re-seated on 0 with the transition suppressed. Identical pixels
+   * either side of that swap, so the re-seat cannot be seen and the lurch is gone.
+   * `stripPos` drives the node; `liveActive` stays the truth about where the walk is. */
+  const stripPos = useRef(0);
+  const reseatId = useRef(0);
   /* ---- THE ACTIVE-ROW HIGHLIGHT IS A CLASS, NOT A RENDER ------------------------------------
    * `open` drives two quite different things: the LOOK of the focused row (a class, and every
    * `.tv-spot.is-open` rule hanging off it) and the BEHAVIOUR of being focused — arming the
@@ -429,10 +472,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   useEffect(() => {
     const root = sectionRef.current;
     if (!root || reduceMotion) return;
-    /* NOT WHILE THE KEY IS HELD. The drift is 3.2% of the card and it costs two composited
-     * animations per press; on a chained press nobody can see 24px of travel that is replaced
-     * 120ms later, so it is spent for nothing. See the note in `step`. */
-    if (root.classList.contains('is-fast')) return;
+    /* THIS USED TO BAIL OUT ON A HELD KEY, and the reasoning has expired. It said nobody could
+     * see 24px of drift that was replaced 120ms later — true when a hold ran at the platform's
+     * ~8 presses a second and the billboard was frozen anyway. A hold is now paced to ~4.5
+     * (HELD_STEP_MIN_MS) and the billboard tracks the walk, so the drift is on screen long enough
+     * to read, and its absence is what the row looks wrong without. Two composited transform
+     * animations; the cheap kind. */
     const cs = getComputedStyle(root);
     const dir = Number(cs.getPropertyValue('--sp-dir')) || 0;
     if (!dir) return;   // the first paint of a row was not reached by a press; nothing to explain
@@ -931,6 +976,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * ahead of it during a hold. Re-syncing here keeps a deliberate press, a catalogue change and the
    * load-more reset from leaving the two disagreeing. */
   if (!chaining.current) liveActive.current = active;
+  /* Not while a wrap re-seat is pending: the strip is parked on the duplicate for the length of
+   * that glide, and a render landing mid-way must not drag it back. */
+  if (!chaining.current && !reseatId.current) stripPos.current = liveActive.current;
 
   const activeSlot = slotAt(active);
   const activeKey = activeSlot === 'end' ? 'end' : String(activeSlot?.id ?? '');
@@ -1142,7 +1190,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * ABOVE `if (!n) return null` because that is an early return and a hook below it would not run
    * on an empty row — the rules-of-hooks trap this file's shape sets for exactly this change. */
   useLayoutEffect(() => {
-    trackRef.current?.style.setProperty('--active', String(liveActive.current));
+    trackRef.current?.style.setProperty('--active', String(stripPos.current));
     /* `is-open` is owned by the node too, for the reason above: it is deliberately NOT in the
      * rendered className, so a render triggered by anything else cannot write a stale value over
      * the class the focus handler already set. */
@@ -1162,11 +1210,36 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     openRef.current = v;
     sectionRef.current?.classList.toggle('is-open', v);
     if (openCommit.current) window.clearTimeout(openCommit.current);
+    if (reseatId.current) window.clearTimeout(reseatId.current);
     openCommit.current = window.setTimeout(() => {
       openCommit.current = 0;
       setOpen(v);
     }, OPEN_COMMIT_MS);
   };
+
+  /* ---- LOADING MORE REBUILDS THE STRIP UNDER THE WALK --------------------------------------
+   * Pressing OK on the end card appends a batch, so the strip goes from `[titles][+][titles]` to
+   * the same shape with MORE titles in each copy — and every index past the first copy now means a
+   * different tile than it did. If the walk is parked in the duplicate, which is exactly where the
+   * seamless wrap leaves it, the strip is suddenly pointing at the wrong card and the next press
+   * jumps.
+   *
+   * So the strip is re-seated onto the real index the moment the count changes. Invisible: titles
+   * are APPENDED and keep their positions (see the note on `all`), so the card at `liveActive` is
+   * the same picture it was a frame ago — only its index in the rebuilt strip has moved. */
+  const prevN = useRef(n);
+  useEffect(() => {
+    if (prevN.current === n) return;
+    prevN.current = n;
+    if (stripPos.current === liveActive.current) return;
+    stripPos.current = liveActive.current;
+    const t = trackRef.current;
+    if (!t) return;
+    t.style.transition = 'none';
+    t.style.setProperty('--active', String(stripPos.current));
+    prevActiveRef.current = stripPos.current;
+    requestAnimationFrame(() => requestAnimationFrame(() => { t.style.transition = ''; }));
+  }, [n]);
 
   /* Chained presses leave a commit owed; if the row unmounts mid-hold the timer must not fire. */
   useEffect(() => () => {
@@ -1212,11 +1285,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * artwork took 500ms to catch up, which is stale art under a card that has already moved on. */
   const step = (delta: number) => {
     const now = performance.now();
-    const chained = now - lastStepAt.current < SLIDE_CHAIN_WINDOW;
+    const since = now - lastStepAt.current;
+    const chained = since < SLIDE_CHAIN_WINDOW;
+    /* A held key repeating faster than the row is allowed to walk — see HELD_STEP_MIN_MS. Dropped
+     * outright, and `lastStepAt` deliberately not moved, so the pace is measured from the last
+     * step the viewer actually saw rather than from the last repeat the platform sent. */
+    if (chained && since < HELD_STEP_MIN_MS) return;
     lastStepAt.current = now;
     const el = sectionRef.current;
     if (el) {
-      el.style.setProperty('--sp-slide', `${chained ? SLIDE_MS_CHAINED : SLIDE_MS}ms`);
+      el.style.setProperty('--sp-slide', `${chained ? HELD_SLIDE_MS : SLIDE_MS}ms`);
       /* The photograph's own rise, on the same test as the slide — the reasoning, and the
        * measurement that says this is a fade problem rather than the caching problem it looks
        * like, are at ART_FADE_MS. Set on the SECTION for the reason `--sp-slide` is: it has to
@@ -1246,8 +1324,53 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       fastOff.current = window.setTimeout(endChain, SLIDE_CHAIN_WINDOW);
     }
 
-    const next = (liveActive.current + delta + stops) % stops;
+    const raw = liveActive.current + delta;
+    const next = (raw + stops) % stops;
     liveActive.current = next;
+
+    /* ---- WALKING OFF THE END KEEPS GOING, IT DOES NOT SNAP BACK ---------------------------
+     * Measured: `--active` ran 8, 9, 10 (the end card) and then 0 — ten cards backwards in one
+     * press, suppressed to be instant so it did not rewind the whole strip. Instant or rewound,
+     * both read as the row lurching.
+     *
+     * The strip renders `[titles][end card][titles again]` — 21 tiles for ten titles — so every
+     * tile past the end card is the SAME PICTURE as one near the start. The walk therefore wraps
+     * (the billboard is title 0 again) while the STRIP simply carries on: 10, 11, 12 … through the
+     * duplicate. Consecutive single steps, so the glide is unbroken for the whole of the copy.
+     *
+     * A FIRST ATTEMPT RE-SEATED AFTER ONE TILE and was wrong in exactly the way this is right. It
+     * glided to 11 and scheduled a hop back to 0 once the slide finished — but a held key arrives
+     * every ~240ms and the slide takes 260ms, so the NEXT press cancelled that timer, asked for
+     * tile 1, and snapped back ten. Glide, jump, stop, resume: the reported symptom, caused by the
+     * fix for it.
+     *
+     * The re-seat still has to happen — the duplicate is finite — but it now waits until the strip
+     * has genuinely run out of tiles, which is a full lap rather than a single step, and until then
+     * `stripPos` is simply allowed to exceed the walk. `stripPos` drives the node; `liveActive`
+     * stays the truth about which title is showing. */
+    const track0 = trackRef.current;
+    const tiles = track0 ? track0.children.length : stops;
+    let sp = stripPos.current + delta;
+    let ranOut = false;
+    if (sp > tiles - 1) { sp -= stops; ranOut = true; }   // past the last duplicate tile
+    if (sp < 0) { sp += stops; ranOut = true; }           // off the front, where there is no copy
+    stripPos.current = sp;
+    /* Bring the strip back into the real range once the walk settles, so it never drifts far into
+     * the duplicate and the next lap has room. Invisible: the tile it lands on is the same picture.
+     * Rescheduled by each press, so it only fires when the remote has actually stopped. */
+    if (reseatId.current) { window.clearTimeout(reseatId.current); reseatId.current = 0; }
+    if (sp >= stops) {
+      reseatId.current = window.setTimeout(() => {
+        reseatId.current = 0;
+        const t = trackRef.current;
+        if (!t) return;
+        stripPos.current = ((stripPos.current % stops) + stops) % stops;
+        t.style.transition = 'none';
+        t.style.setProperty('--active', String(stripPos.current));
+        prevActiveRef.current = stripPos.current;
+        requestAnimationFrame(() => requestAnimationFrame(() => { t.style.transition = ''; }));
+      }, (chained ? HELD_SLIDE_MS : SLIDE_MS) + 120);
+    }
 
     /* A DELIBERATE PRESS IS UNCHANGED — same single setActive it always did, so everything that
      * hangs off it (the cross-dissolve, the wordmark, the synopsis, the warm-ahead) behaves
@@ -1268,14 +1391,36 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     if (dwellId.current) { window.clearTimeout(dwellId.current); dwellId.current = 0; }
     const track = trackRef.current;
     if (track) {
-      if (Math.abs(next - prevActiveRef.current) > 1) {
+      /* Judged on the STRIP's own movement. A wrap into the duplicate is one ordinary tile and
+       * must keep its transition; only a genuine hop (running out of copy, or a multi-card jump)
+       * gets suppressed. */
+      if (ranOut || Math.abs(stripPos.current - prevActiveRef.current) > 1) {
         track.style.transition = 'none';
         requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
       }
-      track.style.setProperty('--active', String(next));
+      track.style.setProperty('--active', String(stripPos.current));
     }
-    prevActiveRef.current = next;
+    prevActiveRef.current = stripPos.current;
     promoteSoon();
+
+    /* ---- AND THE BILLBOARD KEEPS UP -------------------------------------------------------
+     * This deliberately did NOT commit, and that was right when it was written and wrong now.
+     * The artwork, wordmark and synopsis were left frozen for the length of a hold so a held key
+     * did no React work at all — which took it from 52% of frames on time to 97%.
+     *
+     * The cost of that was you could not see what you were scrolling past. The billboard sat on
+     * the title the hold STARTED on and only caught up on release.
+     *
+     * The conditions that justified it are gone. A hold is now paced to ~4.5 presses a second
+     * rather than ~8 (HELD_STEP_MIN_MS), and the ten decorative transitions are already suppressed
+     * while `is-fast` is set — so the commit this used to avoid is a fraction of what it was.
+     * Measured, both arms with the preview off, order reversed: distinct backdrops shown across a
+     * 30-press hold went 6-7 -> 10 of 10, while frames on time were 88.3/83.4% frozen against
+     * 91.0/82.5% tracking and p95 was identical. The picture keeps up and nothing pays for it.
+     *
+     * The strip is still moved by the node write above, so it starts travelling on the press frame
+     * rather than waiting for React — that half of the decouple is what still earns its keep. */
+    setActive(next);
   };
 
   /* ---- PAYING THE COMMIT THE HOLD RAN UP ---------------------------------------------------

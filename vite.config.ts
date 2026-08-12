@@ -310,4 +310,31 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
+  /* `vite preview` GETS THE SAME PROXY, and that is what makes a PRODUCTION build testable on the
+   * television at all.
+   *
+   * `server.proxy` applies to the dev server only, so `vite preview` served the built app with no
+   * `/api` route — every catalog call 404'd and the home screen came up with no rows. The failure
+   * looks like a broken build rather than a missing proxy, which is what made it worth writing
+   * down: the page renders, it is just empty.
+   *
+   * It matters because the dev server is NOT a place to judge performance — React's dev build is
+   * roughly 5x off on this hardware, and nearly all of the error is `jsxDEV` plus StrictMode
+   * double-rendering. Measuring a change means serving the real build, and serving the real build
+   * on the LAN means this. Point `APP_URL` in webos/index.html at this machine's `:4173`, run
+   * `npx vite preview --mode tv --host`, and the set loads the same bytes a user would. */
+  preview: {
+    proxy: {
+      '/api': {
+        target: process.env.API_PROXY || 'https://groloo-server.onrender.com',
+        changeOrigin: true,
+        secure: true,
+      },
+      '/streaming-server': {
+        target: process.env.STREMIO_SERVER || 'http://127.0.0.1:11470',
+        changeOrigin: true,
+        rewrite: (p: string) => p.replace(/^\/streaming-server/, ''),
+      },
+    },
+  },
 }))
