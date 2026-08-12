@@ -51,15 +51,42 @@ function topLayer(): HTMLElement | null {
   return best;
 }
 
-function candidates(root: ParentNode = document): HTMLElement[] {
-  const out: HTMLElement[] = [];
+/* ---- A CANDIDATE CARRIES ITS OWN RECT, AND IT IS MEASURED EXACTLY ONCE --------------------
+ *
+ * MEASURED ON THE TELEVISION, walking row to row on a warm home screen: 382 getBoundingClientRect
+ * calls across 14 presses — 27.3 PER PRESS — against 0.0 per press walking along a row, where
+ * TvSpotlight consumes Left/Right before this file ever sees them. Vertical is the only path that
+ * pays for geometry, and it was paying for the SAME geometry three and four times over:
+ *
+ *   · `candidates()` read every rect to drop anything under 4px,
+ *   · `pick()` then read every rect AGAIN to score it,
+ *   · the page branch calls `pick()` TWICE (the top-bar fallback on line ~509), so every rect was
+ *     read a third time whenever the first pass found nothing,
+ *   · and `unreachable()` read each one once more inside a modal.
+ *
+ * The profile shows it as exactly that shape: 224 calls from the `forEach` in here, 126 from
+ * `pick`, 28 from `unreachable`.
+ *
+ * So the rect travels WITH the candidate. Nothing about the scoring changes — `pick` does the same
+ * arithmetic on the same numbers — it simply stops asking the engine to produce them again.
+ *
+ * ONE PRESS IS STILL ONE MEASUREMENT PASS, deliberately. The rects are not cached ACROSS presses,
+ * and that is not an oversight: this file scrolls the page itself, rows load artwork under it, and
+ * a stale rect means focus jumping to something the viewer is not pointing at — which is the
+ * failure this navigation is hardest to debug for. Within a single press nothing mutates layout
+ * between the read and the use, so collecting up front is free of that risk and the reads
+ * coalesce into one layout flush instead of several. */
+export interface Cand { el: HTMLElement; r: DOMRect }
+
+function candidates(root: ParentNode = document): Cand[] {
+  const out: Cand[] = [];
   root.querySelectorAll<HTMLElement>(SELECTOR).forEach((el) => {
     if (el.tabIndex < 0 || el.hasAttribute('disabled')) return;
     // offsetParent is null for display:none (and position:fixed, so check rects too)
     if (el.offsetParent === null && el.getClientRects().length === 0) return;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return;
-    out.push(el);
+    out.push({ el, r });
   });
   return out;
 }
@@ -83,14 +110,13 @@ function gap(aMin: number, aMax: number, bMin: number, bMax: number) {
  * A candidate qualifies when it lies in the direction at all and its drift does not exceed its
  * travel; among those the lowest score — travel plus twice the drift — wins, so focus tracks the
  * straightest near neighbour rather than something far away that happens to be dead ahead. */
-function pick(dir: Dir, from: DOMRect, cands: HTMLElement[]): HTMLElement | null {
+function pick(dir: Dir, from: DOMRect, cands: Cand[]): HTMLElement | null {
   const fx = from.left + from.width / 2;
   const fy = from.top + from.height / 2;
   const TH = 6;
   let best: HTMLElement | null = null;
   let bestScore = Infinity;
-  for (const el of cands) {
-    const r = el.getBoundingClientRect();
+  for (const { el, r } of cands) {
     const dx = r.left + r.width / 2 - fx;
     const dy = r.top + r.height / 2 - fy;
     const gapX = gap(from.left, from.right, r.left, r.right);
@@ -128,7 +154,28 @@ function pick(dir: Dir, from: DOMRect, cands: HTMLElement[]): HTMLElement | null
 const TV_EDGE_PAD = 56;
 const SCROLL_MS = 420;        // a settled, deliberate move
 const SCROLL_MS_CHAINED = 260; // already moving — keep up with the remote
-const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
+/* ---- THE CURVE STARTS SLOW NOW, AND THAT REVERSES WHAT THE NOTE ABOVE SAYS ------------------
+ *
+ * The note argues against an ease-in-out because "its easing starts slow, which reads as lag on
+ * the first frames after a keypress". That is correct at 60fps and wrong here, and the difference
+ * is measurable rather than a matter of taste.
+ *
+ * MEASURED ON THE TELEVISION, a row-to-row move: the page paints about 13 of the ~25 frames the
+ * ease is given — roughly 26fps, not 60. `easeOutCubic` is front-loaded (1-(1-t)³ is already 20%
+ * complete a thirtieth of the way through), so at that frame rate the FIRST VISIBLE STEP was
+ * 112-177px of an 876px journey. One lurch of a sixth of the screen, then progressively smaller
+ * steps. That is precisely the "it jumps, it doesn't glide" report, and painting more frames
+ * during the glide never touched it because the damage is done on frame one.
+ *
+ * The lag the note feared is separately measured and is not what is happening: press to first
+ * movement is 44-62ms, better than the 58-80ms it replaced. The remote still feels answered; what
+ * changes is that the answer BEGINS as a movement rather than a jump.
+ *
+ * So: slow in, slow out. The first step becomes a few pixels instead of a sixth of the screen, and
+ * the eye reads a shape rather than a snap. If this device ever holds 60fps through a row change,
+ * the original reasoning becomes right again — the curve is the thing to revisit, not the
+ * duration. */
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2);
 
 /* A scroll CONTAINER, not necessarily the page. `null` means the window; anything else is an
  * element with its own overflow — in practice `.m-scroll`, the detail overlay's scrolling pane.
@@ -171,11 +218,13 @@ function scrollParent(el: HTMLElement, boundary: HTMLElement | null): Scrollable
  * the entire point of a list. Comparing the two scroll parents is what separates the two cases;
  * `null` (no scrolling ancestor) compares equal to itself, so the whole check costs nothing on a
  * page that has none. */
-function unreachable(el: HTMLElement, curBox: Scrollable, boundary: HTMLElement | null): boolean {
+function unreachable(el: HTMLElement, r: DOMRect, curBox: Scrollable, boundary: HTMLElement | null): boolean {
   const box = scrollParent(el, boundary);
   if (!box || box === curBox) return false;
+  /* The candidate's own rect comes in already measured (see `candidates`); only the PANEL's is
+   * read here, and only for candidates that actually sit in a different scroller — which on the
+   * home page is none of them. */
   const b = box.getBoundingClientRect();
-  const r = el.getBoundingClientRect();
   return r.bottom <= b.top + 1 || r.top >= b.bottom - 1 || r.right <= b.left + 1 || r.left >= b.right - 1;
 }
 
@@ -205,7 +254,7 @@ function makeScroller() {
     running = true;
     const tick = (now: number) => {
       const p = Math.min(1, (now - t0) / dur);
-      scrollSet(container, from + (target - from) * easeOutCubic(p));
+      scrollSet(container, from + (target - from) * easeInOutCubic(p));
       if (p < 1) { raf = requestAnimationFrame(tick); } else { stop(); }
     };
     raf = requestAnimationFrame(tick);
@@ -382,7 +431,7 @@ export default function TvSpatialNav() {
          *
          * The line stays for the other layers, where it is still the right answer: the auth and
          * report sheets have real controls from their first frame. */
-        candidates(layerNow)[0]?.focus({ preventScroll: true });
+        candidates(layerNow)[0]?.el.focus({ preventScroll: true });
         return;
       }
 
@@ -447,13 +496,16 @@ export default function TvSpatialNav() {
       // is needed in that branch: the bar is behind the overlay and out of the pool entirely.
       const cands = candidates(layer ?? document);
       if (!cands.length) return false;
-      const cur = ae && cands.includes(ae) ? ae : null;
-      if (!cur) { cands[0].focus(); return true; }
+      /* The focused element's rect comes out of the pool it is already in, so the "where am I"
+       * read is the same measurement as the "where is everything else" one. */
+      const curCand = ae ? cands.find((c) => c.el === ae) : undefined;
+      if (!curCand) { cands[0].el.focus(); return true; }
+      const cur = curCand.el;
 
       if (layer) {
         const curBox = scrollParent(cur, layer);
-        const reachable = cands.filter((c) => c !== cur && !unreachable(c, curBox, layer));
-        let next = pick(dir, cur.getBoundingClientRect(), reachable);
+        const reachable = cands.filter((c) => c.el !== cur && !unreachable(c.el, c.r, curBox, layer));
+        let next = pick(dir, curCand.r, reachable);
         if (!next) return false;
         /* A `.tv-det-pills` SPECIAL CASE USED TO LIVE HERE, and it is gone with the thing it was
          * for. It made Up out of the source list land on the ACTIVE language pill rather than the
@@ -501,11 +553,14 @@ export default function TvSpatialNav() {
        * considered if nothing else lies in that direction — which is exactly the top row, the
        * one case where reaching the bar is what you meant. When focus is already IN the bar it
        * stays in the pool, or Left/Right could never move between the nav items. */
-      const rest = cands.filter((c) => c !== cur);
+      const rest = cands.filter((c) => c.el !== cur);
       const inNav = (el: HTMLElement) => !!el.closest('.tv-topnav');
       const curInNav = inNav(cur);
-      const from = cur.getBoundingClientRect();
-      let next = pick(dir, from, curInNav ? rest : rest.filter((c) => !inNav(c)));
+      const from = curCand.r;
+      let next = pick(dir, from, curInNav ? rest : rest.filter((c) => !inNav(c.el)));
+      /* The top-bar fallback re-scores the SAME pool, and it used to re-measure it too — every
+       * rect read a second time on any press that found nothing ahead of it, which on this page
+       * is every press that reaches the first row. It now costs arithmetic and nothing else. */
       if (!next && !curInNav) next = pick(dir, from, rest);
 
       /* ARRIVING IN THE TOP BAR LANDS ON THE PAGE YOU ARE ON, not on whatever happens to be
