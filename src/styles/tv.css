@@ -551,6 +551,15 @@
 .tv-hero-meta {
   display: flex; align-items: center; flex-wrap: wrap;
   font-size: 17px; font-weight: 700; color: #fff;
+  /* COLLAPSIBLE, so the trailer can fold it away and the wordmark can come down with it. A
+     max-height is required for that to animate at all — there is nothing to travel from at `none`
+     — and 80px is a ceiling rather than a size: the line is one row of ~24px and has room to wrap
+     to two at 720p before it could ever clip. */
+  max-height: 80px;
+  overflow: hidden;
+  transition:
+    max-height .44s cubic-bezier(.2, .7, .2, 1),
+    opacity .3s ease;
 }
 .tv-hero-meta span + span::before { content: "•"; margin: 0 10px; opacity: 0.55; font-weight: 400; }
 /* THE UNFOLD. The synopsis lives in this block, which has no height at rest and grows to fit when
@@ -600,16 +609,24 @@
    TIED TO `has-trailer`, which the engine only adds once a frame has actually been presented, so
    the text never goes for a preview that then fails to start.
 
-   FADED, NOT COLLAPSED, and that is deliberate: `.tv-hero-reveal` keeps its height, so the wordmark
-   stays exactly where the unfold put it. Collapsing would drop the logo down the card at the moment
-   the video appears, which is a second movement competing with the one that matters.
+   IT FOLDS, IT DOES NOT MERELY FADE, and that is the whole feel of it. `.tv-hero-copy` is anchored
+   to the BOTTOM of the card, so collapsing these two heights lets the wordmark travel back DOWN —
+   the same movement the focus unfold made, run backwards. Fading alone left the logo stranded at
+   the top of a block of empty space, which reads as text that has been hidden rather than as a
+   card settling into playing something.
 
-   Must come AFTER `.tv-hero.is-focused .tv-hero-reveal` — that rule sets opacity 1 at the same
-   specificity, so source order is what decides this. */
+   ONE MOVEMENT, SAME CURVE AND DURATION AS THE UNFOLD (.44s), so the two are recognisably the same
+   gesture in both directions rather than two effects that happen to involve the same element.
+
+   Must come AFTER `.tv-hero.is-focused .tv-hero-reveal` — that rule sets max-height and opacity at
+   the same specificity, so source order is what decides this. */
 .tv-hero-stage.has-trailer .tv-hero-meta,
 .tv-hero-stage.has-trailer .tv-hero-reveal {
+  max-height: 0;
   opacity: 0;
-  transition: opacity .5s ease;
+  transition:
+    max-height .44s cubic-bezier(.2, .7, .2, 1),
+    opacity .3s ease;
 }
 
 /* `.tv-hero-actions` / `.tv-hero-btn` USED TO BE HERE — the MORE and My List pills, their
