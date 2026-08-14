@@ -202,10 +202,67 @@ export default defineConfig(({ mode }) => ({
          * it exists for AC-3/DTS files only, most visitors never open one, and forcing 32 MB
          * onto every first visit to serve a minority is the opposite of what lazy-loading
          * it in `lib/wasmAudio.ts` is for. Excluded here, fetched on demand. */
-        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**', '**/ffmpeg/**'],
+        /* ---- WHAT A TELEVISION DOWNLOADS BEFORE IT CAN SHOW ANYTHING ----------------------------
+         *
+         * The precache is the app shell, and on the TV build it had quietly become the whole app:
+         * 50 entries, 1,903 KiB, fetched and stored before the first screen is usable. The largest
+         * single entry is the VideoPlayer chunk at 573 KB — a bundle nobody needs until they press
+         * OK on a stream, downloaded on every first launch and after every update, over whatever
+         * connection the set has.
+         *
+         * The route chunks below are all `React.lazy`, so nothing imports them at launch. Kept OUT
+         * of the precache and picked up by the hashed-asset runtime rule instead: the first time one
+         * is actually opened it is fetched once and cached forever, because the filename carries a
+         * content hash and therefore never changes meaning.
+         *
+         * DELIBERATELY STILL PRECACHED: `index`, `i18n` and `queries`. All three are on the launch
+         * path — the home screen cannot render without them — so excluding them would trade a
+         * smaller precache for a slower first paint, which is the opposite of the point.
+         *
+         * WEB IS UNCHANGED. A browser fetches these over a fast connection against a warm HTTP
+         * cache, and the offline story there is a nicety rather than the difference between an app
+         * that starts and one that does not. */
+        globIgnores: [
+          '**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**', '**/ffmpeg/**',
+          ...(mode === 'tv' ? [
+            '**/build/VideoPlayer-*.js',
+            '**/build/Settings-*.js',
+            '**/build/Addons-*.js',
+            '**/build/Terms-*.js',
+            '**/build/Legal-*.js',
+            '**/build/Attributions-*.js',
+            '**/build/DeleteAccount-*.js',
+            '**/build/Link-*.js',
+            '**/build/Explore-*.js',
+            /* THE PERFORMANCE PROBE. It is a development tool that a normal launch never even
+             * fetches (main.tsx reads the flag before importing it), and precaching it would have
+             * every television download the one chunk it is guaranteed not to run. Caught by
+             * reading the generated manifest rather than by reasoning about it. */
+            '**/build/tvPerf-*.js',
+          ] : []),
+        ],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [
+          {
+            /* THE LAZY ROUTE CHUNKS THE PRECACHE NO LONGER CARRIES (see globIgnores above).
+             *
+             * CacheFirst is the correct handler and the filename is why: everything under /build/
+             * carries a content hash, so a given URL's bytes can never change. There is nothing to
+             * revalidate — a new build produces a new name, which is a cache miss and a fresh
+             * download by construction. Checking the network first would spend a round trip on a
+             * television to re-confirm bytes that are immutable by definition.
+             *
+             * The expiry is a floor on storage, not a freshness policy: old hashes stop being
+             * requested the moment a new build ships, and this sweeps them up eventually. */
+            urlPattern: ({ url, sameOrigin }) => sameOrigin && /\/build\/.*\.(js|css)$/.test(url.pathname),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'groloo-lazy-chunks',
+              expiration: { maxEntries: 60, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
           {
             // Admin-curated. Try the network first so an admin edit still appears on the next
             // load exactly as the server's `no-cache` intends — but give up after 3s and serve
