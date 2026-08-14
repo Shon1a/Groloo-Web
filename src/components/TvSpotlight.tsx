@@ -126,14 +126,21 @@ const BILLBOARD_TRAILER_CROP = 1.35;
 /* How far the billboard's picture drifts while it changes. MEASURED, not chosen: 24px of travel on
  * a 753px card in the reference. The full derivation is in the parallax effect below. */
 const BILLBOARD_PARALLAX = '3.2%';
-/** MUST MATCH the strip's curve in tv.css. Fitted to the reference, not picked from a list — the
- *  derivation is on the strip's `transition` there. */
-const PARALLAX_EASE = 'cubic-bezier(.25, .46, .45, .94)';
+/** MUST MATCH the strip's curve in tv.css — and for a while it did not, which is the whole reason
+ *  this note is longer than the line it explains. The strip was moved to `cubic-bezier(.22,1,.36,1)`
+ *  when the slide was cut to 230ms; this constant was left on the fitted curve, so the two came
+ *  apart. MEASURED ON THE 65UT8100: 46ms into a move the strip was 67.4% travelled and the drift
+ *  36.9%, a 30-point gap held across the whole middle of every press. They are one movement in the
+ *  reference and they are one movement here. Change them together or not at all. */
+const PARALLAX_EASE = 'cubic-bezier(.22, 1, .36, 1)';
 
 /* ---- HOW LONG THE STRIP TAKES TO MOVE ONE CARD. Reasoning is at `step`. -------------------- */
-/** A deliberate press. The reference's drift reaches zero 13 frames after it starts at 30fps, and
- *  is half-travelled at frame 4 — so ~430ms with the curve below, checked against our own running
- *  page rather than assumed. */
+/** A deliberate press. The reference's drift reaches zero 13 frames after it starts at 30fps and is
+ *  half-travelled at frame 4, which the fitted curve reproduced in ~430ms — and that was the value
+ *  here until the set started painting this move at a 16.7ms median instead of ~26fps. At 60fps a
+ *  230ms glide gets ~14 painted frames, more than the 430ms one ever had, in half the time. The
+ *  curve changed with it; see PARALLAX_EASE above and the strip's `transition` in tv.css, and move
+ *  all three together. Measured on the television at 233-241ms end to end, three runs. */
 const SLIDE_MS = 230;
 /* SLIDE_MS_CHAINED IS GONE, and what replaced it is the point. It was 320ms of the same
  * decelerating curve — "roughly half, so a hold keeps up without the curve losing its shape". The
@@ -566,6 +573,20 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         { duration: slide, easing: PARALLAX_EASE },
       );
     });
+    /* NOT SEEKED TO THE STRIP'S CLOCK, AND THE ATTEMPT IS WORTH RECORDING so nobody spends the
+     * television time on it twice. The theory was that this effect starts late — it waits for the
+     * swap commit, for the reason below — so the drift should be created and then advanced to
+     * wherever the strip's transition already is. Built, shipped to the set, measured: no change.
+     *
+     * `document.getAnimations()` on the moving row says why. Censused on the first frame the strip
+     * actually moves, the strip's transition is 17ms in and these animations are at 0 — ONE FRAME
+     * apart, not the tenth of a second the earlier reading suggested. There is nothing to seek to,
+     * so the seek never fired and the code was pure weight. The lag that reading appeared to show
+     * came from the metric, not the app: the leaving layer animates none -> away, so its transform
+     * does not differ from its resting value until the animation is already under way, and "when
+     * did it last change" then lands at the post-animation snap back to none.
+     *
+     * What DID matter was the curve, which is one constant and is fixed at PARALLAX_EASE. */
     return () => anims.forEach((a) => a.cancel());
     /* KEYED ON `xfade.front`, NOT ON `active`, AND THAT IS A BUG FIX RATHER THAN A TIDY-UP.
      *
