@@ -510,12 +510,10 @@
   max-width: 46%;
   animation: tvHeroRise .5s cubic-bezier(.2, .7, .2, 1) both;
 }
-.tv-hero-tag {
-  display: block;
-  font-size: 13px; font-weight: 800; letter-spacing: 0.26em;
-  text-transform: uppercase; color: rgba(255,255,255,0.88);
-  margin-bottom: 12px;
-}
+/* `.tv-hero-tag` IS GONE, with its markup — it was a standalone MOVIES / SERIES label above the
+   wordmark, and the meta line below already opens with the same word. The card said "Movies" twice
+   inside forty pixels, once in caps and once not. The line keeps it, where it reads as the first
+   term of a list rather than as a heading. */
 .tv-hero-logo {
   display: block;
   max-width: 100%; max-height: 132px;
@@ -591,6 +589,27 @@
   font-size: 19px; line-height: 1.45; color: rgba(255,255,255,0.92);
   display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3;
   -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ---- ONCE THE TRAILER IS PLAYING, THE WORDMARK IS THE ONLY COPY LEFT --------------------------
+   The synopsis and the meta line are there to describe a title you are looking at a still of. When
+   the trailer takes over, the picture is doing that job better than the text can, and three lines
+   of it over moving footage is the thing that makes a billboard look busy. So both fade and the
+   wordmark stays — enough to say what is playing, nothing competing with it.
+
+   TIED TO `has-trailer`, which the engine only adds once a frame has actually been presented, so
+   the text never goes for a preview that then fails to start.
+
+   FADED, NOT COLLAPSED, and that is deliberate: `.tv-hero-reveal` keeps its height, so the wordmark
+   stays exactly where the unfold put it. Collapsing would drop the logo down the card at the moment
+   the video appears, which is a second movement competing with the one that matters.
+
+   Must come AFTER `.tv-hero.is-focused .tv-hero-reveal` — that rule sets opacity 1 at the same
+   specificity, so source order is what decides this. */
+.tv-hero-stage.has-trailer .tv-hero-meta,
+.tv-hero-stage.has-trailer .tv-hero-reveal {
+  opacity: 0;
+  transition: opacity .5s ease;
 }
 
 /* `.tv-hero-actions` / `.tv-hero-btn` USED TO BE HERE — the MORE and My List pills, their
