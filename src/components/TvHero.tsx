@@ -307,7 +307,10 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
 
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
         <div className="tv-hero-copy" key={`copy-${active}`}>
-          <span className="tv-hero-tag">{isSeries(cur) ? t('nav.series') : t('nav.movies')}</span>
+          {/* `.tv-hero-tag` USED TO BE HERE — a standalone MOVIES / SERIES label above the wordmark.
+              Removed: the meta line directly below already opens with the same word, so the card
+              was saying "Movies" twice within about forty pixels, once in caps and once not. The
+              line keeps it, where it sits among the genre, year and rating that qualify it. */}
           {/* The wordmark waits for its own bitmap; the plain title is the fallback for a title
               that HAS no logo, not a placeholder shown while one loads. Showing both in turn is
               the swap this pass exists to remove. */}
