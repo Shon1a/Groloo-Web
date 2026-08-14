@@ -155,8 +155,47 @@ function classify(): TvDeviceClass {
  * preview data this project has. Check `previewMounted` is true before believing a new one. */
 const DWELL_NORMAL = 1200;
 
+/* ---- WHY ~900ms IS A WALL AND NOT A MARGIN ---------------------------------------------------
+ *
+ * A DELIBERATE PRESS LANDS ABOUT 900ms AFTER THE LAST ONE. That is the cadence of somebody walking
+ * along a row looking at each card, and it is stated in TvSpotlight's own header as the reason the
+ * original 500ms dwell failed: "the dwell always elapsed, a <video> always mounted". So the dwell
+ * is not really a "wait until sure" delay — it is a filter, and 900ms is where the filter stops
+ * filtering.
+ *
+ * Above ~900ms:  a preview mounts when you STOP. One pipeline per title you actually look at.
+ * Below ~900ms:  a preview mounts on EVERY CARD YOU PASS. That is the 82.9% row of the ladder
+ *                above, and it is a different mode of operation rather than a slightly worse
+ *                number.
+ *
+ * 1200 sits just over the wall with about 300ms to spare. Going to 800 does not shave 400ms off the
+ * wait; it changes what the feature does on a walk.
+ *
+ * TUNABLE ON THE SET, because "is 1200 really the floor" deserves an answer from the television
+ * rather than from this comment, and rebuilding to try a number is how a question like that goes
+ * unanswered for months:
+ *
+ *   localStorage['groloo.tvdwell'] = '600'    then relaunch
+ *
+ * Clamped to 0-10000 and TV-only. Read once: it decides a rendering behaviour, and re-reading
+ * storage on the focus path to answer a question that cannot change is the cost this file exists to
+ * hunt. The honest way to use it is with the shared preview element switched on at the same time
+ * (`groloo.tvpreview = 'shared'`) — that removes the mount cost the wall is made of, and is the only
+ * change that makes a sub-900ms dwell something other than a deliberate regression. */
+let dwellArm: number | null | undefined;
+
 export function previewDwellMs(): number {
-  return DWELL_NORMAL;
+  if (dwellArm === undefined) {
+    dwellArm = null;
+    if (IS_TV) {
+      try {
+        const raw = localStorage.getItem('groloo.tvdwell');
+        const n = raw === null ? NaN : Number(raw);
+        if (Number.isFinite(n) && n >= 0 && n <= 10000) dwellArm = n;
+      } catch { /* no storage; the default stands */ }
+    }
+  }
+  return dwellArm ?? DWELL_NORMAL;
 }
 
 /** The setting AND the policy. A low-end set never previews, whatever the switch says. */
