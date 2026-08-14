@@ -105,12 +105,19 @@ const CHEAP_SEEK_MAX = 15;
  *
  * The backend picks a sensible default (720p) knowing nothing about the screen. That is right
  * for a television and wrong for everything else, because the number that matters is not the
- * panel's resolution — it is the box the video is painted into, times the crop magnifying it,
- * times the device pixel ratio. Measured on the TV billboard: 676 CSS px wide at 1920, times
- * the 1.35 crop, is 912 device pixels at DPR 1. A 1280-wide 720p file covers that with room to
- * spare, and 1080p would be 2.1x oversampled — bought and thrown away. On a HiDPI panel the
- * same billboard needs 1824, and that same 720p file is suddenly a 1.4x UPSCALE. One hardcoded
- * answer cannot serve both, which is why this is decided here, where the box can be measured.
+ * panel's resolution — it is the box the video is painted into, times the crop magnifying it.
+ * Measured on the TV billboard: 676 CSS px wide at 1920, times the 1.35 crop, is 912. A
+ * 1280-wide 720p file covers that with room to spare, and 1080p would be 2.1x oversampled —
+ * bought and thrown away. Decided here, where the box can actually be measured.
+ *
+ * DEVICE PIXEL RATIO USED TO BE IN THAT SUM AND HAS BEEN TAKEN OUT. It is right for a canvas and
+ * wrong for a video, and on this television it quietly defeated the whole function: the shelf's
+ * billboard is nearer 977 CSS px, and at the dpr the set reports the requirement came out around
+ * 2600 — wider than any rendition offered, so the picker fell through to "the best there is" and
+ * every preview fetched the 1080p file. A preview is decoration in a sub-1000px box; the bytes
+ * bought nothing visible and cost the one thing it cannot afford, which is time to first frame.
+ * Callers that genuinely want every pixel say so with `maxRenditionPx` left unset — the detail
+ * sheet, where the video IS the content — and the shelf caps itself.
  *
  * IMDb'S LABELS ARE NOT MEASUREMENTS, and that is the trap this has to survive. Probed against
  * real files: The Odyssey's '480p' is a true 854x480, but The Shawshank Redemption's '480p' is
@@ -181,6 +188,11 @@ export interface VideoTrailerOptions {
   /** How much CSS magnifies the video over its box (the billboard's crop is 1.35). Multiplies
    *  the measured width, because a cropped video is sampled at more than its box's worth. */
   cropScale?: number;
+  /** Hard ceiling, in CSS pixels, on the rendition width this surface will ask for. A preview that
+   *  starts sooner beats a preview that is sharper, so the row billboard caps itself at 720p's
+   *  1280 rather than pulling a 1080p file it cannot show the benefit of. Unset means no ceiling,
+   *  which is what the detail sheet wants — there the video IS the content. */
+  maxRenditionPx?: number;
   /* Called when this engine cannot deliver — a decode error, a refused autoplay, a link that
    * 403s because its signature has expired. The billboard uses it to fall back to the YouTube
    * embed for that title, so a dead IMDb link costs a beat rather than the preview. */
@@ -233,6 +245,7 @@ export function useVideoTrailer(
   const renditionsRef = useRef(opts?.renditions);
   renditionsRef.current = opts?.renditions;
   const cropScale = opts?.cropScale ?? 1;
+  const maxRendition = opts?.maxRenditionPx ?? Infinity;
   /* Read through a ref inside the mount effect for the same reason as the renditions above: the
    * effect runs on `src` alone, and a preview that restarted because someone pressed the red
    * button would defeat the point of the button. */
@@ -279,7 +292,21 @@ export function useVideoTrailer(
        * and both paths need the same answer. Measured HERE rather than at render, because here the
        * billboard is laid out and its box is a fact. */
       const boxPx0 = (hero?.clientWidth || slot.clientWidth || 0);
-      const needed0 = Math.round(boxPx0 * cropScale * (window.devicePixelRatio || 1));
+      /* ---- devicePixelRatio IS NOT PART OF THIS SUM, AND TAKING IT OUT IS THE POINT ------------
+       *
+       * It used to be, by analogy with sizing a canvas. The analogy is wrong for video and it cost
+       * the row preview its start time: the billboard is ~977 CSS px, the crop is 1.35, and the TV
+       * reports a dpr of 2 or more — so `needed` came out around 2600px, no rendition is that wide,
+       * the picker fell through to "the best there is", and every preview downloaded the 1080p file.
+       *
+       * A preview is decoration playing in a box under a thousand pixels wide, and video upscaling
+       * is nothing like as visible as bitmap upscaling. What the extra bytes DO buy is a later
+       * first frame, which is the one thing this surface cannot afford — it is already behind a
+       * dwell, and the viewer is looking at a still picture waiting for it.
+       *
+       * So the box is measured in CSS pixels and `maxRenditionPx` lets a caller cap it outright.
+       * SAFE_FLOOR still applies underneath, so this can never pick something genuinely soft. */
+      const needed0 = Math.round(Math.min(boxPx0 * cropScale, maxRendition));
       const chosen0 = (boxPx0 > 0 ? pickTrailerRendition(renditionsRef.current, needed0, src) : src) || src;
 
       let v: HTMLVideoElement;

@@ -833,10 +833,29 @@
  * still looks like a row. A transform, not a width/height change: those would reflow the row on
  * every arrow press, and this element sits above twelve more of them.
  *
- * It grows about its own centre, so the picture stays where the eye left it and creeps a few
- * pixels into the margin on every side rather than lunging off in one direction. Only ~5px each
- * way on a 345px card — the row has that much air around it (24px above, the reserved info panel
- * below), which is why the stage above it could give up its clip without anything colliding.
+ * IT GROWS ABOUT ITS RIGHT EDGE HORIZONTALLY, AND ITS CENTRE VERTICALLY — `100% 50%`.
+ * This was `50% 50%`, which is the obvious answer and is wrong here for a reason that is pure
+ * arithmetic. Half of the growth lands on the right, and the right is where the gap to the first
+ * poster is. Both quantities are fractions of the card height:
+ *
+ *     gap to the first poster   --sp-gap  = H * 0.0316
+ *     right-hand overhang       --sp-wl * .035/2 = H * 16/9 * .0175 = H * 0.0311
+ *
+ * The growth is 98.4% of the gap. Focusing the row therefore CLOSED it — a third of a pixel left
+ * at 1080p — so the billboard and the poster beside it read as touching, while every poster-to-
+ * poster gap further along the strip stayed open. One gap on the row that is not like the others
+ * is the thing the eye finds first, and it only appeared on the row you were actually on.
+ *
+ * Anchoring the horizontal half at 100% pins the right edge, so the gap is --sp-gap in BOTH
+ * states and matches the strip's own `gap` exactly. It also makes the rail's clip at --sp-wl
+ * exact again rather than approximately right: that clip is drawn at the card's RESTING edge, and
+ * the card no longer moves past it.
+ *
+ * All 3.5% of the width now goes left instead, ~32px on a 905px card, into a --page-pad of 65px
+ * at 1080p (43px of gutter against 21px of growth at 720p) — so it stays inside the gutter on
+ * both packages and never reaches the screen edge. Vertically nothing changes: still centred,
+ * still ~9px each way into the 24px above and the reserved info panel below, which is why the
+ * stage above could give up its clip without anything colliding.
  *
  * It rests at scale(1) rather than at no transform, and takes a layer only while its row is open:
  * both for the reasons written against the strip and the nav — a transform that ENDS hands the
@@ -850,7 +869,7 @@
   border-radius: 12px; overflow: hidden;
   outline: none; z-index: 2;
   transform: scale(1);
-  transform-origin: 50% 50%;
+  transform-origin: 100% 50%;
   /* 140ms, DOWN FROM 340ms, AND THIS IS THE ONE THAT WAS ACTUALLY SLUGGISH.
      The scale is the row's answer to "I am on you now" — a reaction, like the artwork swap below,
      not a journey like the strip. A third of a second to acknowledge a button is long enough to

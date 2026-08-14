@@ -716,6 +716,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * belongs in this number: a video blown up 1.35x is sampled at 1.35x its box. */
       renditions: imdbTrailer.data?.urls,
       cropScale: BILLBOARD_TRAILER_CROP,
+      /* 720p AND NO HIGHER, because on this shelf a preview that starts sooner beats a preview
+       * that is sharper. The billboard was pulling the 1080p file on every rest — roughly twice
+       * the bytes before a frame can be presented, on a surface the viewer is already waiting on
+       * behind a dwell, and shown in a box under a thousand pixels wide where the difference is
+       * not visible from a sofa. The floor in pickTrailerRendition still applies underneath, so
+       * this is a ceiling and not a downgrade. */
+      maxRenditionPx: 1280,
       /* Nowhere to fall back TO any more, so this is just "stop trying this title": the file is
        * dropped, the artwork stays, and the flag clears with the dwell so the next visit tries
        * the link again rather than inheriting a verdict about an expired signature. */
