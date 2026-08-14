@@ -1,8 +1,74 @@
 import { fileURLToPath, URL } from 'node:url'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import postcss from 'postcss'
 import { execSync } from 'node:child_process'
+
+/* ---- THE TV STYLESHEET DIET ------------------------------------------------------------------
+ *
+ * WHAT THIS IS FOR. The TV build loads the whole desktop stylesheet (app.css, 136 KB compiled) and
+ * then a TV sheet on top of it (74 KB) that spends much of its length overriding what the first one
+ * just said. A large part of app.css cannot match on a television at all, and the engine still has
+ * to parse it, build the rules and keep them in the cascade.
+ *
+ * DONE AS A BUILD TRANSFORM RATHER THAN BY EDITING THE STYLESHEETS, and that is the whole design:
+ *   · THE DESKTOP BUILD IS BYTE-IDENTICAL. The plugin is only in the plugin list for `--mode tv`,
+ *     so nothing about the website can change — which matters because there is no visual regression
+ *     suite to prove otherwise, the same reason Lightning CSS is TV-only below.
+ *   · NOTHING IS DELETED FROM SOURCE, so a rule that turns out to be needed comes back by changing
+ *     one predicate here rather than by recovering it from git.
+ *
+ * WHAT IT REMOVES, and why each is safe:
+ *   · `:hover` SELECTORS, from app.css only. A D-pad has no pointer, and TvSpotlight's header states
+ *     the position outright — "NOTHING RESPONDS TO HOVER, deliberately... The remote — focus — is
+ *     the only thing that drives this component." Only the hover selector is dropped from a list, so
+ *     `a:hover, a:focus { }` keeps its focus half; the rule goes only when nothing is left.
+ *   · MOBILE-ONLY MEDIA BLOCKS. A television reports 1920 CSS px wide, so a block gated on
+ *     `max-width: 1024px` or narrower can never apply. Anything carrying a `min-width` is left
+ *     alone, because a range query can still match.
+ *
+ * WHAT IT DELIBERATELY DOES NOT TOUCH: tv.css (every rule there was written FOR this screen),
+ * `@media (hover: hover)` (an LG Magic Remote really does present a pointer), and keyframes (walked
+ * by `walkRules` but their selectors are percentages, so the hover filter never matches them).
+ *
+ * HONEST ABOUT THE SIZE OF THE WIN: this is a startup-parse and memory saving, not a smoothness fix.
+ * Stylesheet bulk was A/B'd on this hardware before and came back null for per-press cost — see the
+ * dist-tv-BASE / -ALL / -NOFAST builds. It is included because it is free and measurable, not
+ * because it is expected to move a frame time. */
+const MOBILE_MAX_PX = 1024;
+
+function tvCssDiet(): Plugin {
+  let removedRules = 0;
+  let removedMedia = 0;
+  return {
+    name: 'groloo-tv-css-diet',
+    /* `pre`, so this sees the raw stylesheet before Vite's own CSS pipeline (and, in TV mode,
+       Lightning CSS) gets it. */
+    enforce: 'pre',
+    apply: 'build',
+    transform(code, id) {
+      /* app.css ONLY. tv.css is the sheet written for this screen; running a diet over it would be
+         removing the thing being kept. */
+      if (!id.includes('app.css')) return null;
+      const root = postcss.parse(code, { from: id });
+      root.walkAtRules('media', (at) => {
+        const p = at.params;
+        if (/min-width/i.test(p)) return;
+        const m = p.match(/max-width:\s*(\d+)px/i);
+        if (m && Number(m[1]) <= MOBILE_MAX_PX) { removedMedia++; at.remove(); }
+      });
+      root.walkRules((rule) => {
+        if (!rule.selector.includes(':hover')) return;
+        const kept = rule.selectors.filter((s) => !s.includes(':hover'));
+        if (!kept.length) { removedRules++; rule.remove(); return; }
+        rule.selectors = kept;
+      });
+      this.info?.(`tv css diet: dropped ${removedRules} hover-only rules, ${removedMedia} mobile media blocks`);
+      return { code: root.toString(), map: null };
+    },
+  };
+}
 
 /* The urlPattern regexes below are written inline ON PURPOSE. workbox's generateSW mode
  * stringifies each urlPattern function straight into dist/sw.js, so the function body must be
@@ -92,6 +158,8 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
+    /* TV ONLY, so the website's stylesheet is provably untouched. See tvCssDiet above. */
+    ...(mode === 'tv' ? [tvCssDiet()] : []),
     VitePWA({
       // A new build's service worker takes over on the next load rather than waiting for
       // every tab to close. That also means a bad deploy can be undone by shipping a good
