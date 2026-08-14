@@ -752,7 +752,43 @@ export default function TvSpatialNav() {
       const inNav = (el: HTMLElement) => !!el.closest('.tv-topnav');
       const curInNav = inNav(cur);
       const from = curCand.r;
-      let next = pick(dir, from, curInNav ? rest : rest.filter((c) => !inNav(c.el)));
+
+      /* ---- AND SIDEWAYS OUT OF THE BAR IS NOT A MOVE AT ALL ---------------------------------
+       *
+       * The note above keeps the bar out of the PAGE's pool. This is its other half, and it was
+       * missing: with focus already IN the bar the pool was the whole document, so the page
+       * competed with the next tab along. The bar is a tab strip. Left and Right walk it, and
+       * nothing outside it lies in that direction in any sense a viewer would recognise.
+       *
+       * IT WAS NOT THEORETICAL, AND THE ARITHMETIC IS WORTH KEEPING, because two centred things
+       * is all it takes. `pick` measures travel CENTRE TO CENTRE; the nav group is centred on the
+       * screen; and the featured billboard is full-width — so ITS centre is the screen centre,
+       * which puts it in the bar's own row of centres. Measured at 1920x1080, from Series:
+       *
+       *                      centre x   travel   drift   score
+       *     Movies             969.7     162.8     0     162.8
+       *     .tv-hero-scrim     960.0     153.1    3.5     160.2   <- won
+       *
+       * Right from SERIES — the item immediately left of centre — therefore left the bar for the
+       * billboard, and the press after that started from somewhere else entirely.
+       *
+       * THE MENU'S OWN FOCUS SWELL IS WHAT TIPPED IT, which is why it only happens on a real
+       * press. Unscaled the same two score 150.8 and 153.8 and Movies wins by three;
+       * `.tv-nav-items.is-focused` wears `scale(1.08)` about the group's centre for as long as
+       * the remote is in the bar, and that moves Series' centre 11.3px further from the middle
+       * against Movies' 0.7px toward it, while closing the drift to the card from 6px to 3.5px.
+       * The bar was only porous while it was lit — the state every press of this key is made in.
+       *
+       * SCOPING THE POOL RATHER THAN TUNING THE SCORE, because no threshold makes "sideways off a
+       * tab strip" a correct answer, and the same collision waits for any full-width element the
+       * top of a page ever grows. At either end of the bar Left/Right now do nothing, which is
+       * what a tab strip does. UP and DOWN are untouched: leaving the bar vertically is a real
+       * move, and the page is where it should go. */
+      const along = dir === 'left' || dir === 'right';
+      const pool = curInNav
+        ? (along ? rest.filter((c) => inNav(c.el)) : rest)
+        : rest.filter((c) => !inNav(c.el));
+      let next = pick(dir, from, pool);
       /* The top-bar fallback re-scores the SAME pool, and it used to re-measure it too — every
        * rect read a second time on any press that found nothing ahead of it, which on this page
        * is every press that reaches the first row. It now costs arithmetic and nothing else. */
