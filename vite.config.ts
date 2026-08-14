@@ -2,6 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { execSync } from 'node:child_process'
 
 /* The urlPattern regexes below are written inline ON PURPOSE. workbox's generateSW mode
  * stringifies each urlPattern function straight into dist/sw.js, so the function body must be
@@ -52,7 +53,43 @@ import { VitePWA } from 'vite-plugin-pwa'
 const TV_TARGET = ['chrome87'];
 
 // https://vite.dev/config/
+/* ---- WHAT BUILD IS THIS, EXACTLY ------------------------------------------------------------
+ *
+ * THE PROBLEM THIS SOLVES, and it is not hypothetical. The packaged webOS app loads
+ * https://tv.groloo.com, which serves whatever was last DEPLOYED. A local build is served from this
+ * PC's LAN address. Both render the same app, the same rows, the same artwork — and a measurement
+ * taken against the wrong one is not merely useless, it is actively misleading, because it looks
+ * exactly like a change that did nothing. There is no way to tell the two apart from the screen.
+ *
+ * So the build stamps itself: the commit it came from, whether the tree was dirty when it was
+ * built, and when. `git describe`-style identity is deliberately NOT used — a dirty tree is the
+ * normal state during this work, and the flag matters more than the tag.
+ *
+ * Resolved at CONFIG time, not import time, so it is a literal in the bundle and costs nothing at
+ * runtime. Wrapped in try/catch because a build from a tarball with no .git must still succeed. */
+function buildStamp(mode: string) {
+  const run = (cmd: string) => {
+    try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
+    catch { return ''; }
+  };
+  const commit = run('git rev-parse --short HEAD') || 'nogit';
+  /* `--quiet` exits non-zero when the tree differs, which `run` turns into ''. Both tracked-file
+   * changes and staged ones count; untracked files deliberately do not, since new measurement
+   * scripts appearing should not mark the APP as modified. */
+  const dirty = run('git diff --quiet && git diff --cached --quiet && echo clean') !== 'clean';
+  return {
+    commit,
+    dirty,
+    at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    mode,
+  };
+}
+
 export default defineConfig(({ mode }) => ({
+  /* Injected as literals; see buildStamp above for why this exists at all. */
+  define: {
+    __GROLOO_BUILD__: JSON.stringify(buildStamp(mode)),
+  },
   plugins: [
     react(),
     VitePWA({

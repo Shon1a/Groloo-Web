@@ -68,3 +68,8 @@ public/ffmpeg/
 
 # webOS packaging output
 webos/out/
+
+# Measurement runs from scripts/tv-measure.mjs. Regenerable, and each one is specific to a session
+# on one television — the numbers worth keeping belong in a commit message or a plan document, not
+# as a growing pile of JSON. Same reasoning as screenshots/current above.
+perf-results/
