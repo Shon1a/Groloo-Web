@@ -11,6 +11,11 @@ node_modules
 dist
 dist-ssr
 dist-tv
+# A/B arms: `vite build --base=/all/ --outDir dist-tv-ALL` and friends, built side by side so two
+# versions can be served from one origin and measured in the same session. Throwaway, and they
+# also have to stay out of `npm run lint` — oxlint takes no path, so an unignored bundle here
+# means thousands of warnings from minified output.
+dist-tv-*
 
 # Visual regression (scripts/tv-shots.mjs). The BASELINE and the recorded fixtures are the
 # reference and are committed deliberately — a baseline that lives only on one machine
@@ -63,3 +68,8 @@ public/ffmpeg/
 
 # webOS packaging output
 webos/out/
+
+# Measurement runs from scripts/tv-measure.mjs. Regenerable, and each one is specific to a session
+# on one television — the numbers worth keeping belong in a commit message or a plan document, not
+# as a growing pile of JSON. Same reasoning as screenshots/current above.
+perf-results/

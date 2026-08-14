@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { registerPageTrack, resetPage } from '../lib/tvPageScroll';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import RailBar from '@/layout/RailBar';
@@ -32,10 +33,20 @@ export default function AppShell() {
   const user = useAuth((s) => s.user);
   const openAuth = useAuth((s) => s.openAuth);
 
-  // every route change (and genre-card query change) lands at the top of the page —
-  // the window is the scroll container (main has no overflow), so reset it here
+  /* The surface the TV translates instead of scrolling. Registered in a layout effect so the track
+   * is known before the first paint of a route — a frame with the class applied but no transform set
+   * would show the page at offset 0 when it should be mid-travel. */
+  const mainRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    registerPageTrack(mainRef.current);
+    return () => registerPageTrack(null);
+  }, []);
+
+  // every route change (and genre-card query change) lands at the top of the page — on the web the
+  // window is the scroll container (main has no overflow); on the TV the page is moved by transform,
+  // so `resetPage` puts the track back rather than scrolling a document that no longer scrolls.
   useEffect(() => {
-    window.scrollTo(0, 0);
+    resetPage();
   }, [pathname, search]);
 
   // reflect auth state on <body> so app.css shows/hides the sign-in icon + admin links
@@ -71,7 +82,12 @@ export default function AppShell() {
       {IS_TV && <TvBackKey />}
       {!IS_TV && <RailBar isActive={isActive} go={go} />}
 
-      <main>
+      {/* THE SURFACE THE TV MOVES. On the television this element is translated instead of the
+          document being scrolled — one compositor property per frame instead of a scroll write that
+          measured at over half the JavaScript cost of a vertical press. `registerPageTrack` is a
+          no-op in the web build, where <main> is an ordinary element in an ordinary scrolling page.
+          See lib/tvPageScroll.ts, including why nothing `position: fixed` may live in here. */}
+      <main ref={mainRef}>
         <Outlet />
 
         {showFooter && (

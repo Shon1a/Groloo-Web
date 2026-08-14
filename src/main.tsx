@@ -27,6 +27,35 @@ if (import.meta.env.MODE === 'tv') {
   import('./styles/tv.css');
 }
 
+/* THE PERFORMANCE PROBE, TV BUILD ONLY AND OFF UNLESS ASKED FOR. Same compile-time gate as the
+ * stylesheet above, so the website never contains the file at all. See lib/tvPerf.ts for what it
+ * measures and how to read it; in short, localStorage['groloo.perf'] = '1' then relaunch.
+ *
+ * THE FLAG IS READ HERE RATHER THAN INSIDE THE MODULE, and that is the whole point of the shape:
+ * asking `tvPerf.ts` whether it is wanted would mean FETCHING it on every launch to find out, which
+ * is exactly the launch-time request this app is trying not to make. Three property reads decide it,
+ * and the chunk stays on the server unless the answer is yes.
+ *
+ * NOT AWAITED. The import resolves within a few milliseconds of boot, long before a remote can reach
+ * the first keypress, and the probe scores presses from `event.timeStamp` rather than from whenever
+ * it happened to start listening — so nothing is lost by it arriving late. */
+if (import.meta.env.MODE === 'tv') {
+  /* Checked OUTSIDE the try, because it is the carrier the CDP driver uses: it arms a cold launch
+   * through Page.addScriptToEvaluateOnNewDocument, and a set whose localStorage throws is exactly
+   * the set worth measuring. Folding it in with the storage read would lose it on that set. */
+  let perfMode: '1' | '2' | '' = window.__GROLOO_PERF__ === true ? '1' : '';
+  if (!perfMode) {
+    try {
+      const q = new URLSearchParams(location.search).get('perf');
+      const s = q === '1' || q === '2' ? q : localStorage.getItem('groloo.perf');
+      if (s === '1' || s === '2') perfMode = s;
+    } catch { /* no localStorage (private mode); the probe simply stays off */ }
+  }
+  if (perfMode) {
+    void import('./lib/tvPerf').then((m) => m.startTvPerf(perfMode as '1' | '2'));
+  }
+}
+
 /* Last-resort logging for the two failure classes a React boundary cannot see: throws
  * from outside the render cycle (event handlers, timers, media callbacks) and promise
  * rejections nobody awaited. Deliberately console-only — no telemetry dependency and no
@@ -41,6 +70,42 @@ window.addEventListener('error', (e) => {
 });
 window.addEventListener('unhandledrejection', (e) => {
   console.error('[groloo] unhandled rejection:', e.reason);
+});
+
+/* ---- A DEPLOY MUST NOT STRAND A TELEVISION ON HALF AN OLD BUILD -----------------------------
+ *
+ * THE FAILURE THIS PREVENTS. Every route chunk is content-hashed and lazily imported, and the
+ * service worker updates itself in the background (`registerType: 'autoUpdate'`, plus
+ * `cleanupOutdatedCaches`). So a set that has been sitting on the home screen since before a deploy
+ * is running the OLD index, holding references to OLD chunk hashes — and those files are gone from
+ * both the server and the cleaned precache. The next press of OK on a title asks for a chunk that
+ * 404s, the dynamic import rejects, and the app does nothing at all. From the sofa the remote simply
+ * stops working, with nothing on screen to say why, until somebody closes and reopens the app.
+ *
+ * A TV IS WHERE THIS BITES HARDEST: the app can be left open for days, and there is no reload
+ * button on a remote.
+ *
+ * `vite:preloadError` is fired by Vite's own dynamic-import helper for exactly this case. Reloading
+ * fetches the current index and the current hashes, which is the whole repair.
+ *
+ * THE GUARD IS NOT OPTIONAL. If a chunk is genuinely unreachable — the set is offline, the deploy is
+ * broken — reloading again produces the same failure, and an unguarded handler turns a missing file
+ * into a boot loop that never stops and never shows anything. One reload per minute at most; after
+ * that the rejection is left alone and logged. */
+/* TV-GATED, THOUGH THE WEB HAS THE SAME FAILURE. A browser tab is usually reloaded within minutes,
+ * has a visible reload button, and its user can recover unaided; a television is left open for days
+ * with a remote that has no such key, which is what makes this the difference between a working app
+ * and a dead one there. It is scoped to the TV build only because the brief for this work is that
+ * the desktop build does not change — the same three lines would be a straight improvement on the
+ * website and are worth enabling there as a separate, deliberate decision. */
+if (import.meta.env.MODE === 'tv') window.addEventListener('vite:preloadError', (e) => {
+  console.error('[groloo] chunk load failed — a deploy probably landed under us', e);
+  let last = 0;
+  try { last = Number(sessionStorage.getItem('groloo.reloadedAt')) || 0; } catch { /* no storage */ }
+  if (Date.now() - last < 60_000) return;   // already tried; do not loop
+  try { sessionStorage.setItem('groloo.reloadedAt', String(Date.now())); } catch { /* as above */ }
+  e.preventDefault();
+  location.reload();
 });
 
 /* Resolve an incoming title address BEFORE the first render, so a deep-linked visit paints the

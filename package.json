@@ -14,6 +14,7 @@
     "lint": "oxlint",
     "check:lockfile": "node scripts/check-lockfile.mjs",
     "preview": "vite preview",
+    "tv:perf": "node scripts/tv-perf.mjs",
     "shots:record": "node scripts/tv-shots.mjs --record",
     "shots:baseline": "node scripts/tv-shots.mjs --baseline",
     "shots:check": "node scripts/tv-shots.mjs --check",

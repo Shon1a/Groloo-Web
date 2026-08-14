@@ -56,7 +56,33 @@
  * would land back here and the app would appear to relaunch itself instead of
  * closing. `disableBackHistoryAPI` in appinfo.json is the other half of the same
  * arrangement: webOS keeps its hands off Back and lets the app answer 461. */
-var APP_URL = 'https://web.groloo.com/';
+/* tv., NOT web. — `IS_TV` is `import.meta.env.MODE === 'tv'`, a compile-time constant, so the URL
+ * alone decides whether the television gets the TV interface or the desktop site with its icon
+ * rail. web.groloo.com serves the desktop build, which is what this pointed at.
+ *
+ * TO TEST THE WORKING TREE ON REAL HARDWARE there is no need to edit this line at all any more:
+ * `scripts/tv-measure.mjs` drives the installed app over CDP and NAVIGATES it to whatever `--url`
+ * says, so the package can stay pointed at production while the set loads a LAN build.
+ *
+ *     npx vite preview --mode tv --host        (serves dist-tv on :4173)
+ *     node scripts/tv-measure.mjs measure --url=http://192.168.0.7:4173/ --label=x
+ *
+ * THE BUILD MUST BE MADE WITH `VITE_API_BASE=/`, and this is the correction: the note that used to
+ * be here claimed `resolveApiBase()` treats private addresses as local, so the catalog would go
+ * through the preview proxy. It does — but ONLY under `import.meta.env.DEV` (lib/api.ts), and
+ * `vite preview` serves a PRODUCTION build. So that branch is compiled out, every call goes
+ * straight to Render, the origin `http://192.168.0.7:4173` is not on its CORS allowlist, and the
+ * home screen comes up with "Could not reach /api/home" and no rows. Building with the env var set
+ * makes API_BASE empty, the calls same-origin, and the preview proxy handles them:
+ *
+ *     $env:VITE_API_BASE = '/'; npm run build:tv      (PowerShell — a bare `/` in Git Bash is
+ *                                                      rewritten to C:/Program Files/Git/ by MSYS)
+ *
+ * The dev server is still not a place to judge performance — React's dev build is roughly 5x off
+ * on this device. And if you DO hardcode a LAN address on the line below, PUT IT BACK BEFORE
+ * PACKAGING FOR ANYONE ELSE: `npm run tv:package` bakes in whatever is on it, and an IPK shipped
+ * pointing at a developer's laptop starts to a blank screen. That has already happened once. */
+var APP_URL = 'https://tv.groloo.com/';
 
 var msg = document.getElementById('msg');
 var went = false;
