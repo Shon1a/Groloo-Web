@@ -231,9 +231,10 @@
      `--tv-topbar-pad`, so shrinking the bar would drag the whole page up with it, and a transform
      on a fixed element that carries the gradient would move the wash too. Padding leaves the box,
      the gradient and the page offset exactly where they were and only moves what is centred inside.
-     Proportional so it holds at both package resolutions — ~8px on the 100px bar at 1080p. This is
-     the one number to change if it wants to go further. */
-  padding: 0 48px calc(var(--tv-topnav-h) * 0.08);
+     Proportional so it holds at both package resolutions — ~16px on the 100px bar at 1080p. This is
+     the one number to change if it wants to go further; the ceiling is roughly 0.30, past which the
+     group starts to collide with the top of the bar and the gradient stops sitting behind it. */
+  padding: 0 48px calc(var(--tv-topnav-h) * 0.16);
   background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.55) 55%, rgba(0,0,0,0) 100%);
 }
 
