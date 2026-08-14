@@ -733,7 +733,15 @@
 
      The duration is a variable because it is two numbers — a deliberate press and a held key — set
      on the node by `step`, where the reasoning is. */
-  transition: transform var(--sp-slide, 430ms) cubic-bezier(.25, .46, .45, .94);
+  /* 230ms ON cubic-bezier(.22, 1, .36, 1), DOWN FROM 430ms ON A REFERENCE-FITTED EASE.
+     The old pair was derived honestly — frame-by-frame correlation against the reference clip gave
+     an exponential settle with a ~170ms time constant, which 430ms of that curve reproduces. What
+     the fit could not know is the frame rate the set would eventually run at: the durations across
+     this file were all chosen while a row move painted ~26fps, and the same move now measures a
+     16.7ms median. At 60fps a 230ms glide is ~14 painted frames, which is more than the 430ms one
+     ever got, in half the time. Revert both halves together if this reads as abrupt — the fitted
+     values are one line up in the history and the derivation is in TvSpotlight's header. */
+  transition: transform var(--sp-slide, 230ms) cubic-bezier(.22, 1, .36, 1);
 }
 /* will-change ONLY on the row the remote is on. It promotes the strip to its own compositor
    layer, which is right for the row that is about to slide — and wrong for the other twelve,
@@ -843,10 +851,64 @@
   outline: none; z-index: 2;
   transform: scale(1);
   transform-origin: 50% 50%;
-  transition: transform .34s cubic-bezier(.2, .7, .2, 1);
+  /* 140ms, DOWN FROM 340ms, AND THIS IS THE ONE THAT WAS ACTUALLY SLUGGISH.
+     The scale is the row's answer to "I am on you now" — a reaction, like the artwork swap below,
+     not a journey like the strip. A third of a second to acknowledge a button is long enough to
+     watch happen, and on a held key it never finished at all before the next press restarted it.
+     140ms is ~8 frames at the 16.7ms median this set now holds: fast enough to read as immediate,
+     slow enough to be a movement rather than a jump. The curve is unchanged. */
+  transition: transform .14s cubic-bezier(.2, .7, .2, 1);
 }
-.tv-spot.is-settled .tv-spot-hero { will-change: transform; }
-.tv-shell .tv-spot-hero:focus-visible { transform: scale(1.03); }
+/* ---- PROMOTED ON EVERY ROW, NOT JUST THE FOCUSED ONE ----------------------------------------
+ *
+ * This rule used to be `.tv-spot.is-settled .tv-spot-hero`, which sounds like exactly the right
+ * thing — promote only the surface that is moving. It is the opposite, and the reason is that
+ * `is-settled` MOVES. Every vertical press takes the class off one row and puts it on another, so
+ * the compositor destroys a layer on the departing row and builds one on the arriving row, on the
+ * keypress frame. `Layerize` shows up in the traced vertical bad frames and not in the horizontal
+ * ones, which is exactly the shape that predicts.
+ *
+ * MEASURED, four rounds each, previews off, home:
+ *
+ *                        gated (is-settled)   promoted always   not promoted
+ *   vertical held            76.8%                83.6%             75.0%
+ *   vertical deliberate      76.5%                80.2%             73.9%
+ *   horizontal worst frame   70-77ms              62-67ms           71-92ms
+ *   horizontal frames >67ms  0.4-1.0              0.0               0.3-0.8
+ *
+ * Removing the promotion altogether is WORSE than either, so the layer is genuinely wanted — it is
+ * the churn that costs, not the layer. Nine rows is nine promoted heroes at roughly 977x509 each,
+ * about 18MB of texture against a census total of ~110MB, which this set carries without complaint.
+ *
+ * The brief asks to "promote only the currently moving surface, not every row". This is the one
+ * place that guidance measured backwards, and the numbers above are why it is not followed here. */
+.tv-spot .tv-spot-hero { will-change: transform; }
+
+/* ---- THE INFO PANEL IS NOT PROMOTED, AND THAT IS A MEASURED DECISION -------------------------
+ *
+ * It looked like the best lead in the whole pass. The synopsis block cross-fades two copies of real
+ * text on every press, and text repaints into whatever layer contains it — here the 1920x7857
+ * scrolling document layer. Ablating the panel entirely was the single largest win found:
+ * horizontal held 85.8% -> 90.8% on time, vertical held 76.8% -> 83.0%, worst frame at or under
+ * 67ms on three of four blocks. Promoting it on its own took horizontal frames over 67ms to ZERO.
+ *
+ * IT DOES NOT SURVIVE BEING COMBINED WITH THE HERO PROMOTION ABOVE, and that is the whole finding.
+ * Five rounds of both together, against the same baseline:
+ *
+ *                        baseline   heroes only   heroes + info panel
+ *   horizontal held        85.8%       85.7%            78.9%
+ *   vertical held          76.8%       83.6%            61.7%
+ *   vertical deliberate    76.5%       80.2%            69.1%
+ *
+ * Nine promoted heroes plus eighteen promoted info blocks is roughly 27 new layers on top of the
+ * 13 the page already had, and the GPU is the resource this device runs out of first — the same
+ * reason the full-page transform scroller lost. Layer promotion is not free and does not compose:
+ * two changes that each help can bury the compositor together.
+ *
+ * SO THE PANEL STAYS UNPROMOTED and its repaint cost is accepted. If it is ever revisited, the
+ * thing to try is making the panel CHEAPER to paint (less text in the cross-fade, or swapping
+ * rather than cross-fading) rather than giving it a layer. */
+.tv-shell .tv-spot-hero:focus-visible { transform: scale(1.035); }
 /* focus ring lives in the stage-5 section at the foot of this file — it has to be INSET here,
    see the note there */
 /* THE PICTURE CHANGES ALMOST AT ONCE — 90ms, which is three frames.
@@ -985,7 +1047,7 @@
    SCOPED TO `.tv-spot-art` deliberately — the featured hero and the title screen use the same
    FadeBg and want the unhurried arrival, which is the whole reason the variable is not on
    `.art-photo` itself. */
-.tv-spot-art .art-photo { transition-duration: var(--sp-art-fade, .45s); }
+.tv-spot-art .art-photo { transition-duration: var(--sp-art-fade, .11s); }
 
 /* WIDER THAN THE CARD, BECAUSE THE PICTURE DRIFTS. The artwork travels 3.2% sideways as it changes
    (measured off the reference — see the parallax effect in TvSpotlight). At `inset: 0` it exactly
@@ -5608,3 +5670,52 @@
    the single piece of state this control exists to report. */
 .tv-shell .optrow:focus-visible input[type="checkbox"] { accent-color: #0b0b0b; }
 .tv-shell .optrow input[type="checkbox"] { width: 19px; height: 19px; flex: 0 0 auto; }
+
+/* ============================================================================================
+   THE PAGE MOVES BY TRANSFORM, NOT BY SCROLLING
+
+   Applied only when lib/tvPageScroll.ts puts `tv-xform-scroll` on <html>, which it does when the
+   TV build registers a track and the arm switch is on `transform`. THAT IS NOT THE DEFAULT: the
+   transform path measured SLOWER than the document scroll on the 65UT8100 and is kept behind
+   `localStorage['groloo.tvscroll'] = 'transform'` so it can be re-measured on other hardware. On a
+   normal launch nothing in this section applies. It is inert in the web build too, which never gets
+   the class.
+
+   WHY IT WAS TRIED. Profiled on the reference set, `window.scrollTo` is ~37ms of the ~71ms of
+   JavaScript a vertical press costs — over half, and it is the write itself rather than the easing
+   or the focus search. A scroll write invalidates layout-dependent work for the whole document; a
+   translate on one element is a compositor property.
+
+   WHY IT LOST ANYWAY: the JavaScript that came off the main thread came back as compositing —
+   the track is a layer the height of the whole home screen, and moving it re-rasters tiles that
+   scrolling would have reused. Vertical deliberate 59.6% -> 51.7% on time, worst frame 122.9 ->
+   170.8ms, with horizontal flat as the control. Full numbers in lib/tvPageScroll.ts.
+
+   `overflow: clip` WITH A `hidden` FALLBACK, AND THE ORDER MATTERS. `hidden` still makes the box a
+   SCROLL CONTAINER — the engine may scroll it programmatically to reveal a newly focused element,
+   which on this layout would stack a scroll offset on top of the transform and put the page in two
+   places at once. `clip` does the same visual job and creates no scroll container, so the conflict
+   cannot arise. It is Chromium 90 and this build's floor is 87, so `hidden` is declared first and
+   older engines keep it; TvSpatialNav focuses with `preventScroll` and tvPageScroll zeroes any
+   stray offset when a movement begins, which is what covers the 87-89 window.
+
+   NO `will-change` HERE, deliberately. The promotion is added when a movement starts and dropped
+   when it ends (see beginPageMove/endPageMove) so exactly one surface is promoted and only while
+   it is moving. Declaring it in CSS would pin a layer the height of the whole home page for the
+   life of the app, on a set that starts killing background apps below 250MB free.
+   ============================================================================================ */
+html.tv-xform-scroll,
+html.tv-xform-scroll body {
+  height: 100%;
+  overflow: hidden;
+  overflow: clip;
+}
+
+html.tv-xform-scroll #root { height: 100%; }
+
+html.tv-xform-scroll .tv-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  overflow: clip;
+}
