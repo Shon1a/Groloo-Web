@@ -95,7 +95,28 @@ export function trailerStartOffset(runtime?: number | null): number {
  * franchise recap described above — fifty seconds of it on Spider-Man: Brand New Day — and that
  * is the honest limit of the compromise. Skipping those means the deep seek, and the deep seek
  * means a preview that arrives after the viewer has moved on. */
-export const INTRO_SKIP = 10;
+/* NOW 0 — THE SHELF STARTS AT BYTE ZERO, AND THE REASON IS THE TELEVISION.
+ *
+ * Everything above is still true on a fast connection, and it is why this was 10: ten seconds in
+ * is "a few hundred KB from the start of the same sequential download", which on a PC is free.
+ * On the actual set it is not. Reported plainly by the user: the preview arrives noticeably later
+ * on the television than on a PC running the identical build. The dwell is the same on both, the
+ * decode is not the difference — the difference is that the TV has to pull ten seconds of a
+ * progressive MP4 over its own network before it can present a frame at that offset, and a PC
+ * has already done so before the seek is asked for.
+ *
+ * At 0 there is no offset to reach: the first frame in the file is the first frame it can show,
+ * measured at ~0.4s once the index arrives. That is the largest remaining TV-specific saving and
+ * it does not trade any smoothness for it — no extra mount, no extra decode, simply not waiting
+ * for bytes nobody looks at.
+ *
+ * WHAT IT COSTS, stated honestly because it is a real regression in one dimension: the preview
+ * opens on whatever the trailer opens on, which is usually a distributor logo and sometimes a
+ * certification card. That is the complaint this constant was introduced to answer. The judgement
+ * is that a second of a logo is a smaller price than a preview that arrives after the viewer has
+ * moved on — a trailer nobody waits for is worth nothing at all. Put back to 10 if the logos
+ * prove worse in practice than the wait; both halves of that trade are written down here. */
+export const INTRO_SKIP = 0;
 /* Below this, `preload: 'auto'` is the right call — the seek target is inside the bytes an eager
  * preload was fetching anyway, so eagerness pays for the seek instead of being thrown away by it.
  * Above it, 'auto' would download a run of file we are about to abandon (see `preload` below). */
