@@ -198,9 +198,13 @@ export function previewDwellMs(): number {
   return dwellArm ?? DWELL_NORMAL;
 }
 
-/** The setting AND the policy. A low-end set never previews, whatever the switch says. */
+/** THE SETTING, AND NOTHING ELSE. `tvDeviceClass()` is kept and still exported, but it no longer
+ *  gates this — twice now a heuristic in it has silently taken the feature away on the reference
+ *  television, and a viewer who has switched a toggle ON and sees nothing happen has no way to
+ *  discover why. The device class can inform something the viewer can see (a shorter dwell, a
+ *  smaller rendition); it should not quietly overrule the switch. */
 export function previewsAllowed(setting: boolean): boolean {
-  return setting && tvDeviceClass() !== 'low';
+  return setting;
 }
 
 /* ---- ONE PIPELINE AT A TIME ------------------------------------------------------------------
@@ -244,7 +248,27 @@ export function claimPreviewSlot(id: string): boolean {
     try { run(); } catch { /* a teardown must never block the next preview */ }
     if (owner === key) owner = null;
   }
-  if (owner && owner !== id) return false;
+  /* ---- THIS NEVER REFUSES ANY MORE, AND THE REASON IS A BUG THAT REACHED PRODUCTION -----------
+   *
+   * It used to be `if (owner && owner !== id) return false;`. That is correct only if every claim
+   * is eventually matched by a release, and it is not: `owner` is cleared solely inside
+   * releasePreviewSlot's deferred callback, guarded by `owner === id`. Any path that mounts and
+   * then goes away WITHOUT registering a release — a failed file, a teardown that had already run
+   * its `done` guard, an unmount between the claim and the element being built — leaves `owner`
+   * set to a hook instance that no longer exists.
+   *
+   * Nothing ever clears it after that. Every later claim returns false, `useVideoTrailer` returns
+   * before creating the video, and THE ROW TRAILER NEVER PLAYS AGAIN FOR THE REST OF THE SESSION.
+   * That is exactly the reported symptom: it used to work, and after this file shipped it did not.
+   *
+   * A refusal was never worth much anyway. Only the focused row arms a preview, so two at once is
+   * already prevented structurally; this register exists to make that explicit and, more usefully,
+   * to force a DEFERRED teardown to run before the next mount — which is the loop above, and which
+   * is kept. Failing open costs at worst a brief overlap that the old code lived with happily for
+   * as long as this feature has existed. Failing closed cost the feature entirely.
+   *
+   * If a hard cap is ever wanted again it needs an owner that expires — a timestamp, or a
+   * release registered at claim time — not a flag that only the well-behaved path clears. */
   owner = id;
   return true;
 }
