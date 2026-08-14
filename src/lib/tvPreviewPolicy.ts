@@ -39,8 +39,21 @@
  * app's stated floor is 87, and the sets below that floor are also the sets with the least memory
  * and the weakest video path — so one number separates them.
  *
- * MEASURED ON THE REFERENCE HARDWARE (LG 65UT8100): Chromium 120, 4 cores, deviceMemory undefined.
- * It classes as `normal`, which is correct — it plays a preview without dropping the row.
+ * MEASURED ON THE REFERENCE HARDWARE (LG 65UT8100): Chromium 120, 4 cores, deviceMemory undefined,
+ * **jsHeapSizeLimit 273MB**. It classes as `normal`, and it plays a preview without dropping the
+ * row — previews on measured 84.3% of frames on time against 83.3% with them off.
+ *
+ * THAT HEAP NUMBER IS WHY THE CEILING BELOW IS 200MB AND NOT 300MB, and this is a shipped
+ * regression rather than a hypothetical. The first version of this file used 300MB, reasoning that
+ * "a page that can only ever have ~256MB should not hold a decoder for decoration". The reference
+ * television reports 273MB. So it classed as `low`, `previewsAllowed()` returned false whatever the
+ * setting said, and the row trailer silently never appeared on the one set this whole feature was
+ * tuned on. The comment here even asserted it classed as `normal` — the app's own perf-results had
+ * `heapLimitMb: 273` in all 26 runs on disk at the time, and nobody read them against this line.
+ *
+ * TAKE THE LESSON, NOT JUST THE NUMBER: a threshold on a platform value must be checked against a
+ * reading FROM the platform, not against the value it seems like it ought to have. Anything added
+ * to this function gets the same treatment or it does not go in.
  */
 /* ---- OFF THE TELEVISION, NONE OF THIS APPLIES -----------------------------------------------
  *
@@ -93,11 +106,15 @@ function classify(): TvDeviceClass {
     if (typeof cores === 'number' && cores > 0 && cores < 2) return 'low';
 
     /* The heap ceiling Chrome will hand this page. On a TV build this lands near the platform's own
-     * per-app budget, and a page that can only ever have ~256MB is a page that should not be holding
-     * a decoder open for decoration. */
+     * per-app budget — and much LOWER than a desktop instinct expects: the reference set, which is a
+     * perfectly capable 2024 panel, reports 273MB. So this bar sits at 200MB, comfortably under a
+     * set known to cope, and it is the weakest signal here by some distance. It is kept only to
+     * catch a genuinely tiny budget; DO NOT RAISE IT without a reading from a real television that
+     * says the higher number excludes the right sets. Raising it to 300MB turned the row trailer off
+     * on every 65UT8100 in production, which is the whole story in the header. */
     const heapLimit = (performance as Performance & { memory?: { jsHeapSizeLimit: number } })
       .memory?.jsHeapSizeLimit;
-    if (typeof heapLimit === 'number' && heapLimit > 0 && heapLimit < 300 * 1048576) return 'low';
+    if (typeof heapLimit === 'number' && heapLimit > 0 && heapLimit < 200 * 1048576) return 'low';
   } catch { /* any of these may be absent; absence is not evidence of a weak set */ }
   return 'normal';
 }
