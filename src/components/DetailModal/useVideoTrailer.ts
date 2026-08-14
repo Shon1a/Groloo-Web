@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useT } from '../../i18n/i18n';
+import { claimPreviewSlot, releasePreviewSlot } from '../../lib/tvPreviewPolicy';
+import { acquirePreview, releasePreview, sharedPreviewEnabled } from '../../lib/tvPreviewElement';
+
+/** Distinguishes concurrent callers in the preview register. Module scope, not a hook — two rows
+ *  rendering in the same pass must not be handed the same id. */
+let slotSeq = 0;
 
 /* THE SAME JOB AS useTrailer, WITHOUT YOUTUBE — a trailer that is a plain video FILE.
  *
@@ -233,6 +239,11 @@ export function useVideoTrailer(
   const soundOpt = opts?.sound;
   const soundRef = useRef(!!soundOpt);
   soundRef.current = !!soundOpt;
+  /* This hook's identity in the one-pipeline-at-a-time register (lib/tvPreviewPolicy.ts). Every
+   * caller of this hook mounts a real media pipeline, so every caller has to be counted — the row
+   * preview and the detail sheet's trailer must not both hold a decoder. */
+  const slotIdRef = useRef('');
+  if (!slotIdRef.current) slotIdRef.current = `trailer-${++slotSeq}`;
 
   useEffect(() => {
     const slot = slotRef.current, hero = heroRef.current;
@@ -255,16 +266,48 @@ export function useVideoTrailer(
     let revealTimer = 0;
     let done = false;   // teardown is reachable from several events; only run it once
 
+    /* Set when this mount is using the ONE shared element rather than one of its own. Read by both
+     * teardown paths, which must not destroy an element other rows are going to reuse. */
+    let usedShared = false;
+    /* Set by the mount so the effect cleanup — which lives outside that closure and can only see
+     * `el` — can still take this row's listeners off a SHARED element. Without it the one element
+     * would accumulate a full set of handlers for every row ever focused. */
+    let detachListeners: (() => void) | null = null;
+
     const mountTimer = window.setTimeout(() => {
-      const v = document.createElement('video');
+      /* THE RENDITION IS PICKED FIRST, because the shared element wants its `src` at acquire time
+       * and both paths need the same answer. Measured HERE rather than at render, because here the
+       * billboard is laid out and its box is a fact. */
+      const boxPx0 = (hero?.clientWidth || slot.clientWidth || 0);
+      const needed0 = Math.round(boxPx0 * cropScale * (window.devicePixelRatio || 1));
+      const chosen0 = (boxPx0 > 0 ? pickTrailerRendition(renditionsRef.current, needed0, src) : src) || src;
+
+      let v: HTMLVideoElement;
+      if (sharedPreviewEnabled()) {
+        /* ONE ELEMENT FOR THE WHOLE APP. Re-parenting it and swapping a src reuses the decoder;
+         * building a new element allocates a pipeline, which is the cost this arm exists to remove.
+         * A refusal means another surface genuinely holds it and has not released. */
+        const got = acquirePreview(slotIdRef.current, slot, chosen0);
+        if (!got) return;
+        v = got;
+        usedShared = true;
+      } else {
+        /* ONE DECODER ON THE SCREEN. Claiming forces any teardown that was merely SCHEDULED to run
+         * right now, synchronously — deferring a release is only safe while nothing else wants the
+         * pipeline, and the moment something does, "late" is worse than "on the keypress frame". */
+        if (!claimPreviewSlot(slotIdRef.current)) return;
+        v = document.createElement('video');
+      }
       el = v;
       /* BOTH THE PROPERTY AND THE ATTRIBUTE for muted/playsinline. The property is what the
        * autoplay policy reads at play() time; the attribute is what some TV browsers read when
        * they decide whether the element may start at all, and setting only one of them is the
        * classic way to get a promise rejection on a set that would otherwise have played. */
-      v.muted = true; v.defaultMuted = true; v.setAttribute('muted', '');
-      v.playsInline = true; v.setAttribute('playsinline', '');
-      v.autoplay = true;
+      if (!usedShared) {
+        v.muted = true; v.defaultMuted = true; v.setAttribute('muted', '');
+        v.playsInline = true; v.setAttribute('playsinline', '');
+        v.autoplay = true;
+      }
       /* 'metadata' ONLY FOR A SEEK DEEP ENOUGH TO WASTE IT. `auto` starts pulling the file from
        * byte one the moment the src is set; when we are about to jump a third of the way in, all
        * of that is thrown away, so fetching the index first and letting the seek issue the range
@@ -276,24 +319,23 @@ export function useVideoTrailer(
        * in a fresh range request. Gating on `startAt > 0` here would have quietly handed the cheap
        * offset the expensive offset's bandwidth profile. */
       v.preload = startAt > CHEAP_SEEK_MAX ? 'metadata' : 'auto';
-      v.controls = false;
-      v.setAttribute('disablepictureinpicture', '');
-      v.setAttribute('disableremoteplayback', '');
-      v.tabIndex = -1;
-      v.setAttribute('aria-hidden', 'true');
+      if (!usedShared) {
+        v.controls = false;
+        v.setAttribute('disablepictureinpicture', '');
+        v.setAttribute('disableremoteplayback', '');
+        v.tabIndex = -1;
+        v.setAttribute('aria-hidden', 'true');
+      }
       v.title = t('modal.trailer_title', { title: titleRef.current || '' });
       /* Measured HERE rather than at render, because here the billboard is laid out and its box
        * is a fact. `hero` is the element the video is painted behind, so its width is the box;
        * the slot is the same size and stands in if the caller gave no hero. */
-      const boxPx = (hero?.clientWidth || slot.clientWidth || 0);
-      const neededPx = Math.round(boxPx * cropScale * (window.devicePixelRatio || 1));
-      const chosen = boxPx > 0
-        ? pickTrailerRendition(renditionsRef.current, neededPx, src)
-        : src;
       // No crossOrigin: we only ever paint this, never read its pixels, and asking for CORS
       // would make the CDN's answer to a preflight our problem for no gain.
-      v.src = chosen || src;
-      slot.appendChild(v);
+      if (!usedShared) {
+        v.src = chosen0;
+        slot.appendChild(v);
+      }
       videoRef.current = v;
       muteFnRef.current = (m: boolean) => { v.muted = m; if (!m) v.volume = 1; };
 
@@ -325,8 +367,16 @@ export function useVideoTrailer(
         v.removeEventListener('ended', teardown);
         v.removeEventListener('error', fail);
         v.removeEventListener('pause', onPause);
-        try { v.pause(); v.removeAttribute('src'); v.load(); } catch { /* ignore */ }
-        v.remove();
+        detachListeners = null;
+        if (usedShared) {
+          /* The element belongs to the whole app, not to this row. Hand it back: the picture goes
+           * now, and the pipeline is released once nothing has navigated for a moment. Destroying it
+           * here would defeat the entire point of sharing one. */
+          releasePreview(slotIdRef.current);
+        } else {
+          try { v.pause(); v.removeAttribute('src'); v.load(); } catch { /* ignore */ }
+          v.remove();
+        }
         if (videoRef.current === v) videoRef.current = null;
         hero?.classList.remove('has-trailer');
       };
@@ -405,6 +455,14 @@ export function useVideoTrailer(
       v.addEventListener('ended', teardown);
       v.addEventListener('error', fail);
       v.addEventListener('pause', onPause);
+      detachListeners = () => {
+        v.removeEventListener('timeupdate', onTime);
+        v.removeEventListener('seeking', onSeeking);
+        v.removeEventListener('ended', teardown);
+        v.removeEventListener('error', fail);
+        v.removeEventListener('pause', onPause);
+        v.removeEventListener('loadedmetadata', start);
+      };
 
 
       const start = () => {
@@ -439,8 +497,29 @@ export function useVideoTrailer(
       window.clearTimeout(mountTimer);
       if (revealTimer) window.clearTimeout(revealTimer);
       if (el) {
-        try { el.pause(); el.removeAttribute('src'); el.load(); } catch { /* ignore */ }
-        el.remove();
+        /* SPLIT IN TWO, AND THE SPLIT IS THE POINT. This cleanup runs inside the React commit for
+         * the keypress the viewer is watching, so whatever happens here happens on that frame.
+         *
+         * IMMEDIATE — detaching the element. It is one DOM removal, it is cheap, and it is what
+         * brings the artwork back. Deferring it would leave the trailer's last frame sitting on the
+         * billboard under the next title's name for up to 200ms, which reads as a bug.
+         *
+         * DEFERRED — pause/unset-src/load, the platform media calls that actually give the decoder
+         * back. This is the expensive half and none of it is visible, so it goes to idle time. It is
+         * forced to run synchronously the instant any other surface claims the pipeline, so the
+         * decoder is never double-booked. */
+        if (detachListeners) { detachListeners(); detachListeners = null; }
+        if (usedShared) {
+          /* Shared element: hide now, release the pipeline after the movement settles. It is NOT
+           * removed from the document here — the next row re-parents the same element. */
+          releasePreview(slotIdRef.current);
+        } else {
+          const dying = el;
+          dying.remove();
+          releasePreviewSlot(slotIdRef.current, () => {
+            try { dying.pause(); dying.removeAttribute('src'); dying.load(); } catch { /* ignore */ }
+          });
+        }
       }
       videoRef.current = null;
       hero?.classList.remove('has-trailer');
