@@ -441,6 +441,39 @@
   position: absolute; inset: 0;
   background-size: cover;
   background-repeat: no-repeat;
+  transition: opacity .5s ease;
+}
+
+/* ---- THE FEATURED CARD'S TRAILER -------------------------------------------------------------
+   The row billboard's arrangement, applied to the bigger card: the video sits UNDER both art
+   layers (first in the DOM, no z-index needed) and the artwork fades off it, so the scrim and the
+   copy — which are siblings of the layers, not children — stay exactly where they are and a
+   playing trailer still says what it is.
+
+   NO `transform: scale()` HERE, deliberately, and it is the one place the rows' crop is not wanted.
+   This card is far wider than 16:9, so `object-fit: cover` is already discarding more top and
+   bottom than a baked-in letterbox occupies; magnifying on top of that would throw away picture
+   that has already been cropped once. */
+.tv-hero-trailer-slot {
+  position: absolute; inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.tv-hero-trailer-slot video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  border: 0;
+  background: #000;
+  opacity: 0;
+  transition: opacity .9s cubic-bezier(.4, 0, .2, 1);
+}
+.tv-hero-trailer-slot video.on { opacity: 1; }
+/* Slower out than the video is in, so the two overlap rather than handing over through black. */
+.tv-hero-stage.has-trailer .tv-hero-art {
+  opacity: 0;
+  transition: opacity 1.1s cubic-bezier(.4, 0, .2, 1);
 }
 
 /* One scrim over BOTH layers, and the card's FOCUS TARGET (see TvHero). Horizontal so the copy

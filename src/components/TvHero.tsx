@@ -3,6 +3,10 @@ import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
+import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
+import { useImdbTrailer } from '../lib/queries';
+import { useSettings } from '../stores/settings';
+import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { FadeBg, FadeImg } from './FadeArt';
 
 /* THE TV FEATURED BILLBOARD — the top of the TV home, and only the top.
@@ -132,6 +136,68 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     return () => window.clearTimeout(id);
   }, [active, focused, reduceMotion, n, onScreen]);
 
+  /* ---- THE FEATURED CARD PLAYS ITS TRAILER TOO ------------------------------------------------
+   *
+   * Same engine, same dwell and same setting as the row billboards, so a viewer meets ONE
+   * behaviour rather than two that nearly match. What differs is what counts as "resting here",
+   * and the difference is forced by this card being a rotating carousel rather than a strip:
+   *
+   *   FOCUSED, because the remote being on the card is what makes this the thing being looked at.
+   *   Rotation already stops while focused, so the title cannot change under a playing trailer.
+   *
+   *   ON SCREEN, reusing the observer above rather than adding a second one. Without it the card
+   *   would mount a decoder for a billboard scrolled two screens out of sight — the same fault the
+   *   rotation note describes, with a media pipeline attached instead of five animations.
+   *
+   *   AND THE DWELL RESTARTS ON `active`, so walking Left/Right through the featured titles never
+   *   arms one in passing.
+   *
+   * Nothing here is new policy: previewsAllowed and previewDwellMs are the row's, so the Settings
+   * toggle and the storage arm govern both surfaces from one place. */
+  const heroTrailers = previewsAllowed(useSettings((s) => s.settings.tvRowTrailers));
+  const stageRef = useRef<HTMLDivElement>(null);
+  const trailerSlotRef = useRef<HTMLDivElement>(null);
+  const [dwelt, setDwelt] = useState<MediaItem | null>(null);
+  const [trailerFailed, setTrailerFailed] = useState(false);
+  const restingOn: MediaItem | undefined = list[active];
+
+  useEffect(() => {
+    setDwelt(null);
+    setTrailerFailed(false);
+    if (!heroTrailers || !focused || !onScreen || reduceMotion || !restingOn) return;
+    const id = window.setTimeout(() => setDwelt(restingOn), previewDwellMs());
+    return () => window.clearTimeout(id);
+    // Keyed on the title's id rather than the object: `list` is rebuilt on every render of Home,
+    // so an object dependency would re-arm this timer forever and it would never fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heroTrailers, focused, onScreen, reduceMotion, restingOn?.id]);
+
+  const heroImdb = dwelt && !trailerFailed ? dwelt.imdb : undefined;
+  const heroTrailer = useImdbTrailer(heroImdb);
+  const heroVideoUrl = trailerFailed ? undefined : (heroTrailer.data?.url || undefined);
+
+  useVideoTrailer(
+    trailerSlotRef,
+    stageRef,
+    heroVideoUrl,
+    dwelt?.title || '',
+    {
+      // The dwell above already served as "do not mount for a card being walked past".
+      mountDelay: 0,
+      startAt: INTRO_SKIP,
+      renditions: heroTrailer.data?.urls,
+      /* NO CROP HERE, and unlike the rows it needs no genre test. This card is far wider than 16:9
+       * — `clamp(340px, 62vh, 720px)` tall against the full width of the screen — so `object-fit:
+       * cover` is already discarding more top and bottom than any baked-in letterbox occupies. A
+       * magnification on top of that would only throw away picture the crop has already removed. */
+      cropScale: 1,
+      /* Bigger box than a row billboard, so it earns a wider file — but still capped, because this
+       * is the surface a viewer arrives on and time to first frame is what is being protected. */
+      maxRenditionPx: 1920,
+      onFail: () => setTrailerFailed(true),
+    },
+  );
+
   if (!n) return null;
   const cur = list[active] || list[0];
 
@@ -182,7 +248,13 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
         setFocused(false);
       }}
     >
-      <div className="tv-hero-stage">
+      <div className="tv-hero-stage" ref={stageRef}>
+        {/* UNDERNEATH THE ART, first in the DOM so it needs no z-index of its own — the art layers
+            are absolutely positioned siblings and simply paint over it. The artwork then fades OFF
+            the video when the engine reveals it, which is the row billboard's arrangement exactly
+            (see `.tv-spot-trailer-slot`): the scrim and the copy are siblings of the layers rather
+            than children, so they stay put and a playing trailer still says what it is. */}
+        <div className="tv-hero-trailer-slot" ref={trailerSlotRef} aria-hidden="true" />
         {(['a', 'b'] as const).map((slot) => {
           const it = xfade[slot];
           const on = xfade.front === slot;
