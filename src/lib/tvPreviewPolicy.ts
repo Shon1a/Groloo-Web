@@ -39,8 +39,21 @@
  * app's stated floor is 87, and the sets below that floor are also the sets with the least memory
  * and the weakest video path — so one number separates them.
  *
- * MEASURED ON THE REFERENCE HARDWARE (LG 65UT8100): Chromium 120, 4 cores, deviceMemory undefined.
- * It classes as `normal`, which is correct — it plays a preview without dropping the row.
+ * MEASURED ON THE REFERENCE HARDWARE (LG 65UT8100): Chromium 120, 4 cores, deviceMemory undefined,
+ * **jsHeapSizeLimit 273MB**. It classes as `normal`, and it plays a preview without dropping the
+ * row — previews on measured 84.3% of frames on time against 83.3% with them off.
+ *
+ * THAT HEAP NUMBER IS WHY THE CEILING BELOW IS 200MB AND NOT 300MB, and this is a shipped
+ * regression rather than a hypothetical. The first version of this file used 300MB, reasoning that
+ * "a page that can only ever have ~256MB should not hold a decoder for decoration". The reference
+ * television reports 273MB. So it classed as `low`, `previewsAllowed()` returned false whatever the
+ * setting said, and the row trailer silently never appeared on the one set this whole feature was
+ * tuned on. The comment here even asserted it classed as `normal` — the app's own perf-results had
+ * `heapLimitMb: 273` in all 26 runs on disk at the time, and nobody read them against this line.
+ *
+ * TAKE THE LESSON, NOT JUST THE NUMBER: a threshold on a platform value must be checked against a
+ * reading FROM the platform, not against the value it seems like it ought to have. Anything added
+ * to this function gets the same treatment or it does not go in.
  */
 /* ---- OFF THE TELEVISION, NONE OF THIS APPLIES -----------------------------------------------
  *
@@ -93,11 +106,15 @@ function classify(): TvDeviceClass {
     if (typeof cores === 'number' && cores > 0 && cores < 2) return 'low';
 
     /* The heap ceiling Chrome will hand this page. On a TV build this lands near the platform's own
-     * per-app budget, and a page that can only ever have ~256MB is a page that should not be holding
-     * a decoder open for decoration. */
+     * per-app budget — and much LOWER than a desktop instinct expects: the reference set, which is a
+     * perfectly capable 2024 panel, reports 273MB. So this bar sits at 200MB, comfortably under a
+     * set known to cope, and it is the weakest signal here by some distance. It is kept only to
+     * catch a genuinely tiny budget; DO NOT RAISE IT without a reading from a real television that
+     * says the higher number excludes the right sets. Raising it to 300MB turned the row trailer off
+     * on every 65UT8100 in production, which is the whole story in the header. */
     const heapLimit = (performance as Performance & { memory?: { jsHeapSizeLimit: number } })
       .memory?.jsHeapSizeLimit;
-    if (typeof heapLimit === 'number' && heapLimit > 0 && heapLimit < 300 * 1048576) return 'low';
+    if (typeof heapLimit === 'number' && heapLimit > 0 && heapLimit < 200 * 1048576) return 'low';
   } catch { /* any of these may be absent; absence is not evidence of a weak set */ }
   return 'normal';
 }
@@ -105,19 +122,80 @@ function classify(): TvDeviceClass {
 /* ---- THE DWELL -------------------------------------------------------------------------------
  * ms the remote must sit still on a title before its trailer is asked for at all.
  *
- * 2400, RAISED FROM 1200, AND THE REASON IS THE CADENCE THAT WAS NEVER MEASURED. 1200 was chosen
- * against a *deliberate* walk, where presses land ~900ms apart — it cleared that, and the numbers
- * improved accordingly. But a television is mostly used at neither of the cadences that were tested:
- * you stop on a title, read the synopsis, look at the artwork for several seconds, and then move on.
- * At 1200ms every one of those pauses mounts a pipeline and the next press tears it down, which is
- * the 500ms failure again at a slower tempo.
+ * 1200, LOWERED FROM 2400 ON A PRODUCT DECISION, NOT ON A NEW MEASUREMENT. Recorded plainly so the
+ * next reader knows exactly how much evidence is behind this number, which is some but not all.
  *
- * The cost, stated plainly: a preview now begins 2.4s after you settle rather than 1.2s. Someone
- * genuinely looking at a title still gets it; someone browsing never pays for it. */
-const DWELL_NORMAL = 2400;
+ * THE ORIGINAL LADDER, one build, arms interleaved, both with the preview on:
+ *
+ *     500ms     worst frame 78, 73ms     on time 82.9%, 80.9%
+ *     1200ms    worst frame 52, 53ms     on time 92.6%, 90.4%
+ *     off       worst frame 57ms         on time 93%
+ *
+ * So 1200 is not a guess: it is the shortest dwell that has ever measured indistinguishable from
+ * having no preview at all. 500 is the cliff, and this does not go near it.
+ *
+ * WHY IT WAS 2400. Not from that ladder — from a cadence the ladder never tested: you stop on a
+ * title, read the synopsis, look at the artwork for a few seconds, then move on. At 1200 every one
+ * of those pauses mounts a pipeline and the next press tears it down, which is the 500ms failure at
+ * a slower tempo. That argument is still sound and is the risk being accepted here: a browsing
+ * viewer will mount previews they do not watch. The judgement is that a trailer arriving 2.4s after
+ * you settle is late enough that most viewers never learn the feature exists, and a feature nobody
+ * sees is worth less than some frames on a cadence nobody has measured.
+ *
+ * WHAT WOULD LET THIS GO LOWER, and it is built and sitting switched off: the shared preview element
+ * (lib/tvPreviewElement.ts, `localStorage['groloo.tvpreview'] = 'shared'`). The whole ladder above
+ * is a mount cost, and that file exists to make a mount stop being one — one element for the
+ * session, re-parented and re-sourced instead of rebuilt. If it holds up on the set, the dwell is
+ * free to drop well under a second. Measure that before pushing this number down again; going below
+ * 1200 on the current per-mount path is walking into the 500ms result deliberately.
+ *
+ * AND MEASURE THE DWELL ITSELF AT SOME POINT: every "previews on" run in perf-results/ was taken
+ * while the device gate was silently disabling previews (see the heap note in the header), so all
+ * of them record `previewMounted: false`. The ladder above predates that bug and is the only real
+ * preview data this project has. Check `previewMounted` is true before believing a new one. */
+const DWELL_NORMAL = 1200;
+
+/* ---- WHY ~900ms IS A WALL AND NOT A MARGIN ---------------------------------------------------
+ *
+ * A DELIBERATE PRESS LANDS ABOUT 900ms AFTER THE LAST ONE. That is the cadence of somebody walking
+ * along a row looking at each card, and it is stated in TvSpotlight's own header as the reason the
+ * original 500ms dwell failed: "the dwell always elapsed, a <video> always mounted". So the dwell
+ * is not really a "wait until sure" delay — it is a filter, and 900ms is where the filter stops
+ * filtering.
+ *
+ * Above ~900ms:  a preview mounts when you STOP. One pipeline per title you actually look at.
+ * Below ~900ms:  a preview mounts on EVERY CARD YOU PASS. That is the 82.9% row of the ladder
+ *                above, and it is a different mode of operation rather than a slightly worse
+ *                number.
+ *
+ * 1200 sits just over the wall with about 300ms to spare. Going to 800 does not shave 400ms off the
+ * wait; it changes what the feature does on a walk.
+ *
+ * TUNABLE ON THE SET, because "is 1200 really the floor" deserves an answer from the television
+ * rather than from this comment, and rebuilding to try a number is how a question like that goes
+ * unanswered for months:
+ *
+ *   localStorage['groloo.tvdwell'] = '600'    then relaunch
+ *
+ * Clamped to 0-10000 and TV-only. Read once: it decides a rendering behaviour, and re-reading
+ * storage on the focus path to answer a question that cannot change is the cost this file exists to
+ * hunt. The honest way to use it is with the shared preview element switched on at the same time
+ * (`groloo.tvpreview = 'shared'`) — that removes the mount cost the wall is made of, and is the only
+ * change that makes a sub-900ms dwell something other than a deliberate regression. */
+let dwellArm: number | null | undefined;
 
 export function previewDwellMs(): number {
-  return DWELL_NORMAL;
+  if (dwellArm === undefined) {
+    dwellArm = null;
+    if (IS_TV) {
+      try {
+        const raw = localStorage.getItem('groloo.tvdwell');
+        const n = raw === null ? NaN : Number(raw);
+        if (Number.isFinite(n) && n >= 0 && n <= 10000) dwellArm = n;
+      } catch { /* no storage; the default stands */ }
+    }
+  }
+  return dwellArm ?? DWELL_NORMAL;
 }
 
 /** The setting AND the policy. A low-end set never previews, whatever the switch says. */
