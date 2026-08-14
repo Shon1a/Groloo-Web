@@ -122,16 +122,38 @@ function classify(): TvDeviceClass {
 /* ---- THE DWELL -------------------------------------------------------------------------------
  * ms the remote must sit still on a title before its trailer is asked for at all.
  *
- * 2400, RAISED FROM 1200, AND THE REASON IS THE CADENCE THAT WAS NEVER MEASURED. 1200 was chosen
- * against a *deliberate* walk, where presses land ~900ms apart — it cleared that, and the numbers
- * improved accordingly. But a television is mostly used at neither of the cadences that were tested:
- * you stop on a title, read the synopsis, look at the artwork for several seconds, and then move on.
- * At 1200ms every one of those pauses mounts a pipeline and the next press tears it down, which is
- * the 500ms failure again at a slower tempo.
+ * 1200, LOWERED FROM 2400 ON A PRODUCT DECISION, NOT ON A NEW MEASUREMENT. Recorded plainly so the
+ * next reader knows exactly how much evidence is behind this number, which is some but not all.
  *
- * The cost, stated plainly: a preview now begins 2.4s after you settle rather than 1.2s. Someone
- * genuinely looking at a title still gets it; someone browsing never pays for it. */
-const DWELL_NORMAL = 2400;
+ * THE ORIGINAL LADDER, one build, arms interleaved, both with the preview on:
+ *
+ *     500ms     worst frame 78, 73ms     on time 82.9%, 80.9%
+ *     1200ms    worst frame 52, 53ms     on time 92.6%, 90.4%
+ *     off       worst frame 57ms         on time 93%
+ *
+ * So 1200 is not a guess: it is the shortest dwell that has ever measured indistinguishable from
+ * having no preview at all. 500 is the cliff, and this does not go near it.
+ *
+ * WHY IT WAS 2400. Not from that ladder — from a cadence the ladder never tested: you stop on a
+ * title, read the synopsis, look at the artwork for a few seconds, then move on. At 1200 every one
+ * of those pauses mounts a pipeline and the next press tears it down, which is the 500ms failure at
+ * a slower tempo. That argument is still sound and is the risk being accepted here: a browsing
+ * viewer will mount previews they do not watch. The judgement is that a trailer arriving 2.4s after
+ * you settle is late enough that most viewers never learn the feature exists, and a feature nobody
+ * sees is worth less than some frames on a cadence nobody has measured.
+ *
+ * WHAT WOULD LET THIS GO LOWER, and it is built and sitting switched off: the shared preview element
+ * (lib/tvPreviewElement.ts, `localStorage['groloo.tvpreview'] = 'shared'`). The whole ladder above
+ * is a mount cost, and that file exists to make a mount stop being one — one element for the
+ * session, re-parented and re-sourced instead of rebuilt. If it holds up on the set, the dwell is
+ * free to drop well under a second. Measure that before pushing this number down again; going below
+ * 1200 on the current per-mount path is walking into the 500ms result deliberately.
+ *
+ * AND MEASURE THE DWELL ITSELF AT SOME POINT: every "previews on" run in perf-results/ was taken
+ * while the device gate was silently disabling previews (see the heap note in the header), so all
+ * of them record `previewMounted: false`. The ladder above predates that bug and is the only real
+ * preview data this project has. Check `previewMounted` is true before believing a new one. */
+const DWELL_NORMAL = 1200;
 
 export function previewDwellMs(): number {
   return DWELL_NORMAL;
