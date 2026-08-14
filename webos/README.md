@@ -64,17 +64,81 @@ ares-inspect --device <name> --app com.groloo.web
 One line, at the top of the script in `index.html`:
 
 ```js
-var APP_URL = 'https://web.groloo.com/';
+var APP_URL = 'https://tv.groloo.com/';
 ```
 
-Point it at a LAN dev server (`http://192.168.x.x:5173/`) to test an unreleased build
-on real hardware. `lib/api.ts` treats a private address as local, so the API calls go
-back through the Vite proxy rather than at the production backend.
+**`tv.`, not `web.`** — `IS_TV` is `import.meta.env.MODE === 'tv'`, a compile-time constant, so
+the URL alone decides whether the television gets the TV interface or the desktop site with its
+icon rail. `web.groloo.com` serves the desktop build.
+
+Point it at a LAN dev server (`http://192.168.x.x:5173/`) to test an unreleased build on real
+hardware, and **put it back before packaging for anyone else.** `lib/api.ts` treats a private
+address as local, so the API calls go back through the Vite proxy rather than at the production
+backend.
+
+To test a **production** build on the TV instead — which is the only kind worth measuring, the
+dev build being roughly 5x slower here — point `APP_URL` at `http://192.168.x.x:4173/` and run
+`npx vite preview --mode tv --host`. `vite.config.ts` gives `preview` the same `/api` proxy the
+dev server has; without it the built app serves fine and comes up with no rows at all, which
+looks like a broken build rather than a missing proxy.
 
 ## Notes
 
-- **`resolution` is `1280x720`.** That is what the TV build's CSS is written against
-  (see the note at the top of `vite.config.ts`); the panel scales it.
+- **`resolution` is `1920x1080`, AND THAT IS A DECISION, NOT AN OVERSIGHT. 720p is measurably
+  smoother and was chosen against, deliberately, for sharpness.** This entry used to say the
+  opposite; if you are about to "fix" the setting back to `1280x720`, read this first.
+
+  Measured on a 65UT81006LA (webOS 24, SDK 10.3.1, Chromium 120, 4 cores, PowerVR B-Series
+  BXE-4-32) over the CDP bridge `ares-inspect` opens, walking a poster row:
+
+  | | `1920x1080` | `1280x720` |
+  |---|---|---|
+  | frames over 33ms | 24–28% | **3.2%** |
+  | median frame | 16.7ms | 16.7ms |
+
+  720p wins and nothing here disputes that. **What changed is knowing how little of the gap is
+  ours to close.** Three numbers, same set, same session, timestamps taken from rAF's own
+  vsync-aligned argument:
+
+  | scene | frames over 33ms |
+  |---|---|
+  | idle, nothing moving | **0%** (240 of 240 frames at 16.7ms) |
+  | ONE grey `<div>` moving on a promoted layer — no React, no images | **18%** |
+  | the actual app, walking a row | 24–28% |
+
+  **A single moving rectangle already drops one frame in five at 1080p.** The app adds about six
+  to ten points on top of that floor, and the floor is the browser's compositor on this panel —
+  not anything in this repo. So the choice is 1080p at ~28% or 720p at ~3%, and there is no third
+  option that keeps the sharpness.
+
+  SEVEN APP-SIDE FIXES WERE BUILT AND MEASURED AT 1080p AND NONE OF THEM MOVED IT: eliminating
+  forced style recalc, collapsing the billboard fade cascade under a held key, stacking the
+  artwork layers instead of cross-fading, throttling the scroller's per-frame `scrollTo`,
+  pre-promoting the next row's compositor layers, `content-visibility` on the rows, and releasing
+  tile bitmaps when a row scrolls away. Two made things worse. Do not spend a day rediscovering
+  them — the working notes are on a git stash labelled "perf investigation: 7 measured dead ends".
+
+  BEWARE TWO MEASUREMENT TRAPS, both of which produced wrong conclusions here. Take frame times
+  from the timestamp `requestAnimationFrame` passes its callback, never `performance.now()` read
+  inside it — the latter smears vsync-quantised 16.7/33.3ms deltas into a meaningless ~20ms
+  median. And restart the app before any A/B, discarding the first run: dropped frames drifted
+  from 28% to ~50% over an hour of continuous testing and a relaunch put it straight back, which
+  is larger than any effect worth measuring.
+
+  THE OLD `devicePixelRatio` NOTE HERE WAS WRONG. It argued that dpr 2 at 1080p and dpr 3 at 720p
+  give the same backing store, so the speedup was unexplained. LG's own spec says the UI plane IS
+  the `appinfo.json` resolution and the panel scales it, so 720p really does rasterise 0.92M
+  pixels against 1080p's 2.07M. The arithmetic predicts the result fine; the old reading of dpr
+  did not.
+
+  THE LAYOUT IS IDENTICAL AT BOTH, so nothing moves if this is ever changed: every dimension on
+  the home screen is a proportion of `--spot-h`, itself `26.5vw` (ratio table at the top of
+  `tv.css`). `--spot-h` resolves to 339.2px at 720p and 508.8px at 1080p, the section heading to
+  20.352px and 30.528px — exactly 1.5x, the same picture at two sizes.
+
+  WHAT 720p COSTS is sharpness: webOS draws on a 720p canvas and the panel scales it, so glyphs
+  are slightly softer than if drawn at full size. That is the whole of the trade, and it is the
+  reason this app is at 1080p.
 - **`disableBackHistoryAPI: true`** hands the Back key to the app instead of letting
   webOS walk history itself. `lib/tvKeys.ts` answers keyCode 461 and steps one layer
   per press; without this, the platform would also navigate and one press would close

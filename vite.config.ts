@@ -1,7 +1,74 @@
 import { fileURLToPath, URL } from 'node:url'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import postcss from 'postcss'
+import { execSync } from 'node:child_process'
+
+/* ---- THE TV STYLESHEET DIET ------------------------------------------------------------------
+ *
+ * WHAT THIS IS FOR. The TV build loads the whole desktop stylesheet (app.css, 136 KB compiled) and
+ * then a TV sheet on top of it (74 KB) that spends much of its length overriding what the first one
+ * just said. A large part of app.css cannot match on a television at all, and the engine still has
+ * to parse it, build the rules and keep them in the cascade.
+ *
+ * DONE AS A BUILD TRANSFORM RATHER THAN BY EDITING THE STYLESHEETS, and that is the whole design:
+ *   · THE DESKTOP BUILD IS BYTE-IDENTICAL. The plugin is only in the plugin list for `--mode tv`,
+ *     so nothing about the website can change — which matters because there is no visual regression
+ *     suite to prove otherwise, the same reason Lightning CSS is TV-only below.
+ *   · NOTHING IS DELETED FROM SOURCE, so a rule that turns out to be needed comes back by changing
+ *     one predicate here rather than by recovering it from git.
+ *
+ * WHAT IT REMOVES, and why each is safe:
+ *   · `:hover` SELECTORS, from app.css only. A D-pad has no pointer, and TvSpotlight's header states
+ *     the position outright — "NOTHING RESPONDS TO HOVER, deliberately... The remote — focus — is
+ *     the only thing that drives this component." Only the hover selector is dropped from a list, so
+ *     `a:hover, a:focus { }` keeps its focus half; the rule goes only when nothing is left.
+ *   · MOBILE-ONLY MEDIA BLOCKS. A television reports 1920 CSS px wide, so a block gated on
+ *     `max-width: 1024px` or narrower can never apply. Anything carrying a `min-width` is left
+ *     alone, because a range query can still match.
+ *
+ * WHAT IT DELIBERATELY DOES NOT TOUCH: tv.css (every rule there was written FOR this screen),
+ * `@media (hover: hover)` (an LG Magic Remote really does present a pointer), and keyframes (walked
+ * by `walkRules` but their selectors are percentages, so the hover filter never matches them).
+ *
+ * HONEST ABOUT THE SIZE OF THE WIN: this is a startup-parse and memory saving, not a smoothness fix.
+ * Stylesheet bulk was A/B'd on this hardware before and came back null for per-press cost — see the
+ * dist-tv-BASE / -ALL / -NOFAST builds. It is included because it is free and measurable, not
+ * because it is expected to move a frame time. */
+const MOBILE_MAX_PX = 1024;
+
+function tvCssDiet(): Plugin {
+  let removedRules = 0;
+  let removedMedia = 0;
+  return {
+    name: 'groloo-tv-css-diet',
+    /* `pre`, so this sees the raw stylesheet before Vite's own CSS pipeline (and, in TV mode,
+       Lightning CSS) gets it. */
+    enforce: 'pre',
+    apply: 'build',
+    transform(code, id) {
+      /* app.css ONLY. tv.css is the sheet written for this screen; running a diet over it would be
+         removing the thing being kept. */
+      if (!id.includes('app.css')) return null;
+      const root = postcss.parse(code, { from: id });
+      root.walkAtRules('media', (at) => {
+        const p = at.params;
+        if (/min-width/i.test(p)) return;
+        const m = p.match(/max-width:\s*(\d+)px/i);
+        if (m && Number(m[1]) <= MOBILE_MAX_PX) { removedMedia++; at.remove(); }
+      });
+      root.walkRules((rule) => {
+        if (!rule.selector.includes(':hover')) return;
+        const kept = rule.selectors.filter((s) => !s.includes(':hover'));
+        if (!kept.length) { removedRules++; rule.remove(); return; }
+        rule.selectors = kept;
+      });
+      this.info?.(`tv css diet: dropped ${removedRules} hover-only rules, ${removedMedia} mobile media blocks`);
+      return { code: root.toString(), map: null };
+    },
+  };
+}
 
 /* The urlPattern regexes below are written inline ON PURPOSE. workbox's generateSW mode
  * stringifies each urlPattern function straight into dist/sw.js, so the function body must be
@@ -52,9 +119,47 @@ import { VitePWA } from 'vite-plugin-pwa'
 const TV_TARGET = ['chrome87'];
 
 // https://vite.dev/config/
+/* ---- WHAT BUILD IS THIS, EXACTLY ------------------------------------------------------------
+ *
+ * THE PROBLEM THIS SOLVES, and it is not hypothetical. The packaged webOS app loads
+ * https://tv.groloo.com, which serves whatever was last DEPLOYED. A local build is served from this
+ * PC's LAN address. Both render the same app, the same rows, the same artwork — and a measurement
+ * taken against the wrong one is not merely useless, it is actively misleading, because it looks
+ * exactly like a change that did nothing. There is no way to tell the two apart from the screen.
+ *
+ * So the build stamps itself: the commit it came from, whether the tree was dirty when it was
+ * built, and when. `git describe`-style identity is deliberately NOT used — a dirty tree is the
+ * normal state during this work, and the flag matters more than the tag.
+ *
+ * Resolved at CONFIG time, not import time, so it is a literal in the bundle and costs nothing at
+ * runtime. Wrapped in try/catch because a build from a tarball with no .git must still succeed. */
+function buildStamp(mode: string) {
+  const run = (cmd: string) => {
+    try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
+    catch { return ''; }
+  };
+  const commit = run('git rev-parse --short HEAD') || 'nogit';
+  /* `--quiet` exits non-zero when the tree differs, which `run` turns into ''. Both tracked-file
+   * changes and staged ones count; untracked files deliberately do not, since new measurement
+   * scripts appearing should not mark the APP as modified. */
+  const dirty = run('git diff --quiet && git diff --cached --quiet && echo clean') !== 'clean';
+  return {
+    commit,
+    dirty,
+    at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    mode,
+  };
+}
+
 export default defineConfig(({ mode }) => ({
+  /* Injected as literals; see buildStamp above for why this exists at all. */
+  define: {
+    __GROLOO_BUILD__: JSON.stringify(buildStamp(mode)),
+  },
   plugins: [
     react(),
+    /* TV ONLY, so the website's stylesheet is provably untouched. See tvCssDiet above. */
+    ...(mode === 'tv' ? [tvCssDiet()] : []),
     VitePWA({
       // A new build's service worker takes over on the next load rather than waiting for
       // every tab to close. That also means a bad deploy can be undone by shipping a good
@@ -97,10 +202,67 @@ export default defineConfig(({ mode }) => ({
          * it exists for AC-3/DTS files only, most visitors never open one, and forcing 32 MB
          * onto every first visit to serve a minority is the opposite of what lazy-loading
          * it in `lib/wasmAudio.ts` is for. Excluded here, fetched on demand. */
-        globIgnores: ['**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**', '**/ffmpeg/**'],
+        /* ---- WHAT A TELEVISION DOWNLOADS BEFORE IT CAN SHOW ANYTHING ----------------------------
+         *
+         * The precache is the app shell, and on the TV build it had quietly become the whole app:
+         * 50 entries, 1,903 KiB, fetched and stored before the first screen is usable. The largest
+         * single entry is the VideoPlayer chunk at 573 KB — a bundle nobody needs until they press
+         * OK on a stream, downloaded on every first launch and after every update, over whatever
+         * connection the set has.
+         *
+         * The route chunks below are all `React.lazy`, so nothing imports them at launch. Kept OUT
+         * of the precache and picked up by the hashed-asset runtime rule instead: the first time one
+         * is actually opened it is fetched once and cached forever, because the filename carries a
+         * content hash and therefore never changes meaning.
+         *
+         * DELIBERATELY STILL PRECACHED: `index`, `i18n` and `queries`. All three are on the launch
+         * path — the home screen cannot render without them — so excluding them would trade a
+         * smaller precache for a slower first paint, which is the opposite of the point.
+         *
+         * WEB IS UNCHANGED. A browser fetches these over a fast connection against a warm HTTP
+         * cache, and the offline story there is a nicety rather than the difference between an app
+         * that starts and one that does not. */
+        globIgnores: [
+          '**/demo.mp4', '**/og-image.jpg', '**/hls.min.js', '**/assets/heart/**', '**/ffmpeg/**',
+          ...(mode === 'tv' ? [
+            '**/build/VideoPlayer-*.js',
+            '**/build/Settings-*.js',
+            '**/build/Addons-*.js',
+            '**/build/Terms-*.js',
+            '**/build/Legal-*.js',
+            '**/build/Attributions-*.js',
+            '**/build/DeleteAccount-*.js',
+            '**/build/Link-*.js',
+            '**/build/Explore-*.js',
+            /* THE PERFORMANCE PROBE. It is a development tool that a normal launch never even
+             * fetches (main.tsx reads the flag before importing it), and precaching it would have
+             * every television download the one chunk it is guaranteed not to run. Caught by
+             * reading the generated manifest rather than by reasoning about it. */
+            '**/build/tvPerf-*.js',
+          ] : []),
+        ],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         runtimeCaching: [
+          {
+            /* THE LAZY ROUTE CHUNKS THE PRECACHE NO LONGER CARRIES (see globIgnores above).
+             *
+             * CacheFirst is the correct handler and the filename is why: everything under /build/
+             * carries a content hash, so a given URL's bytes can never change. There is nothing to
+             * revalidate — a new build produces a new name, which is a cache miss and a fresh
+             * download by construction. Checking the network first would spend a round trip on a
+             * television to re-confirm bytes that are immutable by definition.
+             *
+             * The expiry is a floor on storage, not a freshness policy: old hashes stop being
+             * requested the moment a new build ships, and this sweeps them up eventually. */
+            urlPattern: ({ url, sameOrigin }) => sameOrigin && /\/build\/.*\.(js|css)$/.test(url.pathname),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'groloo-lazy-chunks',
+              expiration: { maxEntries: 60, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
           {
             // Admin-curated. Try the network first so an admin edit still appears on the next
             // load exactly as the server's `no-cache` intends — but give up after 3s and serve
@@ -303,6 +465,33 @@ export default defineConfig(({ mode }) => ({
        * from groloo's host, which cannot reach the viewer's own 127.0.0.1. Shipping this
        * beyond dev needs a helper on the viewer's machine that sets permissive CORS itself —
        * see lib/streamingServer.ts. */
+      '/streaming-server': {
+        target: process.env.STREMIO_SERVER || 'http://127.0.0.1:11470',
+        changeOrigin: true,
+        rewrite: (p: string) => p.replace(/^\/streaming-server/, ''),
+      },
+    },
+  },
+  /* `vite preview` GETS THE SAME PROXY, and that is what makes a PRODUCTION build testable on the
+   * television at all.
+   *
+   * `server.proxy` applies to the dev server only, so `vite preview` served the built app with no
+   * `/api` route — every catalog call 404'd and the home screen came up with no rows. The failure
+   * looks like a broken build rather than a missing proxy, which is what made it worth writing
+   * down: the page renders, it is just empty.
+   *
+   * It matters because the dev server is NOT a place to judge performance — React's dev build is
+   * roughly 5x off on this hardware, and nearly all of the error is `jsxDEV` plus StrictMode
+   * double-rendering. Measuring a change means serving the real build, and serving the real build
+   * on the LAN means this. Point `APP_URL` in webos/index.html at this machine's `:4173`, run
+   * `npx vite preview --mode tv --host`, and the set loads the same bytes a user would. */
+  preview: {
+    proxy: {
+      '/api': {
+        target: process.env.API_PROXY || 'https://groloo-server.onrender.com',
+        changeOrigin: true,
+        secure: true,
+      },
       '/streaming-server': {
         target: process.env.STREMIO_SERVER || 'http://127.0.0.1:11470',
         changeOrigin: true,
