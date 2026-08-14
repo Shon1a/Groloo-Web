@@ -27,6 +27,35 @@ if (import.meta.env.MODE === 'tv') {
   import('./styles/tv.css');
 }
 
+/* THE PERFORMANCE PROBE, TV BUILD ONLY AND OFF UNLESS ASKED FOR. Same compile-time gate as the
+ * stylesheet above, so the website never contains the file at all. See lib/tvPerf.ts for what it
+ * measures and how to read it; in short, localStorage['groloo.perf'] = '1' then relaunch.
+ *
+ * THE FLAG IS READ HERE RATHER THAN INSIDE THE MODULE, and that is the whole point of the shape:
+ * asking `tvPerf.ts` whether it is wanted would mean FETCHING it on every launch to find out, which
+ * is exactly the launch-time request this app is trying not to make. Three property reads decide it,
+ * and the chunk stays on the server unless the answer is yes.
+ *
+ * NOT AWAITED. The import resolves within a few milliseconds of boot, long before a remote can reach
+ * the first keypress, and the probe scores presses from `event.timeStamp` rather than from whenever
+ * it happened to start listening — so nothing is lost by it arriving late. */
+if (import.meta.env.MODE === 'tv') {
+  /* Checked OUTSIDE the try, because it is the carrier the CDP driver uses: it arms a cold launch
+   * through Page.addScriptToEvaluateOnNewDocument, and a set whose localStorage throws is exactly
+   * the set worth measuring. Folding it in with the storage read would lose it on that set. */
+  let perfMode: '1' | '2' | '' = window.__GROLOO_PERF__ === true ? '1' : '';
+  if (!perfMode) {
+    try {
+      const q = new URLSearchParams(location.search).get('perf');
+      const s = q === '1' || q === '2' ? q : localStorage.getItem('groloo.perf');
+      if (s === '1' || s === '2') perfMode = s;
+    } catch { /* no localStorage (private mode); the probe simply stays off */ }
+  }
+  if (perfMode) {
+    void import('./lib/tvPerf').then((m) => m.startTvPerf(perfMode as '1' | '2'));
+  }
+}
+
 /* Last-resort logging for the two failure classes a React boundary cannot see: throws
  * from outside the render cycle (event handlers, timers, media callbacks) and promise
  * rejections nobody awaited. Deliberately console-only — no telemetry dependency and no
