@@ -121,7 +121,12 @@ const TRAILER_PREFETCH_SPAN = 1;
  * the letterboxing IMDb bakes into its files, which means the video is sampled at more than the
  * billboard's width — so the rendition has to be chosen against the magnified size, not the box.
  * Wrong here and the picture goes soft for a reason nothing on screen explains. */
-const BILLBOARD_TRAILER_CROP = 1.35;
+/** 1 — the preview is no longer magnified; see `.tv-spot-trailer-slot video` in tv.css for what the
+ *  1.35 was removing and what removing it costs. Kept as a named constant rather than deleted
+ *  because it must move WITH that rule: it tells useVideoTrailer how much CSS blows the video up
+ *  over its box, so a crop that came back here and not there would pick a rendition too small for
+ *  the pixels actually on screen. */
+const BILLBOARD_TRAILER_CROP = 1;
 
 /* How far the billboard's picture drifts while it changes. MEASURED, not chosen: 24px of travel on
  * a 753px card in the reference. The full derivation is in the parallax effect below. */
