@@ -95,28 +95,29 @@ export function trailerStartOffset(runtime?: number | null): number {
  * franchise recap described above — fifty seconds of it on Spider-Man: Brand New Day — and that
  * is the honest limit of the compromise. Skipping those means the deep seek, and the deep seek
  * means a preview that arrives after the viewer has moved on. */
-/* NOW 0 — THE SHELF STARTS AT BYTE ZERO, AND THE REASON IS THE TELEVISION.
+/* 7 — PAST THE BANNERS, AND CHOSEN AGAINST THE COST OF GETTING THERE.
  *
- * Everything above is still true on a fast connection, and it is why this was 10: ten seconds in
- * is "a few hundred KB from the start of the same sequential download", which on a PC is free.
- * On the actual set it is not. Reported plainly by the user: the preview arrives noticeably later
- * on the television than on a PC running the identical build. The dwell is the same on both, the
- * decode is not the difference — the difference is that the TV has to pull ten seconds of a
- * progressive MP4 over its own network before it can present a frame at that offset, and a PC
- * has already done so before the seek is asked for.
+ * THIS NUMBER HAS BEEN 10, THEN 0, AND IS NOW 7, so the whole trade is worth having in one place.
  *
- * At 0 there is no offset to reach: the first frame in the file is the first frame it can show,
- * measured at ~0.4s once the index arrives. That is the largest remaining TV-specific saving and
- * it does not trade any smoothness for it — no extra mount, no extra decode, simply not waiting
- * for bytes nobody looks at.
+ *   THE COST OF A LARGE OFFSET IS A TELEVISION-ONLY COST. The file is a progressive MP4 fetched
+ *   sequentially, so a frame at N seconds cannot be presented until roughly N seconds of it have
+ *   arrived. On a PC that is instant and the offset looks free; on the set it is the difference
+ *   the user reported — the same build, visibly slower to start on the television. That is why 10
+ *   went to 0.
  *
- * WHAT IT COSTS, stated honestly because it is a real regression in one dimension: the preview
- * opens on whatever the trailer opens on, which is usually a distributor logo and sometimes a
- * certification card. That is the complaint this constant was introduced to answer. The judgement
- * is that a second of a logo is a smaller price than a preview that arrives after the viewer has
- * moved on — a trailer nobody waits for is worth nothing at all. Put back to 10 if the logos
- * prove worse in practice than the wait; both halves of that trade are written down here. */
-export const INTRO_SKIP = 0;
+ *   THE COST OF ZERO IS WHAT THE OFFSET EXISTED FOR. A trailer opens on a distributor logo and
+ *   often a certification card, so the shelf opened on a banner every single time.
+ *
+ * 7 IS THE COMPROMISE, and two things have made it much cheaper than the old 10 was. The shelf now
+ * caps its rendition at 720p, roughly halving the bytes per second of video, and 7 is under the
+ * CHEAP_SEEK_MAX below, so `preload: 'auto'` is kept and the seek lands inside a download that is
+ * already running rather than provoking a fresh range request. So the wait is for ~7 seconds of a
+ * 720p file, not ~10 of a 1080p one — a little over a third of what it was.
+ *
+ * IT IS STILL NOT FREE, and if the preview again feels slow to appear this is the first thing to
+ * lower: it is the only remaining term that scales with the network. The banner is the thing being
+ * bought with it. */
+export const INTRO_SKIP = 7;
 /* Below this, `preload: 'auto'` is the right call — the seek target is inside the bytes an eager
  * preload was fetching anyway, so eagerness pays for the seek instead of being thrown away by it.
  * Above it, 'auto' would download a run of file we are about to abandon (see `preload` below). */
