@@ -4,7 +4,7 @@ import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useImdbTrailer } from '../lib/queries';
+import { useImdbTrailer, useMeta } from '../lib/queries';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { FadeBg, FadeImg } from './FadeArt';
@@ -159,20 +159,46 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
   const trailerSlotRef = useRef<HTMLDivElement>(null);
   const [dwelt, setDwelt] = useState<MediaItem | null>(null);
   const [trailerFailed, setTrailerFailed] = useState(false);
+  const [metaImdb, setMetaImdb] = useState<string | undefined>(undefined);
   const restingOn: MediaItem | undefined = list[active];
 
   useEffect(() => {
     setDwelt(null);
     setTrailerFailed(false);
-    if (!heroTrailers || !focused || !onScreen || reduceMotion || !restingOn) return;
+    setMetaImdb(undefined);
+    /* NOT GATED ON `reduceMotion`, deliberately, even though the rotation above is. The rows do not
+     * gate their preview on it, and a second surface answering the same setting differently is how
+     * a feature becomes untestable — today already produced three independent ways for this trailer
+     * to be silently off, and none of them announced themselves. One switch governs both surfaces:
+     * `previewsAllowed`, which is the viewer's own toggle. */
+    if (!heroTrailers || !focused || !onScreen || !restingOn) return;
     const id = window.setTimeout(() => setDwelt(restingOn), previewDwellMs());
     return () => window.clearTimeout(id);
     // Keyed on the title's id rather than the object: `list` is rebuilt on every render of Home,
     // so an object dependency would re-arm this timer forever and it would never fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heroTrailers, focused, onScreen, reduceMotion, restingOn?.id]);
+  }, [heroTrailers, focused, onScreen, restingOn?.id]);
 
-  const heroImdb = dwelt && !trailerFailed ? dwelt.imdb : undefined;
+  /* ---- THE FEATURED FEED CARRIES NO IMDb ID, WHICH IS WHY THIS EXISTS -------------------------
+   *
+   * `/api/home` answers `hero.results` with id, type, title, year, rating, genre, poster, backdrop,
+   * overview, heroFocusX/Y and titleLogo — and no `imdb`. Checked against the live endpoint: 0 of 8.
+   * The row feeds DO carry one, which is why the rows worked immediately and this card did not:
+   * without an IMDb id there is nothing to ask /api/imdb-trailer for, so the query stayed disabled
+   * and no trailer ever mounted.
+   *
+   * `/api/meta/:id` returns it, so the id is fetched on demand — and only on demand. The request
+   * goes out for a card that has DWELT, never for one merely rotating past, which keeps this to at
+   * most one lookup per title actually rested on. This is the same fallback TvSpotlight runs for
+   * the same reason, and its header already names this card as a feed that needs it. */
+  const wantImdbLookup = !!dwelt && !dwelt.imdb && !metaImdb && !trailerFailed;
+  const { data: heroMeta } = useMeta(wantImdbLookup ? dwelt?.id : undefined, dwelt?.type);
+  useEffect(() => {
+    if (typeof heroMeta?.imdb === 'string' && !dwelt?.imdb) setMetaImdb(heroMeta.imdb);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heroMeta?.imdb, dwelt?.id]);
+
+  const heroImdb = dwelt && !trailerFailed ? (dwelt.imdb || metaImdb) : undefined;
   const heroTrailer = useImdbTrailer(heroImdb);
   const heroVideoUrl = trailerFailed ? undefined : (heroTrailer.data?.url || undefined);
 
