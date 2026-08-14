@@ -1019,12 +1019,21 @@
    see the head of TvSpotlight.tsx — and with it a cross-origin player, its JS, and its decoder,
    on the hardware least able to afford any of the three. What is left is a <video> we own.
 
-   THE CROP SURVIVES, and its reason is the one that was always the real one: it hides LETTERBOXING
-   BAKED INTO THE FILE. IMDb encodes every trailer into a 16:9 container, so a 2.39:1 one arrives
-   with black bands top and bottom as picture content, which no object-fit can reach — and a
-   billboard is not the place for a black band above the wordmark. The tie to the embed's own 1.35
-   (a row used to mix the two engines title by title, so the framing had to match) is no longer
-   what pins the number, but the number is unchanged: it is the framing every row already has.
+   THE CROP IS GONE — scale(1). Removed on request: the preview now plays at its true size, framed
+   the way the file is framed.
+
+   WHAT IT WAS FOR, because this is a trade and not a cleanup. IMDb encodes every trailer into a
+   16:9 container, so a 2.39:1 one arrives with black bands top and bottom AS PICTURE CONTENT,
+   which no object-fit can reach. 1.35 was not a taste decision, it was the arithmetic that removes
+   exactly those bands: a 2.39 image inside a 1.78 frame occupies 1.78/2.39 = 74.4% of the height,
+   and 1/0.744 = 1.345. So on a scope trailer the crop hid the bars precisely, and the cost was
+   that a trailer ALREADY 16:9 — most series, most teasers — was magnified 35% for nothing and lost
+   a third of its frame off the edges.
+
+   So neither value is free: 1.35 over-crops everything shot for television, and 1 shows black bars
+   on everything shot wide. There is no way to tell which a file is without reading its pixels, and
+   the video is cross-origin, so a canvas read is out. If the bars turn out to be the worse of the
+   two, the number to restore is 1.35 and the reasoning is right here.
 
    IT IS ALSO NOT WHAT COSTS THE DECODE, WHICH IS WORTH RECORDING SO IT IS NOT "FIXED" LATER. The
    crop feeds `cropScale` in TvSpotlight, which multiplies the measured box before a rendition is
@@ -1036,7 +1045,7 @@
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
-  transform: scale(1.35);
+  transform: scale(1);
   transform-origin: center;
   border: 0;
   background: #000;
