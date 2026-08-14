@@ -1,4 +1,7 @@
 import { useEffect } from 'react';
+import { pageY, pageMax, setPageY, beginPageMove, endPageMove } from '../lib/tvPageScroll';
+import { stepRow, prepareRowWindow, rowIndexOf } from '../lib/tvRowRegistry';
+import { setActiveRowIndex } from '../lib/tvRowWindow';
 
 /* REMOTE / D-PAD NAVIGATION — mounted only in the `--mode tv` build. A TV has no pointer, so
  * this turns the four arrow keys (the remote's directional pad) into spatial focus movement:
@@ -152,7 +155,7 @@ function pick(dir: Dir, from: DOMRect, cands: Cand[]): HTMLElement | null {
  * It stays cheap: one scrollTo per frame inside a single rAF, nothing else touched. */
 /** Breathing room kept between the selection and the edge of a scrolling modal pane. */
 const TV_EDGE_PAD = 56;
-const SCROLL_MS = 420;        // a settled, deliberate move
+const SCROLL_MS = 280;        // a settled, deliberate move — see the 60fps note below
 /* SCROLL_MS_CHAINED (260ms of the SAME settling curve) is gone. Keeping the curve's shape for a
  * chained scroll is exactly what made a hold read as a series of arrivals; see below. */
 /* ---- A HELD KEY GLIDES DOWN THE PAGE, AT THE SAME PACE AS A ROW WALKS SIDEWAYS -------------
@@ -174,6 +177,26 @@ const SCROLL_MS = 420;        // a settled, deliberate move
 const HELD_ROW_MIN_MS = 220;
 /** Beyond this gap the remote was tapped, not held. Mirrors SLIDE_CHAIN_WINDOW in TvSpotlight. */
 const CHAIN_WINDOW_MS = 320;
+/* ---- HELD STAYS AT 260, AND THE 140ms TARGET IS DECLINED ON PURPOSE -------------------------
+ *
+ * The brief for this pass asks for ~140ms on repeated/held input. The tap durations above did come
+ * down to their targets, because the 60fps measurement supports them. This one does not, and the
+ * reason is a constraint the target cannot be met without breaking:
+ *
+ *   A HELD DURATION MUST EXCEED THE HELD PACE. Presses arrive every HELD_ROW_MIN_MS (220ms). A
+ *   260ms animation is therefore always still in flight when the next press re-aims it, which is
+ *   what makes a hold one continuous glide. A 140ms animation would FINISH, the page would sit
+ *   still for 80ms, and the next press would start it again from a standstill — a series of little
+ *   arrivals, which is precisely the "it steps, it doesn't glide" defect this pacing was built to
+ *   fix.
+ *
+ *   MEETING 140ms HONESTLY WOULD MEAN DROPPING THE PACE TO 140 TOO, and that is the change the pace
+ *   exists to prevent: the set repeats a held key about every 120ms, so an unpaced hold moved ~8
+ *   rows a second and crossed the whole home screen in about two. 140ms is 7 rows a second — the
+ *   same problem, one row slower.
+ *
+ * So: 220 pace, 260 duration, unchanged. If a faster hold is wanted as a matter of feel rather than
+ * of frames, BOTH numbers move together and the pair is the thing to try, not this one alone. */
 const HELD_SCROLL_MS = 260;
 /* ---- THE CURVE STARTS SLOW NOW, AND THAT REVERSES WHAT THE NOTE ABOVE SAYS ------------------
  *
@@ -196,7 +219,57 @@ const HELD_SCROLL_MS = 260;
  * the eye reads a shape rather than a snap. If this device ever holds 60fps through a row change,
  * the original reasoning becomes right again — the curve is the thing to revisit, not the
  * duration. */
-const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2);
+
+/* ---- IT DOES HOLD 60FPS NOW, SO THE CONDITION THE NOTE ABOVE SET HAS BEEN MET ----------------
+ *
+ * That note ends by naming the exact circumstance under which to come back here. Measured on the
+ * same television, previews at the new dwell, home screen warm — the MEDIAN FRAME DURING A ROW
+ * MOVE IS 16.7ms, with a p90 of 33.4ms. Sixty frames a second, not the twenty-six the paragraph
+ * above was written against. (33ms medians still appear, but only in the blocks where a trailer
+ * preview mounts, which is a media-pipeline cost with no easing to fix — see tvPreviewPolicy.)
+ *
+ * TWO THINGS FOLLOW, and only two:
+ *
+ *   THE CURVE GOES BACK TO A FRONT-LOADED EASE-OUT. The whole case for `easeInOutCubic` was that a
+ *   front-loaded curve at 26fps put 112-177px of an 876px journey into the FIRST visible frame. At
+ *   60fps that same curve's first frame is a fraction of the distance, so the lurch it was avoiding
+ *   cannot happen, and the property it was paying for — an answer that BEGINS as movement — is what
+ *   an ease-out gives most directly.
+ *
+ *   THE DURATION COMES DOWN. 420ms at 26fps was ~11 painted frames and needed the length to read as
+ *   a shape at all. At 60fps, 280ms is ~17 painted frames — more of them, in two thirds of the time.
+ *   A 420ms move is simply slower than the hardware now requires.
+ *
+ * WHY A REAL BEZIER SOLVER RATHER THAN A ONE-LINE APPROXIMATION. The strip in tv.css animates on a
+ * literal `cubic-bezier(.22, 1, .36, 1)`, and the page has to move on the SAME curve or a diagonal
+ * move — which is every move that changes row while the strip is still settling — travels on two
+ * different shapes at once. `easeOutQuart` is close to that bezier and not equal to it (0.684 vs
+ * ~0.72 a quarter of the way through), and "close" is what makes two animations look like a fault
+ * rather than a pair. Newton-Raphson converges in two or three iterations here; it is a handful of
+ * multiplications on a path that already does more than this per frame. */
+const BEZIER = { x1: 0.22, y1: 1, x2: 0.36, y2: 1 };
+const bezierAxis = (t: number, a: number, b: number) => {
+  const u = 1 - t;
+  return 3 * u * u * t * a + 3 * u * t * t * b + t * t * t;
+};
+const bezierSlope = (t: number, a: number, b: number) => {
+  const u = 1 - t;
+  return 3 * u * u * (a) + 6 * u * t * (b - a) + 3 * t * t * (1 - b);
+};
+/** `cubic-bezier(.22, 1, .36, 1)` evaluated for a progress fraction — the same curve tv.css uses. */
+const tvEase = (p: number): number => {
+  if (p <= 0) return 0;
+  if (p >= 1) return 1;
+  let t = p;
+  for (let i = 0; i < 4; i++) {
+    const x = bezierAxis(t, BEZIER.x1, BEZIER.x2) - p;
+    if (Math.abs(x) < 1e-4) break;
+    const d = bezierSlope(t, BEZIER.x1, BEZIER.x2);
+    if (Math.abs(d) < 1e-6) break;
+    t -= x / d;
+  }
+  return bezierAxis(t, BEZIER.y1, BEZIER.y2);
+};
 
 /* A scroll CONTAINER, not necessarily the page. `null` means the window; anything else is an
  * element with its own overflow — in practice `.m-scroll`, the detail overlay's scrolling pane.
@@ -204,12 +277,16 @@ const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) *
  * to the window had nothing to scroll once a title was open: focus moved to the sources list or
  * the cast column and the pane stayed exactly where it was, leaving the selection off-screen.
  * Same easing, same guard, same feel — only the surface being moved changes. */
+/* `null` USED TO MEAN "THE WINDOW" AND NOW MEANS "THE PAGE", which is the same thing on the web and
+ * a compositor transform on the television. The indirection is worth one line each because
+ * `window.scrollTo` measured at ~37ms of the ~71ms of JavaScript a vertical press costs on the
+ * reference set — see lib/tvPageScroll.ts for the whole of that argument. Nothing else in this file
+ * changes: a transform is reported by getBoundingClientRect, so all the geometry below is still
+ * reading true positions. */
 type Scrollable = HTMLElement | null;
-const scrollPos = (c: Scrollable) => (c ? c.scrollTop : window.scrollY);
-const scrollMax = (c: Scrollable) => (c
-  ? Math.max(0, c.scrollHeight - c.clientHeight)
-  : Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
-const scrollSet = (c: Scrollable, v: number) => { if (c) c.scrollTop = v; else window.scrollTo(0, v); };
+const scrollPos = (c: Scrollable) => (c ? c.scrollTop : pageY());
+const scrollMax = (c: Scrollable) => (c ? Math.max(0, c.scrollHeight - c.clientHeight) : pageMax());
+const scrollSet = (c: Scrollable, v: number) => { if (c) c.scrollTop = v; else setPageY(v); };
 
 /** The nearest ancestor that actually scrolls, stopping at (and including) `boundary`. */
 function scrollParent(el: HTMLElement, boundary: HTMLElement | null): Scrollable {
@@ -259,6 +336,10 @@ function makeScroller() {
     if (raf) cancelAnimationFrame(raf);
     if (guard) window.clearTimeout(guard);
     raf = 0; guard = 0; running = false;
+    /* Drop the compositor promotion the moment the page stops. Exactly one surface is promoted and
+     * only while it is actually moving — a `will-change` left on permanently would pin a layer the
+     * height of the entire home page on a set with 1-1.5GB of RAM. No-op on the web. */
+    endPageMove();
   };
 
   const to = (container: Scrollable, y: number, instant: boolean, held = false) => {
@@ -271,11 +352,12 @@ function makeScroller() {
     /* Held: constant velocity and a duration that outlives the pace, so consecutive presses chain
      * into one movement. Otherwise the settling curve, unchanged. */
     const dur = held ? HELD_SCROLL_MS : SCROLL_MS;
-    const ease = held ? ((t: number) => t) : easeInOutCubic;
+    const ease = held ? ((t: number) => t) : tvEase;
     const t0 = performance.now();
     if (raf) cancelAnimationFrame(raf);
     if (guard) window.clearTimeout(guard);
     running = true;
+    beginPageMove();
     const tick = (now: number) => {
       const p = Math.min(1, (now - t0) / dur);
       scrollSet(container, from + (target - from) * ease(p));
@@ -348,7 +430,7 @@ export default function TvSpatialNav() {
         || document.querySelector<HTMLElement>('.tv-spot-hero')
         || document.querySelector<HTMLElement>('.poster')
         || document.querySelector<HTMLElement>('.tv-nav-item');
-      start?.focus();
+      start?.focus({ preventScroll: true });
     }, 600);
 
     /* ---- OPENING AND CLOSING A LAYER -------------------------------------------------------
@@ -511,10 +593,99 @@ export default function TvSpatialNav() {
       return !player.classList.contains('tv-nav');
     };
 
+    /* ---- WHERE A VERTICAL MOVE ACTUALLY PUTS THE PAGE ------------------------------------
+     * Extracted so the row fast path and the geometric search share ONE landing. Two copies of
+     * the parking rules would drift, and the parking is the half that decides whether a move
+     * feels deliberate or arbitrary — every line below was arrived at against the television. */
+    const land = (next: HTMLElement, dir: Dir, held: boolean): boolean => {
+        /* preventScroll IS THE WHOLE REASON UP FELT WORSE THAN DOWN.
+         *
+         * focus() scrolls the element into view by itself, synchronously, with no animation —
+         * and it honours scroll-margin, so it lands in very nearly the spot we are about to
+         * animate to. Measured on a 526px row pitch:
+         *
+         *   DOWN — the browser snapped 176px (aligning the row's bottom edge) and our ease ran
+         *          the remaining 350px in the same direction. Barely visible.
+         *   UP   — the browser snapped 701px at once, OVERSHOOTING the parked position by 175px
+         *          (it aligns the row's top edge, we want it lower), and our ease then crawled
+         *          back DOWN 175px. A hard jump followed by a wobble in the opposite direction.
+         *
+         * Suppressing it makes every move ours, in one direction, on one curve. */
+        next.focus({ preventScroll: true });
+        /* PREPARE THE ROWS AHEAD, DURING IDLE. `content-visibility: auto` defers a row's style,
+         * layout, paint and raster until it nears the viewport — and then charges all of it to the
+         * frames in which it arrives, which are the frames of this very animation. Traced on the
+         * set, that is the entire difference between vertical (worst 183ms, GPU busy 177-272ms) and
+         * horizontal (worst 66ms, nothing over 67ms) on the same build. This schedules the window;
+         * it never does the work here. See prepareRowWindow. */
+        prepareRowWindow(next);
+        /* And tell the row window which row is current. Deferred past the scroll ease inside
+         * setActiveRowIndex, so the React commit that changes which rows hold artwork lands after
+         * the movement rather than in the middle of it. No-op unless the experiment is on. */
+        setActiveRowIndex(rowIndexOf(next));
+        /* PARKING, NOT NUDGING. Moving between ROWS scrolls the new row to a fixed spot just
+         * under the top bar (its scroll-margin-top, set in tv.css) rather than shoving it the
+         * minimum distance into view — 'nearest' would leave a tall row hanging off the bottom
+         * of the screen, so the row you just moved to would sit somewhere different every time.
+         * Only .tv-spot-hero gets this: 'start' on a hero action button or a nav item would
+         * scroll the featured billboard off the top to park a 54px button.
+         *
+         * Everything else stays 'nearest', including every LEFT/RIGHT move — walking a row must
+         * never scroll the page vertically. */
+        const vertical = dir === 'up' || dir === 'down';
+        /* What to PARK, which is not always what took focus. A row billboard parks itself. The
+         * featured hero parks its whole SECTION — its focusable parts are two 54px buttons at
+         * the very bottom of a 670px card, so parking the button would leave the billboard
+         * almost entirely above the top of the screen. Coming up out of the first row should
+         * restore the hero exactly as it looks when the page is at rest. */
+        const park: HTMLElement | null = next.classList.contains('tv-spot-hero')
+          ? next
+          : next.closest<HTMLElement>('.tv-hero');
+        const r = next.getBoundingClientRect();
+        if (vertical && next.closest('.tv-topnav')) {
+          // The bar is fixed, so nothing would scroll — but reaching it means "take me to the
+          // top", and leaving the page half way down behind a menu is not that.
+          scroller.to(null, 0, !smoothScroll);
+        } else if (vertical && park) {
+          const pr = park === next ? r : park.getBoundingClientRect();
+          scroller.to(null, pageY() + pr.top - scrollMarginTop(park), !smoothScroll, held);
+        } else {
+          // Nudge-into-view only, and on the same easing so it never feels like a different app.
+          // Both edges read the element's own scroll-margin now — see scrollMarginBottom for the
+          // half of that which used to be a constant.
+          const overTop = r.top - scrollMarginTop(next);
+          const overBottom = r.bottom + scrollMarginBottom(next) - window.innerHeight;
+          if (overTop < 0) scroller.to(null, pageY() + overTop, !smoothScroll, held);
+          else if (overBottom > 0) scroller.to(null, pageY() + overBottom, !smoothScroll, held);
+          // horizontal clipping (a rail scrolled sideways) is still the browser's job
+          next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+      return true;
+    };
+
     /** One step of focus movement in `dir`. Returns whether it consumed the input. */
     const move = (dir: Dir, held = false): boolean => {
       const ae = document.activeElement as HTMLElement | null;
       const layer = topLayer();
+
+      /* ---- THE PLAIN CASE, ANSWERED WITHOUT MEASURING THE PAGE ---------------------------------
+       *
+       * Row to row is the overwhelming majority of vertical presses and the only direction that pays
+       * for geometry: 27.3 `getBoundingClientRect` calls per press against 0.0 walking along a row.
+       * All of that work exists to discover something the DOM already knows — which row comes next —
+       * so when focus is on a row and the press is up or down, the register answers from document
+       * order and no layout is read at all.
+       *
+       * IT IS A FAST PATH, NOT A REPLACEMENT, and `stepRow` returns null for everything it cannot
+       * honestly answer: a modal is open, focus is on the featured hero or the top bar, the step
+       * would run off either end of the list, or the destination row has not got a billboard yet.
+       * Every one of those falls straight through to the geometric search below, unchanged — which
+       * is what keeps the irregular screens (settings, the detail sheet, the player's control bar)
+       * working exactly as they did. The landing is shared, so a fast move parks identically. */
+      if (!layer && (dir === 'up' || dir === 'down')) {
+        const stepped = stepRow(ae, dir === 'down' ? 1 : -1);
+        if (stepped) return land(stepped, dir, held);
+      }
 
       // A modal scopes the remote to itself — see topLayer(). No top-bar special-casing below
       // is needed in that branch: the bar is behind the overlay and out of the pool entirely.
@@ -523,7 +694,7 @@ export default function TvSpatialNav() {
       /* The focused element's rect comes out of the pool it is already in, so the "where am I"
        * read is the same measurement as the "where is everything else" one. */
       const curCand = ae ? cands.find((c) => c.el === ae) : undefined;
-      if (!curCand) { cands[0].el.focus(); return true; }
+      if (!curCand) { cands[0].el.focus({ preventScroll: true }); return true; }
       const cur = curCand.el;
 
       if (layer) {
@@ -605,60 +776,7 @@ export default function TvSpatialNav() {
         const active = document.querySelector<HTMLElement>('.tv-nav-item.active');
         if (active) next = active;
       }
-      if (next) {
-        /* preventScroll IS THE WHOLE REASON UP FELT WORSE THAN DOWN.
-         *
-         * focus() scrolls the element into view by itself, synchronously, with no animation —
-         * and it honours scroll-margin, so it lands in very nearly the spot we are about to
-         * animate to. Measured on a 526px row pitch:
-         *
-         *   DOWN — the browser snapped 176px (aligning the row's bottom edge) and our ease ran
-         *          the remaining 350px in the same direction. Barely visible.
-         *   UP   — the browser snapped 701px at once, OVERSHOOTING the parked position by 175px
-         *          (it aligns the row's top edge, we want it lower), and our ease then crawled
-         *          back DOWN 175px. A hard jump followed by a wobble in the opposite direction.
-         *
-         * Suppressing it makes every move ours, in one direction, on one curve. */
-        next.focus({ preventScroll: true });
-        /* PARKING, NOT NUDGING. Moving between ROWS scrolls the new row to a fixed spot just
-         * under the top bar (its scroll-margin-top, set in tv.css) rather than shoving it the
-         * minimum distance into view — 'nearest' would leave a tall row hanging off the bottom
-         * of the screen, so the row you just moved to would sit somewhere different every time.
-         * Only .tv-spot-hero gets this: 'start' on a hero action button or a nav item would
-         * scroll the featured billboard off the top to park a 54px button.
-         *
-         * Everything else stays 'nearest', including every LEFT/RIGHT move — walking a row must
-         * never scroll the page vertically. */
-        const vertical = dir === 'up' || dir === 'down';
-        /* What to PARK, which is not always what took focus. A row billboard parks itself. The
-         * featured hero parks its whole SECTION — its focusable parts are two 54px buttons at
-         * the very bottom of a 670px card, so parking the button would leave the billboard
-         * almost entirely above the top of the screen. Coming up out of the first row should
-         * restore the hero exactly as it looks when the page is at rest. */
-        const park: HTMLElement | null = next.classList.contains('tv-spot-hero')
-          ? next
-          : next.closest<HTMLElement>('.tv-hero');
-        const r = next.getBoundingClientRect();
-        if (vertical && next.closest('.tv-topnav')) {
-          // The bar is fixed, so nothing would scroll — but reaching it means "take me to the
-          // top", and leaving the page half way down behind a menu is not that.
-          scroller.to(null, 0, !smoothScroll);
-        } else if (vertical && park) {
-          const pr = park === next ? r : park.getBoundingClientRect();
-          scroller.to(null, window.scrollY + pr.top - scrollMarginTop(park), !smoothScroll, held);
-        } else {
-          // Nudge-into-view only, and on the same easing so it never feels like a different app.
-          // Both edges read the element's own scroll-margin now — see scrollMarginBottom for the
-          // half of that which used to be a constant.
-          const overTop = r.top - scrollMarginTop(next);
-          const overBottom = r.bottom + scrollMarginBottom(next) - window.innerHeight;
-          if (overTop < 0) scroller.to(null, window.scrollY + overTop, !smoothScroll, held);
-          else if (overBottom > 0) scroller.to(null, window.scrollY + overBottom, !smoothScroll, held);
-          // horizontal clipping (a rail scrolled sideways) is still the browser's job
-          next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        }
-        return true;
-      }
+      if (next) return land(next, dir, held);
       return false;
     };
 
