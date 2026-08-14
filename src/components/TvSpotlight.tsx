@@ -121,12 +121,41 @@ const TRAILER_PREFETCH_SPAN = 1;
  * the letterboxing IMDb bakes into its files, which means the video is sampled at more than the
  * billboard's width — so the rendition has to be chosen against the magnified size, not the box.
  * Wrong here and the picture goes soft for a reason nothing on screen explains. */
-/** 1 — the preview is no longer magnified; see `.tv-spot-trailer-slot video` in tv.css for what the
- *  1.35 was removing and what removing it costs. Kept as a named constant rather than deleted
- *  because it must move WITH that rule: it tells useVideoTrailer how much CSS blows the video up
- *  over its box, so a crop that came back here and not there would pick a rendition too small for
- *  the pixels actually on screen. */
-const BILLBOARD_TRAILER_CROP = 1;
+/* ---- HOW MUCH TO MAGNIFY A PREVIEW, WHICH DEPENDS ON WHAT IT IS ------------------------------
+ *
+ * IMDb encodes every trailer into a 16:9 container, so what arrives depends on how the thing was
+ * shot, and the two cases want opposite treatment:
+ *
+ *   LIVE ACTION IS USUALLY SCOPE. A 2.39:1 image inside a 1.78 frame fills 1.78/2.39 = 74.4% of
+ *   the height and the remaining quarter arrives as black bands — as PICTURE CONTENT, pixels in
+ *   the file, which no object-fit can reach. 1/0.744 = 1.345, so 1.35 removes exactly those bands.
+ *
+ *   ANIME IS USUALLY 16:9 ALREADY. There are no bands to remove, and 1.35 would simply throw away
+ *   a third of the frame — which is what it was doing.
+ *
+ * WHY GENRE AND NOT SOMETHING BETTER. The honest answer is that nothing better is available here:
+ * the file is cross-origin, so its pixels cannot be read, and `videoWidth`/`videoHeight` report the
+ * 16:9 CONTAINER in both cases — the bands are inside the picture, so the dimensions are identical
+ * whether they are there or not. Genre is a proxy for how something was shot, and a decent one.
+ *
+ * WHERE THE PROXY IS WRONG, stated so it is recognised rather than rediscovered: a Western animated
+ * FEATURE (Pixar, Illumination) is tagged Animation and is usually scope, so it will keep its
+ * bands. Narrow this to `type` series as well if that turns out to matter more than anime films
+ * losing their framing — both are one predicate, and neither is measurable from here. */
+const TRAILER_CROP_LETTERBOXED = 1.35;
+const TRAILER_CROP_NATIVE = 1;
+
+/** True when a title is animated, which here means "probably framed 16:9 and not letterboxed".
+ *  Both shapes are handled because the feeds disagree: /api/home sends `genre` as a single string,
+ *  the typed model carries `genres` as an array, and an item can arrive with either. */
+function isAnimated(it: MediaItem | null | undefined): boolean {
+  if (!it) return false;
+  const hit = (s: unknown) => typeof s === 'string' && /animation|anime/i.test(s);
+  const bag = it as MediaItem & { genre?: string | string[] };
+  if (Array.isArray(bag.genres) && bag.genres.some(hit)) return true;
+  if (Array.isArray(bag.genre) && bag.genre.some(hit)) return true;
+  return hit(bag.genre);
+}
 
 /* How far the billboard's picture drifts while it changes. MEASURED, not chosen: 24px of travel on
  * a 753px card in the reference. The full derivation is in the parallax effect below. */
@@ -670,6 +699,15 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * IMDb's file, played by a <video> we own. There is no second engine any more — see the note
    * at the head of the file for why the embed went. */
   const armed = !!dwelt && rowTrailers;
+  /* Per TITLE, not per row: an Animation entry sitting in a mixed row still wants its own framing,
+   * and the row a thing appears in says nothing about how it was shot. See the crop constants. */
+  const trailerCrop = isAnimated(dwelt) ? TRAILER_CROP_NATIVE : TRAILER_CROP_LETTERBOXED;
+  /* Written to the node rather than held in state, and set on the SECTION so it inherits down to
+   * the slot: this changes at most once per dwell, long after the keypress it followed, and a
+   * re-render of the whole row to carry one number would be work the shelf cannot afford. */
+  useEffect(() => {
+    sectionRef.current?.style.setProperty('--sp-trailer-crop', String(trailerCrop));
+  }, [trailerCrop]);
   /* LATCHED, AND THE LATCH IS WHAT KEEPS THIS FROM OSCILLATING. Most cards carry their IMDb id,
    * but the ungated feeds (Upcoming, the Featured Hero) do not, and without one there is nothing
    * to ask /api/imdb-trailer with. Reading the id straight off `trailerMeta` would spin: an id
@@ -720,7 +758,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * playing the one the backend guessed at. The crop is the magnification in tv.css, and it
        * belongs in this number: a video blown up 1.35x is sampled at 1.35x its box. */
       renditions: imdbTrailer.data?.urls,
-      cropScale: BILLBOARD_TRAILER_CROP,
+      /* MUST BE THE SAME NUMBER THE STYLESHEET IS SCALING BY — it tells the engine how much CSS
+       * magnifies the video over its box, so a preview cropped 1.35x is sampled at 1.35x. The one
+       * value drives both, through `--sp-trailer-crop` below. */
+      cropScale: trailerCrop,
       /* 720p AND NO HIGHER, because on this shelf a preview that starts sooner beats a preview
        * that is sharper. The billboard was pulling the 1080p file on every rest — roughly twice
        * the bytes before a frame can be presented, on a surface the viewer is already waiting on
