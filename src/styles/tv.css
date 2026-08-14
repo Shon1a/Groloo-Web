@@ -1045,7 +1045,11 @@
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
-  transform: scale(1);
+  /* Set per TITLE by TvSpotlight, from its genre — 1.35 for live action, which is usually scope and
+     arrives with black bands baked in, and 1 for animation, which is usually 16:9 already and has
+     nothing to crop off. The fallback is the live-action case because most of the catalogue is.
+     Keep this in step with TRAILER_CROP_* there; the same number also sizes the rendition. */
+  transform: scale(var(--sp-trailer-crop, 1.35));
   transform-origin: center;
   border: 0;
   background: #000;
