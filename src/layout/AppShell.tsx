@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { registerPageTrack, resetPage } from '../lib/tvPageScroll';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
+import { API_BASE } from '../lib/api';
 import RailBar from '@/layout/RailBar';
 import TvTopNav from '../components/TvTopNav';
 import TvSpatialNav from '../components/TvSpatialNav';
@@ -56,7 +57,8 @@ export default function AppShell() {
   }, [user]);
 
   const go = (to: string) => {
-    if (to.startsWith('/admin')) { window.location.href = to; return; }
+    // /admin is served by the backend, on the API origin — see the note in Library.tsx.
+    if (to.startsWith('/admin')) { window.location.href = API_BASE + to; return; }
     if (GATED.includes(to) && !user) { openAuth(to); return; } // sign-in gate
     nav(to);
   };
