@@ -213,12 +213,17 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
       startAt: INTRO_SKIP,
       renditions: heroTrailer.data?.urls,
       /* NO CROP HERE, and unlike the rows it needs no genre test. This card is far wider than 16:9
-       * — `clamp(340px, 62vh, 720px)` tall against the full width of the screen — so `object-fit:
+       * — `clamp(420px, 78vh, 900px)` tall against the full width of the screen — so `object-fit:
        * cover` is already discarding more top and bottom than any baked-in letterbox occupies. A
        * magnification on top of that would only throw away picture the crop has already removed. */
       cropScale: 1,
-      /* Bigger box than a row billboard, so it earns a wider file — but still capped, because this
-       * is the surface a viewer arrives on and time to first frame is what is being protected. */
+      /* 1080p, ALWAYS, when the title has one. This card is the full width of the screen and now
+       * most of its height, which is the one surface where the row preview's "a preview is
+       * decoration in a small box, buy the cheap file" reasoning stops being true — a 720p file
+       * stretched across a 10-foot panel is visibly soft, and it is the first thing a viewer sees.
+       * The floor forces it whatever the box measures; the matching ceiling stops it climbing past
+       * 1080p on a 4K panel, where the extra bytes would only cost time to first frame. */
+      minRenditionPx: 1920,
       maxRenditionPx: 1920,
       onFail: () => setTrailerFailed(true),
     },
