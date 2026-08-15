@@ -212,19 +212,29 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
       mountDelay: 0,
       startAt: INTRO_SKIP,
       renditions: heroTrailer.data?.urls,
-      /* NO CROP HERE, and unlike the rows it needs no genre test. This card is far wider than 16:9
-       * — `clamp(420px, 78vh, 900px)` tall against the full width of the screen — so `object-fit:
-       * cover` is already discarding more top and bottom than any baked-in letterbox occupies. A
-       * magnification on top of that would only throw away picture the crop has already removed. */
-      cropScale: 1,
-      /* 1080p, ALWAYS, when the title has one. This card is the full width of the screen and now
-       * most of its height, which is the one surface where the row preview's "a preview is
-       * decoration in a small box, buy the cheap file" reasoning stops being true — a 720p file
-       * stretched across a 10-foot panel is visibly soft, and it is the first thing a viewer sees.
-       * The floor forces it whatever the box measures; the matching ceiling stops it climbing past
-       * 1080p on a 4K panel, where the extra bytes would only cost time to first frame. */
-      minRenditionPx: 1920,
-      maxRenditionPx: 1920,
+      /* ---- IT DOES CROP, AND THE ARITHMETIC IS WHY ---------------------------------------------
+       *
+       * This used to be 1, on the reasoning that a card far wider than 16:9 has `object-fit: cover`
+       * already throwing away more top and bottom than a baked-in letterbox occupies. That was true
+       * at the height the card used to be and became less true every time the card grew — THE CROP
+       * AND THE HEIGHT ARE ONE SETTING, and moving `.tv-hero-stage` without moving this is how the
+       * black bands come back.
+       *
+       * At 82vh the card is about 1850x886 on a 1080p panel — 2.09:1. Cover fills the width, so a
+       * 16:9 file is painted 1850 wide and 1040 tall and loses ~77px off each end. A 2.39:1 trailer
+       * inside a 16:9 file carries bands of ~133px in those same units, so more than half the band
+       * survives — the strip being reported.
+       *
+       * 1.2 puts the crop at ~180px, which clears 2.39:1 and holds to about 2.66:1. NO GENRE TEST,
+       * unlike the rows: their card is close enough to 16:9 that cropping an already-16:9 animation
+       * trailer would visibly magnify it for nothing, whereas here every source is being cropped by
+       * the box regardless. */
+      cropScale: 1.2,
+      /* 720p. The rendition ladder is chosen from the box's WIDTH, and this card is the width of the
+       * screen, so left uncapped it would always pull the 1080p file — and a preview that starts
+       * sooner beats a preview that is sharper, on the one surface a viewer is sitting waiting on.
+       * Same ceiling as the row billboard, for the same reason. */
+      maxRenditionPx: 1280,
       onFail: () => setTrailerFailed(true),
     },
   );
