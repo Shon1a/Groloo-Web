@@ -24,8 +24,35 @@ const read = (key: string): string => {
 };
 
 let parallax: boolean | null = null;
-/** The 3.2% artwork drift on a deliberate press. See BILLBOARD_PARALLAX in TvSpotlight. */
+/** The artwork drift, which is now a HELD key's only — a deliberate press has none, because the
+ *  reference has none (the correlation series is at the head of TvSpotlight). This still turns off
+ *  what remains: see BILLBOARD_PARALLAX_HELD there. */
 export function parallaxEnabled(): boolean {
   if (parallax === null) parallax = read('groloo.tvparallax') !== 'off';
   return parallax;
+}
+
+let spring: boolean | null = null;
+/* ---- THE STRIP DRIVEN BY A SPRING INSTEAD OF A TRANSITION ------------------------------------
+ *
+ *   localStorage['groloo.tvspring'] = 'on'    retarget continuously; never restart a curve
+ *
+ * OFF BY DEFAULT. The CSS transition is the reliable TV path; the spring remains available as an
+ * explicit experiment without being allowed to stall the production poster strip.
+ *
+ * WHAT IT CHANGES. A CSS transition re-aimed mid-flight does not preserve velocity — it restarts
+ * its easing over the new distance from wherever the value happens to be, so a held key reads as a
+ * sequence of little brakes and launches. The shipped answer is to run the strip LINEARLY while a
+ * key is held (see HELD_SLIDE_MS), with a duration longer than the press pace so the transition is
+ * always re-targeted before it can settle: constant velocity by construction. The spring gets the
+ * same continuity honestly, carrying position AND velocity across every retarget, and it settles on
+ * release rather than being handed back to a different curve.
+ *
+ * WHAT IT COSTS, STATED PLAINLY BECAUSE IT IS THE REASON THIS IS NOT SIMPLY THE DEFAULT. The
+ * transition runs on the compositor and survives a blocked main thread; the spring is a main-thread
+ * write per frame and does not. This row's own traces record main-thread pressure as the thing that
+ * ruins it. Measure before promoting. */
+export function springEnabled(): boolean {
+  if (spring === null) spring = read('groloo.tvspring') === 'on';
+  return spring;
 }
