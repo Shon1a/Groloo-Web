@@ -45,12 +45,33 @@ import { FadeBg, FadeImg } from './FadeArt';
  * so the artwork walked to the next poster on its own while the page moved. The remote — focus —
  * is the only thing that drives this component. A click still opens a title. */
 
-/* Titles a home row walks. Cut from 12 as part of the TV fill-rate pass: the strip paints at most
- * ~5 posters to the right of the billboard at 1080p, and every title past that is DOM and bitmap
- * nobody has seen — 13 rows made it the largest passive load on the screen. Nothing is lost: the
- * card at the end of every row opens the full browse grid. Rows that ARE a page (TV / Movies /
- * Anime) pass their own `max` and are unaffected. */
-export const SPOT_MAX = 10;
+/* Titles a home row walks. Was 12, then cut to 10 in the TV fill-rate pass on the grounds that the
+ * strip paints at most ~5 posters to the right of the billboard at 1080p, so every title past that
+ * was DOM and bitmap nobody had seen — and across 13 rows that was the largest passive load on the
+ * screen. Rows that ARE a page (TV / Movies / Anime) pass their own `max` and are unaffected.
+ *
+ * NOW 40, AND HALF THAT ARGUMENT NO LONGER HOLDS. The BITMAP half was answered by the src window
+ * below (THUMB_BEHIND/THUMB_AHEAD): a tile only receives a `src` when the walk comes within a dozen
+ * cards of it, so a 40-title row decodes exactly as many posters as a 10-title one — the twelve
+ * around wherever you are standing. Lengthening the row costs nothing in decoded pictures.
+ *
+ * WHAT IT DOES STILL COST, STATED HONESTLY, because it is the same lever the note on DUP_TILES
+ * points at from the other direction:
+ *
+ *   · THE STRIP LAYER. The settled row's strip is promoted (`will-change` in tv.css, scoped to
+ *     `.is-settled`) and a promoted layer is sized by its content, not by the box that clips it.
+ *     Measured on the reference set: `[10][end][10]` = 21 tiles = one 6892x509 layer, 13.4MB. The
+ *     same arithmetic at 40 is `[40][end][40]` = 81 tiles, on the order of 26,000px wide and ~50MB.
+ *     Only ever one row at a time — but it is the biggest single texture on the screen, and if the
+ *     horizontal frame numbers move, THIS is what moved them. The cheap mitigation is the cap on
+ *     the SECOND copy (see DUP_TILES): the duplicate only has to reach the right edge of the rail,
+ *     which is ~10 tiles at 1080p however long the first copy is.
+ *   · THE content-visibility ACTIVATION. Every row carries `content-visibility: auto`, and a row's
+ *     activation cost tracks how much is inside it — 81 tiles instead of 21 makes revealing a row
+ *     dearer, which is the VERTICAL axis, already the expensive one.
+ *
+ * Neither has been measured at 40 on the television. */
+export const SPOT_MAX = 40;
 
 /* ms the remote must sit still on a title before its trailer is even asked for.
  *
@@ -337,6 +358,10 @@ export interface TvSpotlightProps {
   /** Reflected on the end card while the next batch is in flight, so OK gives feedback instead of
    *  appearing to do nothing on a slow connection. */
   moreBusy?: boolean;
+  /** Fired when the remote first settles on this row, and on every settle after. A row whose titles
+   *  are not all in hand yet uses it to go and get the rest (TvHomeRow) — see the effect below for
+   *  why this is the trigger rather than mount or visibility. */
+  onOpen?: () => void;
 }
 
 /* WHAT THE BILLBOARD IS SHOWING. A row walks its titles and then one stop past them, onto its own
@@ -344,7 +369,7 @@ export interface TvSpotlightProps {
  * card, and both the cross-dissolve and the strip have to be able to hold either. */
 type Slot = MediaItem | 'end';
 
-export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, resumeOf, enrich, max, onMore, moreBusy }: TvSpotlightProps) {
+export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, resumeOf, enrich, max, onMore, moreBusy, onOpen }: TvSpotlightProps) {
   const t = useT();
   const genre = useGenre();
   const list = useMemo(() => items.slice(0, max || SPOT_MAX), [items, max]);
@@ -1446,6 +1471,28 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       setOpen(v);
     }, OPEN_COMMIT_MS);
   };
+
+  /* ---- THE ROW SAYS WHEN IT HAS BEEN REACHED --------------------------------------------------
+   * A home row now opens at forty titles and /api/home carries about twenty of them, so the rest
+   * have to be fetched — and the only interesting question is WHEN.
+   *
+   * NOT ON MOUNT, for the reason TvHomeRow's header already gives about its own query: a home
+   * screen holds thirteen of these, and arming a catalogue request per row on load puts thirteen of
+   * them on the network at exactly the moment the artwork is loading, for rows nobody has walked
+   * to. NOT ON `visible` either — that latch fires a screenful early and for every row you merely
+   * scroll past, which is most of them.
+   *
+   * FIRST FOCUS is the honest trigger: one request for the row the remote is actually standing on,
+   * arriving while the viewer is still reading the billboard, and by the time they have walked the
+   * ten cards they can see, the other thirty are there.
+   *
+   * KEYED ON `open`, NOT ON THE FOCUS HANDLER, and that is what keeps it cheap. `open` is the
+   * COMMITTED state — OPEN_COMMIT_MS after the press, see setOpenNow — so running down the page
+   * fires this once per row genuinely stopped on, rather than twice per press on the way past.
+   * Held in a ref so a parent that rebuilds the callback every render cannot re-run the effect. */
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
+  useEffect(() => { if (open) onOpenRef.current?.(); }, [open]);
 
   /* ---- LOADING MORE REBUILDS THE STRIP UNDER THE WALK --------------------------------------
    * Pressing OK on the end card appends a batch, so the strip goes from `[titles][+][titles]` to
