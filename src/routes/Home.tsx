@@ -25,8 +25,16 @@ import type { MediaItem } from '../lib/types';
 const IS_TV = import.meta.env.MODE === 'tv';
 
 /* Max poster tiles rendered per home rail — see the slice at the row map. 14 fills a 1080p
- * viewport (~9 visible) with a comfortable scroll margin; "See all" reaches the rest. */
-const HOME_RAIL_CAP = 14;
+ * viewport (~9 visible) with a comfortable scroll margin; "See all" reaches the rest.
+ *
+ * THE TV TAKES EVERYTHING THE PAYLOAD CARRIES, and the two builds want opposite things here. A web
+ * rail RENDERS what it is given: every item is a live PosterCard with a decoded bitmap, so the cap
+ * is load-bearing and 14 is the measured number. A TV row does not — it is a walk, six tiles are
+ * ever on screen and only the dozen around the walk ever receive a `src` (THUMB_AHEAD in
+ * TvSpotlight) — so a seeded title costs a button and nothing else, and every one of them is a
+ * title the row does not have to go and FETCH to reach SPOT_MAX. The payload holds one TMDB page
+ * (~20 after gating), so this is really "don't clip the seed"; MUST TRACK SPOT_MAX. */
+const HOME_RAIL_CAP = IS_TV ? 40 : 14;
 
 export default function Home() {
   const t = useT();
@@ -95,9 +103,11 @@ export default function Home() {
    * time the home screen is open. So the TV build shows the same titles through the same <Row>
    * every other rail uses, which also makes it a normal D-pad stop.
    *
-   * Movies and series are INTERLEAVED rather than concatenated: the API returns ~10 of each and
-   * HOME_RAIL_CAP is 14, so appending would cap away almost every series and quietly turn a row
-   * labelled "Movies & Series" into a movies row. */
+   * Movies and series are INTERLEAVED rather than concatenated, and it is no longer the cap that
+   * makes that matter — HOME_RAIL_CAP now clears the whole feed on TV. It is the WALK: the API
+   * returns ~10 of each, and concatenating would put every series past the tenth card, which on a
+   * row nobody walks to the end of is a row labelled "Movies & Series" that only ever shows
+   * movies. */
   const upcomingTvRail = IS_TV
     ? Array.from({ length: Math.max(upMovies.length, upSeries.length) }, (_, i) => [upMovies[i], upSeries[i]])
       .flat()

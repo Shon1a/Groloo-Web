@@ -22,10 +22,18 @@ import TvSpotlight, { SPOT_MAX } from './TvSpotlight';
  * same React Query key — so a row extended here and a category opened from anywhere else share
  * one cache entry rather than each fetching page 1.
  *
- * NOTHING IS FETCHED UNTIL THE CARD IS PRESSED. A home screen mounts a dozen of these, and
- * arming a catalogue query per row on load would put a dozen requests on the network at exactly
- * the moment the artwork is loading — for pages nobody has walked to the end of. `started` is
- * what the end card sets, and it is one-way.
+ * NOTHING IS FETCHED UNTIL THE ROW IS REACHED. A home screen mounts a dozen of these, and arming
+ * a catalogue query per row on load would put a dozen requests on the network at exactly the
+ * moment the artwork is loading — for rows nobody has walked to. `started` is one-way, and two
+ * things set it: pressing the end card, and the remote settling on the row (`onOpen`).
+ *
+ * THE SECOND OF THOSE IS NEW, AND IT IS WHAT MAKES A FORTY-TITLE ROW POSSIBLE AT ALL. /api/home
+ * answers with one TMDB page — about twenty titles after the IMDb gate and the poster filter — so
+ * a row that opens at SPOT_MAX (40) is short by half from the moment it mounts, and no press of
+ * anything is going to fix that: the end card sits at position 40, past titles that do not exist
+ * yet. Waking the query when the row is focused fills the gap from underneath while the viewer is
+ * still looking at the first card, and costs one request for a row somebody is reading rather than
+ * thirteen for a screen nobody has touched.
  *
  * THE TWO SOURCES DO OVERLAP, so the merge is deduped by id: page 1 of `trending_movie` is
  * largely the row that is already on screen, and a strip that repeats its own first six titles
@@ -48,11 +56,16 @@ export interface TvHomeRowProps {
 
 export default function TvHomeRow({ cat, title, items, onSelect }: TvHomeRowProps) {
   const { lang } = useLang();
-  /* OPENS AT EXACTLY WHAT A HOME ROW OPENED AT BEFORE. SPOT_MAX is a measured fill-rate decision
-   * (see its note) and lengthening every row on the screen by four cards to make room for a
-   * feature nobody has pressed yet would spend that measurement on nothing. The seeded titles past
-   * it are not lost — they are simply what the first press is served from, without a request. */
-  const [shown, setShown] = useState(Math.min(items.length, SPOT_MAX));
+  /* OPENS AT SPOT_MAX OUTRIGHT, NOT AT WHAT THE PAYLOAD HAPPENED TO CARRY. This used to be
+   * `min(items.length, SPOT_MAX)` — the row asked for no more than it already had, so it never
+   * needed a request to fill itself and the whole of the catalogue query was reserved for presses
+   * of the end card. At SPOT_MAX 10 against a ~14-title seed that was always the same number.
+   *
+   * At 40 it is not: the seed is half the row, and clamping to it would mean a row that says it
+   * walks forty titles quietly walking twenty. `shown` is the WINDOW the row wants, `all` is what
+   * has arrived, and the effect below is what closes the distance — so asking for the full forty
+   * up front is what tells it there is a distance to close. */
+  const [shown, setShown] = useState(SPOT_MAX);
   const [started, setStarted] = useState(false);
 
   /* The SAME descriptor Browse builds for this category (see its `desc`), so the query key matches
@@ -119,15 +132,28 @@ export default function TvHomeRow({ cat, title, items, onSelect }: TvHomeRowProp
       items={list}
       title={title}
       max={shown}
-      /* ONLY ONCE THE ROW HAS BEEN EXTENDED. /api/home resolves a wordmark per title (the
-       * `logos=1` flag) and /api/browse does not, so the seeded titles arrive complete and the
-       * appended ones do not. `enrich` fills the gap with a detail lookup for the rested title —
-       * worth one request on a row someone is walking through, and thirteen requests on a home
-       * screen nobody has touched, which is why it is not simply always on. */
-      enrich={shown > items.length}
+      /* ONLY ONCE THE ROW HAS BEEN REACHED. /api/home resolves a wordmark per title (the `logos=1`
+       * flag) and /api/browse does not, so the seeded titles arrive complete and the appended ones
+       * do not. `enrich` fills the gap with a detail lookup for the rested title — worth one
+       * request on a row someone is walking through, and thirteen requests on a home screen nobody
+       * has touched, which is why it is not simply always on.
+       *
+       * TIED TO `started` RATHER THAN TO THE LENGTH, which is both simpler and more correct than
+       * the `shown > items.length` it replaces. That test now reads true on every row from mount
+       * (see `shown` above) and would have turned this on everywhere. `started` is the same fact it
+       * was always trying to express — this row has titles on it that did not come from /api/home —
+       * and it covers a case the length test never did: the server caps its wordmark resolution at
+       * TV_LOGO_CAP (12) per row, so even the SEEDED titles past the twelfth arrive without one. */
+      enrich={started}
       onSelect={onSelect}
+      /* Wake the catalogue the first time the remote settles here, so the row has fetched its way
+       * to `shown` by the time anyone walks far enough to notice it was short. Idempotent: this
+       * fires on every settle and `setStarted(true)` on an already-started row is a no-op. */
+      onOpen={() => setStarted(true)}
       onMore={exhausted ? undefined : more}
-      moreBusy={short || q.isFetching}
+      /* Gated on `started` so an untouched row — permanently `short`, because it wants 40 and holds
+       * 20 — does not render its end card as "Loading…" for a fetch that has not been asked for. */
+      moreBusy={started && (short || q.isFetching)}
     />
   );
 }
