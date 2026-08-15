@@ -215,6 +215,12 @@ export interface VideoTrailerOptions {
    *  1280 rather than pulling a 1080p file it cannot show the benefit of. Unset means no ceiling,
    *  which is what the detail sheet wants — there the video IS the content. */
   maxRenditionPx?: number;
+  /** Hard FLOOR, in CSS pixels, on the rendition width this surface will ask for — the opposite
+   *  end of `maxRenditionPx`. The measurement above is deliberately conservative (CSS pixels, no
+   *  dpr) because on a small box the bytes buy nothing visible; the featured billboard is the case
+   *  where that reasoning stops applying — it is most of a 10-foot screen — so it asks for 1920 and
+   *  gets 1080p whatever the box measures. SAFE_FLOOR still applies underneath. */
+  minRenditionPx?: number;
   /* Called when this engine cannot deliver — a decode error, a refused autoplay, a link that
    * 403s because its signature has expired. The billboard uses it to fall back to the YouTube
    * embed for that title, so a dead IMDb link costs a beat rather than the preview. */
@@ -268,6 +274,7 @@ export function useVideoTrailer(
   renditionsRef.current = opts?.renditions;
   const cropScale = opts?.cropScale ?? 1;
   const maxRendition = opts?.maxRenditionPx ?? Infinity;
+  const minRendition = opts?.minRenditionPx ?? 0;
   /* Read through a ref inside the mount effect for the same reason as the renditions above: the
    * effect runs on `src` alone, and a preview that restarted because someone pressed the red
    * button would defeat the point of the button. */
@@ -328,7 +335,12 @@ export function useVideoTrailer(
        *
        * So the box is measured in CSS pixels and `maxRenditionPx` lets a caller cap it outright.
        * SAFE_FLOOR still applies underneath, so this can never pick something genuinely soft. */
-      const needed0 = Math.round(Math.min(boxPx0 * cropScale, maxRendition));
+      /* Clamped at BOTH ends: `maxRenditionPx` is the row preview protecting its time to first
+       * frame, `minRenditionPx` is the featured billboard refusing to play a 720p file across most
+       * of the panel. A caller that sets neither gets the measurement unchanged. */
+      const needed0 = Math.round(
+        Math.max(Math.min(boxPx0 * cropScale, maxRendition), minRendition),
+      );
       const chosen0 = (boxPx0 > 0 ? pickTrailerRendition(renditionsRef.current, needed0, src) : src) || src;
 
       let v: HTMLVideoElement;
