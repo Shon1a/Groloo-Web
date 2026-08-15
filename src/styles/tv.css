@@ -411,14 +411,18 @@
 /* ---- THE FEATURED BILLBOARD (TvHero) — the top of the home screen, and nothing else -------
    A rounded, full-width card under the nav holding one title: art behind, a left-to-right scrim
    over it, and the copy pinned bottom-left. Sized the way Netflix sizes its billboard: it OWNS the
-   screen you arrive on, and the row beneath it is a peek rather than a half. 78vh leaves roughly a
-   fifth of a 1080p panel for the row underneath — enough of a poster's top edge to say the page
-   scrolls, not enough to compete with the title being featured.
+   screen you arrive on, without swallowing it. On a 1080p panel 82vh is ~886px, which with the bar
+   above leaves a strip of the first row's posters showing — the peek is what tells a viewer the
+   page scrolls at all, and it is the thing this number exists to balance.
 
-   IT WAS 62vh, and at that height the card read as a wide banner with a row of posters beside it
-   rather than as the one thing on the screen — the whole point of a billboard. The min/max keep it
-   sane on a 720p webOS package and on anything unusually tall; 900 is the ceiling because past it
-   the copy block starts floating in the middle of a very tall dark rectangle. */
+   THE HISTORY IS THE ARGUMENT, because this was settled by looking rather than by arithmetic:
+   62vh read as a wide banner with a row of posters beside it rather than as the one thing on the
+   screen; 78 was still short of a billboard; 88 filled the panel outright and took the peek with
+   it, which was too much. 82 is between the last two. The min/max keep it sane on a 720p webOS
+   package and on anything unusually tall.
+
+   THE TRAILER CROP BELOW IS TUNED TO THIS HEIGHT and has to move with it — the taller the card,
+   the less `object-fit: cover` trims and the more the crop has to. */
 /* The billboard parks like a row does, except the whole SECTION is the target rather than the
    focused button: arriving from below on a 54px action button and merely nudging it into view
    left the billboard itself three-quarters off the top of the screen. The margin is the bar plus
@@ -426,11 +430,25 @@
    coming back up to it restores the screen you started on. */
 .tv-hero {
   padding-top: 6px;
+  /* THE ROW BELOW STARTS BELOW THE FOLD, and this margin is what puts it there. The billboard is
+     tall enough now that the first row's HEADING — "Continue Watching" — landed in the last few
+     pixels of the screen: a title with no pictures under it, cut off by the bottom edge. A peek
+     is a strip of poster saying "there is more down here"; a stranded heading is just the layout
+     failing to fit, and it is the first thing a viewer sees on the screen they arrive on.
+
+     VIEWPORT-RELATIVE, because what has to clear the fold is a viewport measurement: the card is
+     82vh, so the space left under it shrinks with the panel rather than staying at some fixed
+     number of pixels. 7vh keeps the heading off screen from a 720p webOS package up to a 4K set,
+     and the clamp stops it collapsing on a short browser window or ballooning on a tall one.
+
+     It reads as deliberate once you scroll: the billboard is its own screen and the rows are the
+     next one, which is the arrangement the height was chosen for. */
+  margin-bottom: clamp(40px, 7vh, 96px);
   scroll-margin-top: calc(var(--tv-topnav-h) + 24px);
 }
 .tv-hero-stage {
   position: relative;
-  height: clamp(420px, 78vh, 900px);
+  height: clamp(440px, 82vh, 920px);
   border-radius: 12px;
   overflow: hidden;
   background: #000;
@@ -456,10 +474,16 @@
    copy — which are siblings of the layers, not children — stay exactly where they are and a
    playing trailer still says what it is.
 
-   NO `transform: scale()` HERE, deliberately, and it is the one place the rows' crop is not wanted.
-   This card is far wider than 16:9, so `object-fit: cover` is already discarding more top and
-   bottom than a baked-in letterbox occupies; magnifying on top of that would throw away picture
-   that has already been cropped once. */
+   IT CROPS, at a flat 1.2, and it did not used to. The number is a function of the card's height
+   and moves whenever that does. At 82vh the card is about 1850x886 on a 1080p panel — 2.09:1 — so
+   `object-fit: cover` discards ~77px off each end of a 16:9 file, measured in the units the file is
+   painted in. A scope trailer's baked-in bands are ~133px at 2.39:1, so more than half the black
+   band survives on its own: that is the strip in the report. 1.2 takes the crop to ~180px, which
+   clears 2.39:1 and holds to about 2.66:1 before a band could show again.
+
+   Flat rather than per-genre like the rows, whose card is close enough to 16:9 that cropping an
+   already-16:9 animation trailer would magnify it for nothing. Keep it in step with `cropScale` in
+   TvHero — that number also sizes the rendition. */
 .tv-hero-trailer-slot {
   position: absolute; inset: 0;
   overflow: hidden;
@@ -470,6 +494,8 @@
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
+  transform: scale(1.2);
+  transform-origin: center;
   border: 0;
   background: #000;
   opacity: 0;
