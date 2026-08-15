@@ -97,6 +97,23 @@ export interface FadeBgProps {
  * before the next rise begins. */
 const PLATE_HOLD_MS = 700;
 
+/* ---- AND IT DOES NOT APPEAR THE INSTANT THERE IS NO PICTURE ---------------------------------
+ * THE DEFECT: switching pages flashed a grey box where the billboard was about to be. Captured at
+ * 60fps across a Home -> Series change, the card ran black (the route's loader), then ONE frame of
+ * a light grey gradient, then the photograph — which had been ready all along, a single frame
+ * behind. The plate was not holding a frame for a picture that was still coming; it was getting in
+ * front of one that had already arrived, and against a black page a 14-19% grey reads as a flash.
+ *
+ * The plate's job is to hold the card while a picture LOADS. A picture that lands within a couple
+ * of frames never needed holding, so the plate waits that long before painting. Past the delay
+ * nothing has changed: a genuinely slow backdrop, or a title with no artwork at all, still gets
+ * its plate and still keeps it until covered.
+ *
+ * 120ms is about seven frames on this panel — comfortably longer than a warm decode, comfortably
+ * shorter than a cold fetch, and short enough that the delay is not itself perceptible on the one
+ * case that still wants a plate. */
+const PLATE_DELAY_MS = 120;
+
 export function FadeBg({ url, fallback, backgroundPosition, className, style }: FadeBgProps) {
   const ready = useImageReady(url);
   const host = useRef<HTMLDivElement>(null);
@@ -113,14 +130,28 @@ export function FadeBg({ url, fallback, backgroundPosition, className, style }: 
    * bitmap is decoded, so a picture still on the network holds its plate for as long as it
    * takes rather than for 700ms. */
   useEffect(() => {
-    if (host.current) host.current.style.backgroundImage = fallback;
-    if (!url || !ready) return;
-    const id = window.setTimeout(drop, PLATE_HOLD_MS);
+    const el = host.current;
+    if (!el) return;
+    if (url && ready) {
+      /* The picture is here. The plate goes back underneath it for the length of the rise — the
+         photograph starts at opacity 0 and needs something beneath it — and is dropped once it is
+         covered, which is the fill-rate fix this component's header records. */
+      el.style.backgroundImage = fallback;
+      const id = window.setTimeout(drop, PLATE_HOLD_MS);
+      return () => window.clearTimeout(id);
+    }
+    /* No picture yet: hold the plate back briefly rather than painting it at once, so one that is
+       a frame or two away is never preceded by a grey flash. See PLATE_DELAY_MS. */
+    el.style.backgroundImage = 'none';
+    const id = window.setTimeout(() => { el.style.backgroundImage = fallback; }, PLATE_DELAY_MS);
     return () => window.clearTimeout(id);
   }, [url, fallback, ready]);
 
   return (
-    <div ref={host} className={className} style={{ backgroundImage: fallback, backgroundPosition, ...style }}>
+    /* NO `backgroundImage` IN THE INLINE STYLE. The effect above owns it entirely now — painting
+       it here too would put the plate on screen for the first frame regardless, which is the flash
+       being removed. React therefore has nothing to diff on that property and cannot fight it. */
+    <div ref={host} className={className} style={{ backgroundPosition, ...style }}>
       {url && (
         <div
           className={ready ? 'art-photo rdy' : 'art-photo'}

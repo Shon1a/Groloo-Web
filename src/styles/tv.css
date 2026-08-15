@@ -799,6 +799,151 @@
   content-visibility: auto;
 }
 
+/* THE PREVIOUS CARD PEEKS IN FROM THE LEFT EDGE. The stage starts at --page-pad; positioning a
+   portrait one full card-width plus one normal gap to its left leaves only the page gutter's
+   trailing slice on screen. It is a sibling of the clipped rail, because the rail intentionally
+   suppresses everything left of the billboard and could never display this continuity cue. */
+/* ---- THE PEEK IS A BACK LAYER: ~0.39 OPACITY, MEASURED ------------------------------------
+ * A dimmed layer composited over black has a ceiling of alpha*255 and can never exceed it however
+ * bright the artwork underneath is. Across 115 frames of the reference — nineteen seconds, several
+ * different cards — the peek band's 99.9th percentile never once passed 100, while the IDENTICAL
+ * crop of an up-next poster (its right 42px) regularly reached 251-255 and the billboard reached
+ * 255. 100/255 = 0.39, and alpha 0.39 predicts a ceiling of 99.5.
+ *
+ * WHY THE OBVIOUS TEST FAILED FIRST, recorded so it is not repeated: comparing the peek's mean
+ * against an up-next poster's mean gave ratios from 0.12 to 1.79 and settled nothing, because the
+ * two bands are always DIFFERENT TITLES and content differences are far larger than a 0.39
+ * multiplier. A ceiling is content-robust in a way a mean is not — it only needs one white pixel
+ * to appear once in nineteen seconds, and on the undimmed band one did, repeatedly.
+ *
+ * FLAT, NOT A GRADIENT. Column means across the band are level (34, 31, 34, 32, 32, 31 …) with no
+ * ramp toward the screen edge, so this is a uniform layer opacity and not an edge vignette. */
+.tv-spot-prev {
+  position: absolute;
+  left: calc(-1 * var(--sp-wp) - var(--sp-gap));
+  top: 0;
+  /* ---- ONE GAP WIDER THAN THE CARD, SO THE CARD CAN CROSS THE GAP -------------------------
+   * THE DEFECT: the band between the peek and the billboard stayed empty during a press. The
+   * window ended exactly where the card does, so a card sliding through had nowhere to slide
+   * THROUGH — it was clipped 16px short of the billboard and the run-up simply vanished.
+   *
+   * MEASURED ON THE REFERENCE, band x 50..64 (empty at rest, since the peek's card ends at 45 and
+   * the billboard starts at 66):
+   *
+   *      -33ms    0    33    67   100   133   167   200   233
+   *   mean  1.9  11.3  19.4  24.6  31.0  34.9  14.3   2.7   1.3
+   *
+   * A card sweeps across it, peaks at 133ms and is gone by 200ms — because in the reference the
+   * rail is continuous and the card carries on behind the billboard rather than stopping at it.
+   *
+   * WIDENING COSTS NOTHING AT REST, which is the neat part: the track parks with the tile's right
+   * edge at 297 of a now-313 window, so the last 16px is empty exactly as before and the card
+   * still ends one gap short of the billboard. Only the travel changes. The radius moved to the
+   * tiles themselves for the same reason — it belongs to the card, not to the aperture. */
+  width: calc(var(--sp-wp) + var(--sp-gap));
+  height: 100%;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.39;
+}
+/* ---- THE PEEK RIDES THE STRIP, IT DOES NOT SWAP IN PLACE -----------------------------------
+ * MEASURED ON THE REFERENCE. Correlating the sliver band (x 0..46) against its own settled frame
+ * through a press, the content arrives offset and slides into place — 20, 10, 4, 1, 0 px at
+ * 133/167/200/233/267ms, which is the STRIP's own remaining travel one frame over. Larger offsets
+ * than that are unmeasurable in a 46px window (a 43px shift leaves 3px of overlap to correlate),
+ * which is why the early frames are absent rather than zero. It is one rigid movement: the card
+ * that lands in the peek slid there from behind the billboard.
+ *
+ * WHAT THIS REPLACES was static. Traced in the browser across a full press: opacity 1.00,
+ * translateX 0.0, right edge 49px — identical on every frame while the strip travelled its whole
+ * 329px. The only thing that changed was the `src`, so the peek went blank and faded back up over
+ * 220ms. A card that blinks while everything beside it slides is the artefact being reported.
+ *
+ * AN ANIMATION, NOT A TRANSITION, because the element persists across `src` changes and a
+ * transition needs a state change to fire. Remounting it (see the `key` in TvSpotlight) restarts
+ * the keyframe, which is the same mechanism `tvSpotFade` uses on the copy.
+ *
+ * ONE STRIDE, on the strip's duration and the strip's curve — they are one movement, so they take
+ * the same two values. `--sp-wp + --sp-gap` is the strip's own pitch, so this cannot drift out of
+ * step with the tiles if the card size changes. */
+/* ---- THE TRACK'S TWO RESTING PLACES, AND WHY THEY ARE ARITHMETIC ---------------------------
+ * The track is two tiles wide, so the window shows tile 1 at translateX(0) and tile 2 at
+ * translateX(-stride). Which of those is the RESTING position depends on the press direction,
+ * because the incoming card is the right-hand tile going right and the left-hand tile going left.
+ *
+ * `--sp-dir` is +1 or -1, so (1 + dir) / 2 is 1 going right and 0 going left — which selects
+ * between -stride and 0 without a second class or a second keyframe. The start is then always one
+ * stride back along the direction of travel. Two lines of calc instead of a direction-switched
+ * rule set, and they cannot disagree with each other. */
+/* ---- INITIAL VALUE 0, AND IT IS LOAD-BEARING ------------------------------------------------
+ * `--sp-dir` is which way the last press went, and TvSpotlight's parallax reads it to decide which
+ * side the artwork drifts in from. Its guard is `if (!dir) return` — "this row has not been
+ * pressed, so there is nothing to explain" — and that guard works by the property being ABSENT on
+ * a fresh row, because an unset custom property reads back as the empty string and `Number('')` is
+ * 0.
+ *
+ * REGISTERING IT BROKE THAT, and the registration is still needed: the peek's resting position is
+ * arithmetic on this value, and `calc` cannot do arithmetic on an unregistered property's token
+ * stream. Declared with `initial-value: 1` the guard could never fire, so every freshly mounted row
+ * ran the drift — measured on a page change as the billboard sliding 31px right-to-left over 67ms,
+ * which is 3.2% of the artwork's width: the deliberate-press distance, on a press that never
+ * happened.
+ *
+ * 0 restores the original meaning exactly — "no press yet" — while keeping the value typed. The
+ * peek's calc is unaffected because it is only ever rendered once a press HAS happened (there is
+ * no previous card at the head of a row), by which time `step` has written 1 or -1. */
+@property --sp-dir {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+.tv-spot-prev {
+  --sp-prev-stride: calc(var(--sp-wp) + var(--sp-gap));
+  --sp-prev-end: calc(-1 * var(--sp-prev-stride) * (1 + var(--sp-dir, 1)) / 2);
+  --sp-prev-start: calc(var(--sp-prev-end) + var(--sp-dir, 1) * var(--sp-prev-stride));
+}
+.tv-spot-prevtrack {
+  display: flex;
+  gap: var(--sp-gap);
+  width: calc(var(--sp-wp) * 2 + var(--sp-gap));
+  height: 100%;
+  /* Resting position only — the slide itself is driven by `Element.animate` in TvSpotlight, so
+     that changing the previous title does not have to remount (and blank) the images. */
+  transform: translateX(var(--sp-prev-end));
+  will-change: transform;
+}
+/* ---- EVERY SLOT IS A TILE, EVEN AN EMPTY ONE ------------------------------------------------
+ * `FadeImg` renders NOTHING when it has no `src`, so an empty slot left the track with a SINGLE
+ * child. That is exactly the state at the head of a row, where there is no outgoing card — and
+ * flex then laid the one tile at 0..wp while the resting transform is -stride, parking it wholly
+ * left of the aperture. The second billboard's peek was blank for that reason: the picture was
+ * loaded and correct, it was simply out of view. The same missing child tripped the
+ * `tiles.length < 2` guard in the slide, so it did not animate either.
+ *
+ * The slot is a real box now — always present, always the strip's pitch — and the picture is
+ * merely what may or may not be inside it. Layout no longer depends on whether a card exists. */
+.tv-spot-prevtile {
+  flex: 0 0 var(--sp-wp);
+  width: var(--sp-wp);
+  height: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.tv-spot-previmg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* NO FADE. The peek's change is carried entirely by the slide, exactly as in the reference,
+     where the band is textured on every frame of the press. A 220ms opacity ramp here fought the
+     movement and, while the track was being remounted, replaced it. */
+  opacity: 1;
+}
+/* A held key gets the slide and nothing else, for the reason every other decoration here does:
+   at a 220ms press pace a 267ms slide never finishes, and never finishing is what reads as drag. */
+
+
 /* ---- `--active` IS DECLARED SO IT STOPS INHERITING -----------------------------------------
  * An UNREGISTERED custom property inherits, so writing one dirties style for the element's whole
  * subtree — and this one is written on `.tv-spot-strip`, whose subtree is the 21-24 poster tiles
@@ -808,15 +953,24 @@
  * in TvSpotlight and in the transform on this rule — so the inheritance was never wanted, only
  * inherited by default.
  *
- * `inherits: false` confines the invalidation to the strip itself. `<integer>` also makes the value
- * typed rather than a token re-parsed on every use.
+ * `inherits: false` confines the invalidation to the strip itself, which is the whole point of the
+ * declaration; the syntax is secondary and only makes the value typed rather than a token re-parsed
+ * on every use.
+ *
+ * `<number>`, NOT `<integer>`, AND THE DIFFERENCE IS LOAD-BEARING FOR ONE ARM. The walk only ever
+ * lands on whole cards, so an integer was honest — until the spring arm (see `springEnabled` in
+ * lib/tvMotionFlags.ts) started writing the strip's position CONTINUOUSLY, which means fractional
+ * values every frame. Against `<integer>` those are invalid at computed-value time and the property
+ * falls back to its initial 0, so the row snaps to the head of the strip instead of gliding. Widening
+ * it costs nothing: every integer is a number, `inherits: false` is untouched, and the transition
+ * arm writes exactly what it wrote before.
  *
  * Chromium 85+, comfortably inside this build's 87 floor (the same floor `content-visibility` is
  * taken against below). An engine that does not know `@property` ignores the block and the property
  * behaves exactly as it did before — the transform still works, it is only the blast radius that
  * goes back to being wide. */
 @property --active {
-  syntax: '<integer>';
+  syntax: '<number>';
   inherits: false;
   initial-value: 0;
 }
@@ -826,34 +980,48 @@
   position: absolute; left: 0; top: 0; height: 100%;
   display: flex; gap: var(--sp-gap);
   transform: translateX(calc(var(--sp-wl) + var(--sp-gap) - (var(--active) + 1) * (var(--sp-wp) + var(--sp-gap))));
-  /* THE CURVE IS FITTED TO THE REFERENCE, AND THEN CHECKED AGAINST OUR OWN RUNNING PAGE.
-     Correlating the clip frame by frame gives the fraction of the journey completed at each 33ms
-     step: .08, .25, .38, .50, .63, .71, .79, .83, .88, .92, .96, 1 — half-travelled at frame 4 of
-     13. That is a quadratic ease-out, near enough exactly; `cubic-bezier(.25,.46,.45,.94)` is it.
+  /* ---- 267ms ON cubic-bezier(.33, 1, .68, 1), RE-MEASURED FROM A CLEAN CAPTURE ---------------
+     THREE PRESSES, IDENTICAL TO THE FRAME, off a 1080p30 recording of the reference — the row at
+     t=126.87s, 128.23s and 136.13s of the clip. Per-frame travel of the strip, all three the same:
 
-     TWO WRONG ANSWERS ARE RECORDED HERE BECAUSE BOTH WERE ARGUED FOR CONVINCINGLY.
+       116, 81, 54, 35, 21, 12, 6, 3, 1 px  =  329px (one poster pitch) over 8 frames = 267ms
+
+     As a fraction of the journey: .353, .599, .763, .869, .933, .970, .988, .997, 1 —
+     HALF-TRAVELLED AT 53ms, which is 19.8% of the duration.
+
+     THAT IS A CUBIC EASE-OUT AND NOT ANYTHING ELSE. Fitted against the nine measured points:
+
+       cubic-bezier(.33,1,.68,1)      1.30% RMS   <- this one, and it half-travels at 20.6%
+       cubic-bezier(0,.55,.45,1)      4.80% RMS
+       cubic-bezier(.25,1,.5,1)       5.38% RMS
+       cubic-bezier(.25,.46,.45,.94)  8.65% RMS
+       cubic-bezier(.22,1,.36,1)      9.13% RMS
+
+     THREE WRONG ANSWERS ARE KEPT HERE BECAUSE EACH WAS ARGUED FOR CONVINCINGLY AND TWO SHIPPED.
      An ease-in-out came first, on the reasoning that a strip of posters has mass and nothing with
      mass starts at its top speed. Good physics, wrong object: the row is not coasting, it is
      ANSWERING A KEYPRESS, and the answer has to be immediate.
-     Then an expo-style `cubic-bezier(.16,1,.3,1)` at 620ms, from misreading the decay as purely
-     exponential. Probing our own page showed what that actually produces: half the journey gone in
-     67ms against the reference's 133ms — twice too fast off the mark, and the extra duration spent
-     on a tail nobody can see. Fast start plus long tail is not the same shape as this.
 
-     MUST MATCH `PARALLAX_EASE` in TvSpotlight: the artwork's drift decays at the identical rate in
-     the reference, so the two are one movement and have to be one curve.
+     Then 430ms of `cubic-bezier(.25,.46,.45,.94)`, a quadratic fitted to an earlier and much
+     rougher reading of the clip (".08, .25, .38, .50 …", half-travelled at frame 4 of 13). The
+     clean capture says 9 frames, not 13, and a cubic, not a quadratic — the old series was sampled
+     across a press that had not settled.
+
+     Then 230ms of `cubic-bezier(.22,1,.36,1)`, the last line of that table, which is what this
+     replaces. It was reached honestly: the 430ms pair was cut when the set began painting this
+     move at 60fps rather than ~26, on the sound reasoning that a 230ms glide gets more painted
+     frames than the 430ms one ever got. What went unnoticed is that the CURVE moved with the
+     duration. That pair puts 54% of the journey into the first frame against the reference's 35%,
+     and half of it in 30ms against 53ms — the row arrives before the eye has followed it, which is
+     the "it just snaps rather than moves" this measurement exists to answer.
+
+     THE COPY DOES NOT SHARE THIS CURVE, and the note at `.tv-spot-infoblk` used to claim it did.
+     Measured, the synopsis half-arrives at 28% of its own duration — a QUADRATIC ease-out — while
+     the strip half-travels at 19.8%, a cubic one. Two curves, because they are two jobs.
 
      The duration is a variable because it is two numbers — a deliberate press and a held key — set
      on the node by `step`, where the reasoning is. */
-  /* 230ms ON cubic-bezier(.22, 1, .36, 1), DOWN FROM 430ms ON A REFERENCE-FITTED EASE.
-     The old pair was derived honestly — frame-by-frame correlation against the reference clip gave
-     an exponential settle with a ~170ms time constant, which 430ms of that curve reproduces. What
-     the fit could not know is the frame rate the set would eventually run at: the durations across
-     this file were all chosen while a row move painted ~26fps, and the same move now measures a
-     16.7ms median. At 60fps a 230ms glide is ~14 painted frames, which is more than the 430ms one
-     ever got, in half the time. Revert both halves together if this reads as abrupt — the fitted
-     values are one line up in the history and the derivation is in TvSpotlight's header. */
-  transition: transform var(--sp-slide, 230ms) cubic-bezier(.22, 1, .36, 1);
+  transition: transform var(--sp-slide, 267ms) cubic-bezier(.33, 1, .68, 1);
 }
 /* will-change ONLY on the row the remote is on. It promotes the strip to its own compositor
    layer, which is right for the row that is about to slide — and wrong for the other twelve,
@@ -1039,49 +1207,142 @@
  * SO THE PANEL STAYS UNPROMOTED and its repaint cost is accepted. If it is ever revisited, the
  * thing to try is making the panel CHEAPER to paint (less text in the cross-fade, or swapping
  * rather than cross-fading) rather than giving it a layer. */
-.tv-shell .tv-spot-hero:focus-visible { transform: scale(1.035); }
+.tv-shell .tv-spot-hero:focus-visible { transform: scale(1); }
 /* focus ring lives in the stage-5 section at the foot of this file — it has to be INSET here,
    see the note there */
-/* THE PICTURE CHANGES ALMOST AT ONCE — 90ms, which is three frames.
-   This was a half-second dissolve, on the reasoning that a slow cross-fade is gentler than a cut.
-   Watching how a well-made ten-foot interface actually behaves says otherwise, and it is worth
-   stating plainly: the artwork wants to swap in about TWO frames. It reads as instant, and it is
-   right that it does — the picture is answering the press, and the press was instant. What is
-   drawn out is everything AFTER it (the wordmark, then the copy), which is what gives the change
-   its shape.
-   A slow dissolve here does the opposite: it delays the answer and then has nothing left to
-   stagger against.
-   Fixed rather than tied to `--sp-slide`, because this is a reaction and not a journey — it
-   should not get slower because the strip has further to travel. */
+/* ---- THE PICTURE CROSS-DISSOLVES IN 170ms, AND THAT IS A MEASUREMENT NOW --------------------
+   Correlating the billboard region of each frame against the SETTLED frame (consecutive-frame
+   correlation cannot do this — the picture is changing, so it measures the dissolve rather than
+   anything else), the incoming artwork's share across the three captured presses runs:
+
+     .381, .749, .910, .962, .991, .999, 1     press A
+     .377, .626, .857, .964, .994, 1           press B
+
+   So the hand-over is complete at frame 5-6, which is 170-200ms. 170 is the low end and the one
+   that leaves the cascade below it room.
+
+   IT WAS 90ms, AND THE NOTE THAT SET IT WAS AN EYEBALL RATHER THAN A READING. It said "the artwork
+   wants to swap in about TWO frames", reasoned from watching a well-made ten-foot interface rather
+   than from correlating one — and the direction of the error is the interesting part. 90ms is not
+   a dissolve at 30fps, it is a cut with a smear on it, so the first beat of the cascade was
+   arriving as a hard swap and everything after it was staggered against nothing. The reference
+   holds two pictures on screen together for a fifth of a second, and that overlap IS the beat.
+
+   ---- AND THE TWO HALVES ARE NOT THE SAME FADE, WHICH IS THE WHOLE EFFECT --------------------
+
+   THIS IS THE THING THAT WAS BEING LOOKED FOR, and it took two wrong answers to reach. It was
+   called a parallax — there is no displacement, measured, and that reading cost the drift on a
+   deliberate press. Then a blur — there is no blur either; that reading was mean |gradient|
+   falling, and the metric scales with LUMINANCE, so a picture that merely goes darker reads as
+   one that goes soft. What actually happens is that the billboard passes through a DARK TROUGH.
+
+   Mean luminance over the billboard, which is model-free and needs no fitting at all:
+
+     before   0ms    33     67    100    133    167ms
+      69.7   51.6   51.6   54.9   61.7   71.4   84.0    <- settled
+              74%    74%    79%    89%   102%   121%    as % of the OLD picture
+              61%    61%    65%    73%    85%   100%    as % of the NEW one
+
+   Decomposing each frame into how much of each picture is present (least squares; three models
+   were tried and they agree on these coefficients) says why:
+
+     old layer   0.35   0.21   0.12   0.066  0.021  0.004
+     new layer   0.27   0.38   0.51   0.65   0.82   0.99
+     sum         0.62   0.59   0.63   0.72   0.84   0.99   <- NOT 1
+
+   The outgoing picture is at a third of its strength within a single frame and is effectively gone
+   by 130ms; the incoming one needs ~200ms to arrive. For the ~100ms in between the two opacities
+   do not add up, and what shows through is the dark card underneath. It is a dip rather than a
+   hand-over, and at ten feet it reads as weight: the old title is dismissed, THEN the new one is
+   presented, instead of one melting into the other.
+
+   THE DURATIONS ARE SOLVED, NOT READ OFF. The per-layer coefficients above cannot be turned
+   straight into CSS, because what they mean depends on how the layers are composited — and these
+   two are STACKED SIBLINGS, so what reaches the screen is `in*NEW + (1-in)*out*OLD`, not the sum
+   of two independent fades. So the durations were fitted against the model-free coverage curve,
+   through that exact expression, over every curve in this file:
+
+     in  190ms linear     out 320ms quint-out    RMS 0.0263
+     in  190ms linear     out 210ms cubic-out    RMS 0.0269   <- this, for using a curve we own
+     in  190ms linear     out 310ms quint-out    RMS 0.0272
+
+   THE OUT IS LONGER THAN THE IN, WHICH IS THE OPPOSITE OF WHAT IT LOOKS LIKE. A first pass guessed
+   "fast short out, slow in" from the raw coefficients and was wrong: what the trough needs is a
+   fade-out that collapses in its first two frames and then keeps a long faint tail, which is a
+   cubic ease-out over a LONG duration rather than a linear one over a short one. The tail is why
+   the old picture is still measurably present at 0.02 well after it looks gone.
+
+   A SYMMETRIC PAIR, which is what this was, reaches 0.75 at its worst and recovers — a shallow dip
+   centred in the middle of the fade. The reference bottoms out at 0.59 in its first two frames.
+   That difference is the whole thing: one reads as two pictures melting into each other, the other
+   as one being dismissed and another presented.
+
+   BOTH ARE VARIABLES, and the reason is the hold rather than the slide: neither duration fits
+   inside the 220ms of a held press, so `step` shortens both while `is-fast` is on (LAYER_OUT_MS /
+   LAYER_FADE_MS and their _CHAINED pairs in TvSpotlight). A hold gets a symmetric 90ms and no
+   trough — a dip repeated four or five times a second is a flicker, not a beat.
+
+   Still NOT tied to `--sp-slide`: this is a reaction and not a journey, and it must not get slower
+   because the strip has further to travel. */
+/* NO `transform` ON EITHER STATE, AND IT IS A MEASUREMENT RATHER THAN A PREFERENCE. A drift plus a
+   0.985 zoom lived here and both were tested directly against the reference: correlating each frame
+   against the settled one puts 2 of 3 presses flat to a tenth of a pixel, and a scale fit returns
+   1.000 from 67ms onward at 0.99 correlation. A 3.5% drift would still read ~5px at 133ms; the
+   capture shows 0.28px. The billboard cross-dissolves IN PLACE — every horizontal movement on that
+   screen belongs to the poster strip. */
 .tv-spot-layer {
   position: absolute; inset: 0;
+  /* Stable A/B nodes are required for the outgoing transition to survive. The departing layer
+     sits above the incoming one; the scrim is later in DOM order at the same stack level, so it
+     still remains above both photographs. */
+  z-index: 1;
   opacity: 0;
-  transition: opacity 90ms linear;
+  /* LEAVING — collapses in its first two frames, then a long faint tail */
+  transition: opacity var(--sp-layer-out, 210ms) cubic-bezier(.33, 1, .68, 1);
 }
-.tv-spot-layer.on { opacity: 1; }
+.tv-spot-layer.on {
+  z-index: 0;
+  opacity: 1;
+  /* ARRIVING — even, and slower off the mark than the out, which is what leaves the trough */
+  transition: opacity var(--sp-layer-fade, 190ms) linear;
+}
 
-/* THE WORDMARK FOLLOWS THE PICTURE RATHER THAN ARRIVING WITH IT — ~200ms, starting ~110ms in,
-   which is where the reference puts it (the outgoing title is still legible over the incoming
-   artwork for several frames). It is the second step of the cascade, and it is what stops the
-   billboard from reading as one flat swap: the photograph answers the press, then the title
-   settles onto it, then the copy underneath changes. Three beats, one gesture.
+/* THE WORDMARK FOLLOWS THE PICTURE RATHER THAN ARRIVING WITH IT. It is the second step of the
+   cascade, and it is what stops the billboard from reading as one flat swap: the photograph
+   answers the press, then the title settles onto it, then the copy underneath changes. Three
+   beats, one gesture.
 
-   THE PLATE IS ITS OWN PAIR OF ELEMENTS NOW, not a child of the art layer, and that is the fix
-   for the scrim flicker (see `.tv-spot-scrim` below). Inside the layer its opacity multiplied with
-   the layer's, so the outgoing plate was carried off by the layer's 90ms fade and only the arrival
-   needed a delay of its own. Standing on its own it has to do both itself: 90ms out, matching the
-   layer it used to ride, and the same delayed 200ms in. The timings are unchanged; only what
-   carries them is. */
+   ---- WHAT THE REFERENCE ACTUALLY DOES, MEASURED ------------------------------------------------
+   Standard deviation of the wordmark's corner of the billboard, which for light art on a dark
+   plate is opacity directly. Across the press at t=126.87s:
+
+     69.2 | 17.4, 12.1, 13.7, 18.3, 23.2, 27.5, 30.7, 33.8, 34.1
+      ^ the frame before the press          ^ settled
+
+   THE OUTGOING WORDMARK IS CUT. It is at full strength on the frame before the press and gone on
+   the press frame — one frame, in all three captures. It was NOT "still legible over the incoming
+   artwork for several frames", which is what the old note here claimed and what the 90ms fade-out
+   was built to reproduce.
+
+   THE INCOMING ONE STARTS ALMOST AT ONCE — rising by frame 1 (~33ms), settled by frame 8 (~267ms),
+   so ~230ms of travel after a single frame of delay. The old pair held it back 110ms, which put
+   the wordmark's arrival a third of the way into the copy's and cost the cascade its middle beat.
+
+   THE PLATE IS ITS OWN PAIR OF ELEMENTS, not a child of the art layer, and that is the fix for the
+   scrim flicker (see `.tv-spot-scrim` below). Inside the layer its opacity multiplied with the
+   layer's, so the outgoing plate used to be carried off by the layer's own fade. Standing alone it
+   has to do both halves itself — which is exactly what lets the out be a cut while the picture
+   underneath it keeps dissolving for 170ms. */
 .tv-spot-plate {
   position: absolute; inset: 0;
   z-index: 2;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 90ms linear;
+  transition: opacity 0s;
 }
 .tv-spot-plate.on {
   opacity: 1;
-  transition: opacity 200ms ease 110ms;
+  transition: opacity 230ms cubic-bezier(.33, 1, .68, 1) 33ms;
 }
 
 /* ---- THE BLACK UNDER THE TITLE, AND WHY IT IS NOT PART OF THE TITLE ------------------------
@@ -1193,12 +1454,13 @@
    `.art-photo` itself. */
 .tv-spot-art .art-photo { transition-duration: var(--sp-art-fade, .11s); }
 
-/* WIDER THAN THE CARD, BECAUSE THE PICTURE DRIFTS. The artwork travels 3.2% sideways as it changes
-   (measured off the reference — see the parallax effect in TvSpotlight). At `inset: 0` it exactly
-   fills the billboard, so that drift drags its own edge into frame and puts a black band down one
-   side. 4% either side is comfortably more than the travel, and `.tv-spot-hero` clips, so the
-   extra is never seen at rest. Overscan is not optional for a parallax; it is what makes one
-   possible. */
+/* WIDER THAN THE CARD, BECAUSE THE PICTURE STILL DRIFTS ON A HELD KEY. 1.6% sideways per card
+   while a direction is held; a deliberate press no longer drifts at all, because the reference
+   does not (see the head of TvSpotlight for the correlation series that settled it). At `inset: 0`
+   the art exactly fills the billboard, so any drift drags its own edge into frame and puts a black
+   band down one side. 4% either side is well clear of 1.6%, and `.tv-spot-hero` clips, so the
+   extra is never seen at rest. The margin is deliberately not cut back with the distance: it costs
+   nothing at rest, and it is what any future drift needs in order to be possible at all. */
 .tv-spot-art {
   position: absolute;
   top: 0; bottom: 0;
@@ -1208,10 +1470,12 @@
   background-position: center;
 }
 /* ---- THE PHOTOGRAPH KEEPS ITS LAYER WHILE THE ROW IS OPEN ----------------------------------
- * Both of these are driven by `Element.animate` on every press (the parallax in TvSpotlight), and
- * an animated transform with no resting transform means the same thing every press: promote a
- * layer, animate it, throw it away. A trace of an eight-press walk put `Layerize` at 42.4ms per
- * press, which is that cycle happening twice a press on the two art layers.
+ * These are driven by `Element.animate` (the parallax in TvSpotlight) — on every press when this
+ * was written, on HELD presses only now that a deliberate one has no drift. An animated transform
+ * with no resting transform means the same thing every time: promote a layer, animate it, throw it
+ * away. A trace of an eight-press walk put `Layerize` at 42.4ms per press, which is that cycle
+ * happening twice a press on the two art layers — and a hold is exactly the case that could least
+ * afford it, so the rule keeps its whole value even though it now covers fewer presses.
  *
  * THIS IS THE FIX `.tv-nav-items` ALREADY CARRIES, and the note there is the full reasoning: a
  * transform that ENDS hands the layer back and repaints on different subpixels, so the resting
@@ -1239,11 +1503,32 @@
  * that decorate it. Held down, they overlap each other four deep, never finish, and cost a style
  * recalculation per element per frame for a cascade nobody can perceive at 120ms a card.
  *
- * The pictures and the plates still CHANGE — they simply cut instead of dissolving, which at this
+ * The plates and the copy still CHANGE — they simply cut instead of dissolving, which at this
  * speed is what the eye reads anyway. Let go and the class clears on its own timer, so the card
  * you actually stop on arrives with the full cascade intact.
  *
- * `.tv-spot-strip` is deliberately absent: it is the slide, and the slide is the thing being kept. */
+ * `.tv-spot-strip` is deliberately absent: it is the slide, and the slide is the thing being kept.
+ *
+ * ---- AND NEITHER IS THE PICTURE, ANY MORE -------------------------------------------------
+ * `.tv-spot-layer` and `.tv-spot-art .art-photo` used to be in the list below and are not now, and
+ * the reason is the same one that let the billboard start tracking a hold at all: THE PACE
+ * CHANGED. This suppression was written against a hold that repeated every ~120ms, where a 90ms
+ * dissolve on top of a 90ms photo rise is most of the gap between presses and four of them are
+ * always in flight at once. HELD_STEP_MIN_MS now paces a hold at 220ms, so each 90ms dissolve
+ * STARTS AND FINISHES inside its own press — one at a time, never overlapping, which is the
+ * condition the ten-animation measurement never had.
+ *
+ * What the suppression bought was a cut, and a cut is what a viewer holding a direction actually
+ * complains about: the picture does not change, it is replaced. 90ms is three frames — it is not a
+ * dissolve you can watch, it is the difference between a frame that snaps and a frame that hands
+ * over. Both durations are already the held ones (`--sp-art-fade` is set to ART_FADE_MS_CHAINED by
+ * `step`, and the layer's 90ms was never tied to the slide), so nothing here needs a fast variant;
+ * they only needed to be allowed to run.
+ *
+ * THE PLATE AND THE COPY STAY CUT, deliberately. The wordmark's arrival is `200ms ease 110ms` —
+ * a 310ms cascade that does not fit inside a 220ms press and would be the "fade four presses long"
+ * defect at ART_FADE_MS all over again, on the one element whose whole job is to be legible. The
+ * cascade is what a DELIBERATE press buys; a hold gets the picture. */
 /* THE STRIP GLIDES WHILE THE KEY IS HELD. The row's own curve decelerates — right for a single
    press that should arrive and settle, wrong for a hold, where it slows almost to a stop before
    the next repeat relaunches it and the eye reads a sequence of little arrivals as stepping.
@@ -1254,13 +1539,45 @@
   transition-timing-function: linear !important;
 }
 
-.tv-spot.is-fast .tv-spot-layer,
+/* ---- THE SPRING ARM DRIVES THE STRIP ITSELF -------------------------------------------------
+ * `groloo.tvspring = 'on'` swaps the CSS transition for a rAF spring that retargets without ever
+ * restarting (see `springEnabled` in lib/tvMotionFlags.ts and the loop in TvSpotlight). The two
+ * cannot both own the transform, so the transition comes off entirely when the arm is live.
+ *
+ * WHY THIS IS AN ARM AND NOT A REPLACEMENT. A `transform` transition on a promoted layer is handed
+ * to the COMPOSITOR and keeps interpolating while the main thread is blocked; a rAF spring is
+ * main-thread style work on every frame, so it stutters exactly when this row is under pressure —
+ * which the traces in this file say is a real state, not a hypothetical one. What the spring buys
+ * in exchange is genuine velocity continuity: re-aiming a transition mid-flight restarts its curve
+ * over the new distance, which is why a held key needs `linear` above to fake constant speed.
+ * Which of those matters more on the television is a measurement, and `tv-measure.mjs` scores both
+ * arms with identical code. */
+.tv-spot.is-spring .tv-spot-strip {
+  transition: none;
+}
+
+/* ---- A NEW CATALOGUE ARRIVES WITHOUT ANIMATING ---------------------------------------------
+ * Set by TvSpotlight for the length of a catalogue change (Home -> Movies -> Series …). A page
+ * change is not a walk: the billboard must CUT to the new row's first title, and every transition
+ * that makes a walk read as a walk has to be off while it does. Same shape as `is-fast` above,
+ * different reason — that one is about cost, this one is about meaning. */
+.tv-spot.is-cut .tv-spot-layer,
+.tv-spot.is-cut .tv-spot-layer.on,
+.tv-spot.is-cut .tv-spot-plate,
+.tv-spot.is-cut .tv-spot-plate.on,
+.tv-spot.is-cut .tv-spot-info,
+.tv-spot.is-cut .tv-spot-infoblk,
+.tv-spot.is-cut .tv-spot-infoblk.on,
+.tv-spot.is-cut .tv-spot-art,
+.tv-spot.is-cut .tv-spot-art .art-photo {
+  transition: none !important;
+  animation: none !important;
+}
+
 .tv-spot.is-fast .tv-spot-plate,
 .tv-spot.is-fast .tv-spot-plate.on,
 .tv-spot.is-fast .tv-spot-info,
-.tv-spot.is-fast .tv-spot-infoblk,
-.tv-spot.is-fast .tv-spot-art,
-.tv-spot.is-fast .tv-spot-art .art-photo {
+.tv-spot.is-fast .tv-spot-art {
   transition: none !important;
 }
 /* text-align IS LOAD-BEARING, and it is a reset rather than a style choice. `.tv-spot-hero` is a
@@ -1369,6 +1686,28 @@
   overflow: hidden;
   opacity: 0;
   transition: opacity .25s ease;
+
+  /* ---- ROOM FOR THE SLIDE TO ARRIVE FROM, ON BOTH SIDES ------------------------------------
+   * THE DEFECT: press LEFT and the copy arrived with its first letters sliced off — "Action"
+   * missing its A, every line of the synopsis cut down its left edge. `overflow: hidden` above
+   * clips at this box and `.tv-spot-infoblk` sits flush with that edge; the slide then translates
+   * it OUTWARD, straight past the clip. Rightward presses hid the bug because the copy is
+   * left-aligned, so the overhang fell into the empty space at the end of each line.
+   *
+   * THE FIX IS A BLEED, NOT A BIGGER BOX. Padding widens the clip region, a matching negative
+   * margin puts the element back where it was, and `max-width` grows by the same amount on both
+   * sides so the CONTENT width is untouched — a wider measure would rewrap every synopsis in the
+   * app and quietly change how many words fit on three lines. `box-sizing: border-box` is global
+   * (app.css), which is what makes that arithmetic exact rather than approximate.
+   *
+   * The blocks are then held off the padding edge by the same amount (see `.tv-spot-infoblk`), so
+   * their resting position is identical to before and only the room around them has changed. */
+  --sp-copy-bleed: calc(var(--sp-wl) * 0.07);
+  max-width: calc(min(52vw, 1000px) + var(--sp-copy-bleed) * 2);
+  margin-left: calc(var(--sp-copy-bleed) * -1);
+  margin-right: calc(var(--sp-copy-bleed) * -1);
+  padding-left: var(--sp-copy-bleed);
+  padding-right: var(--sp-copy-bleed);
 }
 /* ONE BLOCK PER SLOT, STACKED — sharing the artwork's `xfade` state so the copy and the picture
    can never disagree about which title is on screen.
@@ -1387,38 +1726,137 @@
 
    THE TWO HALVES ARE NOT THE SAME ANIMATION, and that asymmetry is the whole character of it.
    Measured off the reference by pixel standard deviation, which for light text on a dark panel is
-   opacity directly:
+   opacity directly. Three presses, and all three agree to within a frame:
 
-     OUT — 0.93, 0.82, 0.72, 0.62, 0.52, 0.42, 0.32, 0.20, 0.10, 0.00. Ten steps of −0.10, which is
-     linear and nothing else. It begins ON THE PRESS, with no delay, and takes 330ms. Leaving is
-     mechanical: the copy is not being presented, it is being got out of the way, and a linear
-     ramp is the least attention-seeking way to do that.
+     44.3 | 5.8, 13.2, 18.7, 24.2, 29.5, 34.0, 37.6, 40.1, 41.6, 43.2, 44.0, 44.9
+      ^ the frame before the press                                            ^ settled
 
-     GAP — exactly one frame at zero. Never two paragraphs on screen at once.
+     OUT — ONE FRAME. The copy is at full strength on the frame before the press and at the floor
+     on the press frame itself. It is a CUT, not a fade.
 
-     IN — 0.14, 0.34, 0.51, 0.62, 0.72, 0.79, 0.88, 0.90, 0.96, then a long crawl to 1, over 360ms:
-     THREE TIMES the length of the fade a previous pass had here, and eased where that was linear.
-     Arriving is the opposite job from leaving — the new title introducing itself — so it comes up
-     quickly and then settles, which is what makes the copy read as placed rather than switched.
+     GAP — the same single frame. The outgoing text is gone and the incoming has not started;
+     never two paragraphs on screen at once.
 
-     AND IT IS THE SAME CURVE AS THE STRIP. Normalised against its own duration the fade is half
-     done at 27.5%, which is quadratic; against the measured points a quad ease-out lands .185,
-     .344, .475, .603, .708, .806, .878, .932, .971 versus .14, .34, .51, .62, .72, .79, .88, .90,
-     .96. A quartic was tried first, from reading the opening step as steeper than it is, and
-     probing our own page showed it half-arrived in a twelfth of its length against the
-     reference's quarter — visibly snappier. There is one ease-out in this row and everything that
-     eases uses it.
+     IN — normalised: .21, .34, .48, .61, .73, .82, .88, .92, .96, .98, 1 over about 350ms,
+     beginning immediately after that one frame. Half-arrived at 28% of its own length, which is a
+     QUADRATIC ease-out; a quartic was tried first, from reading the opening step as steeper than
+     it is, and half-arrived in a twelfth of its length against the reference's quarter.
 
-   So: linear out, quad ease-out in, and the in starts exactly where the out finished. */
+   ---- WHAT THIS REPLACED, AND WHY IT WAS THE BIGGEST GAP IN THE ROW ----------------------------
+   The previous pair was `330ms linear` out, then the in delayed by that same 330ms — a reading of
+   an earlier, rougher capture that recorded the out as "ten steps of −0.10". The clean capture has
+   no such ramp: those ten steps were the incoming copy RISING, read backwards off a press whose
+   start had been missed by a third of a second.
+
+   The cost of the error was the whole cascade's length. Out plus gap plus in came to 690ms, so the
+   synopsis was still arriving more than two-thirds of a second after a press that the strip had
+   answered in 267ms — against ~350ms in the reference. The row felt like it was catching up with
+   itself, and this is where the time was going.
+
+   So: cut out, no delay, quad ease-out in. */
+/* ---- THE COPY SLIDES, AND THE NOTE THAT SAID OTHERWISE WAS WRONG --------------------------
+   THE OLD CLAIM, kept because it was believed for a long time and is the reason this was deleted
+   once: "correlating the copy's pixel row against itself across every frame gives a best offset of
+   EXACTLY 0 on every one". That came from an early, rough capture — the same one that produced the
+   24px artwork drift, the 330ms linear copy fade-out and the 13-frame slide, none of which survive
+   on a clean recording either.
+
+   RE-MEASURED PROPERLY, correlating the metadata block against the SETTLED frame with a shift
+   search, and reported only on frames where the text is above a quarter strength so the number is
+   not noise. Two presses, agreeing to a hundredth of a pixel, correlation .97-1.00:
+
+       67ms   100    133    167    200    233    267    300    333   367ms
+     19.64  12.67   7.86   4.65   2.59   1.29   0.58   0.25   0.09   0.00  px
+
+   Fitted: a QUARTIC ease-out, 32px, 370ms, starting 25ms after the press — RMS 0.04px across all
+   ten points, which is as close as this method can measure anything.
+
+   32px IS 3.55% OF THE REFERENCE'S 902px BILLBOARD, and `--sp-wl` here is ~904px at 1080p, so the
+   two cards are the same size and the number transfers directly. Written against the variable
+   anyway, so it scales with the row instead of being right at exactly one panel size.
+
+   THE SIGN IS POSITIVE, which is the one thing the deleted implementation had backwards. On a
+   RIGHTWARD press the incoming copy starts to the RIGHT of where it lands and settles leftward —
+   it arrives from the side the walk is heading toward, not from behind it. */
 .tv-spot-infoblk {
   position: absolute;
-  inset: 0;
+  /* Held off the padding edge by the bleed, so the copy rests exactly where it always did and the
+     extra room exists only for the slide to travel through. */
+  top: 0; bottom: 0;
+  left: var(--sp-copy-bleed, 0px);
+  right: var(--sp-copy-bleed, 0px);
   opacity: 0;
-  transition: opacity 330ms linear;
+  transform: translateX(calc(var(--sp-dir, 1) * var(--sp-copy-slide, calc(var(--sp-wl) * 0.046))));
+  /* ---- OUT IS A SHORT FADE, AND THE IN WAITS FOR IT --------------------------------------
+     THE CAPTURE CANNOT SETTLE THIS ONE, and the earlier note here claimed it could. The copy is at
+     full strength on the frame before the press and at the floor on the press frame — but that is a
+     30fps recording, so its quantum IS 33ms. "Gone within one frame" excludes a 150ms fade; it does
+     NOT distinguish an instant cut from a fade of up to ~33ms, and 0s is simply the harshest end of
+     the range the measurement permits. 150ms sits outside it on the evidence and inside it on the
+     panel, which is the tiebreak that counts.
+
+     THE DELAY IS NOT OPTIONAL WITH A FADE-OUT. Both blocks are stacked and absolutely positioned,
+     so an out that overlaps the in puts two paragraphs of body text on screen together — the smear
+     this file already warns about ("a photograph over a photograph is still a picture; text over
+     text is neither"). The in therefore starts exactly where the out finishes. Move one and move
+     the other, or the row goes back to being legible-through-itself. */
+  /* ---- THE OUT IS 25ms, WHICH IS THE TOP OF WHAT THE CAPTURE ALLOWS --------------------------
+     The reference's copy is at full strength on the frame before the press and at the floor on the
+     press frame itself. At 30fps that bounds the fade-out at <=33ms and says nothing finer, so 0ms
+     and 33ms are both consistent with it — 0 was tried and reads as a blink on a 60fps panel, where
+     a hard cut is a harsher artefact than the same cut sampled at 30. 25ms is a real fade, one and
+     a half frames at 60fps, and still inside the bound.
+
+     IT IS ALSO WHAT BUYS THE EARLY START. Both blocks are stacked, so the incoming one cannot begin
+     until the outgoing has gone or two paragraphs share the screen. A 25ms out lets the in start at
+     25ms, which is where the reference starts it; the 150ms out this replaces pushed the entire
+     cascade 150ms late for the same reason. The three numbers move together or not at all. */
+  transition: opacity 25ms ease, transform 0s;
 }
 .tv-spot-infoblk.on {
   opacity: 1;
-  transition: opacity 360ms cubic-bezier(.25, .46, .45, .94) 330ms;
+  transform: none;
+  /* ---- BOTH HALVES FITTED TO THE SAME TWO PRESSES -------------------------------------------
+     OPACITY — measured .19 .34 .48 .61 .73 .82 .88 .92 .96 1.0 at 33ms steps, which is half-arrived
+     at 105ms. A quadratic ease-out is half-arrived at 28% of its length, so the duration is
+     105/0.28 = 375ms; that curve then predicts .185 at 33ms against the .19 measured.
+
+     TRANSFORM — the slide, fitted at 0.04px RMS over ten points: quartic ease-out, 370ms. It gets
+     the extra 20ms it measured because the eye follows a moving edge more precisely than a
+     brightening one, and the two ending together is what makes it one gesture rather than two. */
+  /* ---- NO DELAY ON EITHER, AND THAT IS WHAT STOPS IT READING AS A BLINK -------------------
+     Both carried 25ms, from the slide's fit. Measured against the reference that is the single
+     most visible error in the whole cascade: one frame after the press Netflix's copy is already
+     at 19% and a 25ms-delayed ramp is at 1%. The panel therefore sat at NOTHING for two frames and
+     then arrived — a gap the eye reads as a blink, not as a fade, however correct the curve after
+     it is.
+
+     THE OVERLAP THIS COSTS IS NOTHING. The out above is 25ms, so for the frame and a half they
+     coexist the incoming block is under 5% — nowhere near the two-paragraphs-legible-at-once smear
+     this file warns about, which needed the old 150ms out to happen. Gap and smear are the two
+     failure modes and the short out is what lets us avoid both at once.
+
+     The slide's own fit put its start at 25ms, but 15ms and 35ms fitted within 0.01px of that, so
+     the delay was never resolved by the measurement — zero is inside its error bar and is the value
+     that costs nothing. */
+  /* REFIT WITH THE TIME BASE PINNED. Both were first fitted with a free start offset, which let a
+     25ms delay absorb curve error; once the opacity match proved the two clocks are aligned, the
+     delay had to go and the shapes had to carry the fit on their own. Re-solved against the same
+     ten frames with the start held at zero:
+
+       slide    quartic ease-out, 41.5px, 395ms   RMS 0.057px over ten points
+       opacity  quadratic ease-out, 365ms         RMS 0.89%
+
+     41.5px is 4.6% of the reference's 902px billboard, which is why the distance moved with the
+     duration — a longer travel over a longer time, landing on the same measured curve. */
+  transition:
+    opacity 365ms cubic-bezier(.25, .46, .45, .94),
+    transform 395ms cubic-bezier(.25, 1, .5, 1);
+}
+.tv-spot.is-fast .tv-spot-infoblk,
+.tv-spot.is-fast .tv-spot-infoblk.on {
+  transition-duration: 110ms;
+  transition-delay: 0ms;
 }
 .tv-spot.is-open .tv-spot-info {
   opacity: 1;
@@ -2964,6 +3402,7 @@
    off in the component under the same query. */
 @media (prefers-reduced-motion: reduce) {
   .tv-spot-strip { transition: none; }
+
   .tv-spot-layer,
   .tv-spot-plate,
   .tv-spot-plate.on { transition: none; }
