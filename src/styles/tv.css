@@ -410,9 +410,15 @@
 
 /* ---- THE FEATURED BILLBOARD (TvHero) — the top of the home screen, and nothing else -------
    A rounded, full-width card under the nav holding one title: art behind, a left-to-right scrim
-   over it, and the copy pinned bottom-left. Sized so the first row below it PEEKS: 62vh leaves
-   about a third of a 1080p panel for the row underneath, which is what tells a viewer the page
-   scrolls. The min/max keep it sane on a 720p webOS package and on anything unusually tall. */
+   over it, and the copy pinned bottom-left. Sized the way Netflix sizes its billboard: it OWNS the
+   screen you arrive on, and the row beneath it is a peek rather than a half. 78vh leaves roughly a
+   fifth of a 1080p panel for the row underneath — enough of a poster's top edge to say the page
+   scrolls, not enough to compete with the title being featured.
+
+   IT WAS 62vh, and at that height the card read as a wide banner with a row of posters beside it
+   rather than as the one thing on the screen — the whole point of a billboard. The min/max keep it
+   sane on a 720p webOS package and on anything unusually tall; 900 is the ceiling because past it
+   the copy block starts floating in the middle of a very tall dark rectangle. */
 /* The billboard parks like a row does, except the whole SECTION is the target rather than the
    focused button: arriving from below on a 54px action button and merely nudging it into view
    left the billboard itself three-quarters off the top of the screen. The margin is the bar plus
@@ -424,7 +430,7 @@
 }
 .tv-hero-stage {
   position: relative;
-  height: clamp(340px, 62vh, 720px);
+  height: clamp(420px, 78vh, 900px);
   border-radius: 12px;
   overflow: hidden;
   background: #000;
@@ -506,7 +512,10 @@
 
 .tv-hero-copy {
   position: absolute;
-  left: 56px; bottom: 52px;
+  /* Moved down and in with the card's new height: the copy is anchored to the BOTTOM, so a taller
+     stage does not move it — it only puts more empty picture above it. 72px of bottom inset keeps
+     it sitting on the card rather than on its edge at the size the billboard is now. */
+  left: 64px; bottom: 72px;
   max-width: 46%;
   animation: tvHeroRise .5s cubic-bezier(.2, .7, .2, 1) both;
 }
@@ -516,7 +525,7 @@
    term of a list rather than as a heading. */
 .tv-hero-logo {
   display: block;
-  max-width: 100%; max-height: 132px;
+  max-width: 100%; max-height: 168px;
   object-fit: contain;
   margin-bottom: 18px;
   opacity: 0;
