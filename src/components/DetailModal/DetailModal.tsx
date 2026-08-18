@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useModal } from '../../stores/modal';
 import { usePlayer } from '../../stores/player';
@@ -6,7 +6,7 @@ import { useLibrary } from '../../stores/library';
 import { useAuth } from '../../stores/auth';
 import { useHistory } from '../../stores/history';
 import { useReport } from '../../stores/report';
-import { useMeta, useAddonMeta } from '../../lib/queries';
+import { useMeta, useAddonMeta, apiIdOf } from '../../lib/queries';
 import { useT, useGenre } from '../../i18n/i18n';
 import { hueBg } from '../../lib/img';
 import { epLabel } from '../../lib/utils';
@@ -305,9 +305,45 @@ export default function DetailModal() {
    * failed), so the two run side by side and an add-on title costs one round trip rather than
    * two. For an id that IS ours it stays idle unless /api/meta actually fails, in which case
    * it is a free second chance at a title TMDB has never heard of. */
-  const { data: apiMeta, isError: metaError } = useMeta(target?.id, target?.type);
+  const { data: apiMeta, isError: metaError } = useMeta(apiIdOf(target), target?.type);
   const { data: addonMeta, isFetching: addonMetaFetching } = useAddonMeta(target?.id, target?.type, metaError);
-  const meta = apiMeta ?? addonMeta ?? undefined;
+  /* BOTH CAN NOW ANSWER AT ONCE, and which field wins depends on what the field is FOR.
+   *
+   * An add-on card that ships an `imdb_id` — every Kitsu/MAL/AniList one does — reaches
+   * /api/meta through apiIdOf above, so an anime row finally gets a synopsis, a rating and
+   * our baked artwork instead of whatever the add-on happened to host.
+   *
+   * It must NOT get TMDB's episode list. Streams are addressed under the add-on's own id and
+   * `kitsu:12:5` is not derivable from a season and an episode number, so taking TMDB's
+   * seasonList here would produce a deck whose every entry asks for a stream nobody can serve.
+   * Same for the title: TMDB calls it "Attack on Titan" and the add-on's catalog said
+   * "Shingeki no Kyojin"; renaming a show out from under the row it was opened from is
+   * disorienting, and the add-on's name is the one the user just read.
+   *
+   * So the add-on stays the SPINE — id, title, episodes, seasons — and TMDB supplies the
+   * PRESENTATION. When only one side answered this collapses to exactly that side, which is
+   * the behaviour every title had before. */
+  const meta = useMemo(() => {
+    if (!addonMeta) return apiMeta ?? undefined;
+    if (!apiMeta) return addonMeta;
+    return {
+      ...addonMeta,
+      poster: apiMeta.poster ?? addonMeta.poster,
+      posterArt: apiMeta.posterArt ?? addonMeta.posterArt,
+      backdrop: apiMeta.backdrop ?? addonMeta.backdrop,
+      titleLogo: apiMeta.titleLogo ?? addonMeta.titleLogo,
+      plot: apiMeta.plot || addonMeta.plot,
+      rating: apiMeta.rating ?? addonMeta.rating,
+      runtime: apiMeta.runtime ?? addonMeta.runtime,
+      genre: apiMeta.genre ?? addonMeta.genre,
+      cast: apiMeta.cast?.length ? apiMeta.cast : addonMeta.cast,
+      director: apiMeta.director ?? addonMeta.director,
+      trailerKey: apiMeta.trailerKey ?? addonMeta.trailerKey,
+      // The IMDb id the add-on told us is the same one we looked up — keep ours if the
+      // add-on somehow had none, since the stream fan-out is keyed on it.
+      imdb: addonMeta.imdb ?? apiMeta.imdb,
+    } as typeof addonMeta;
+  }, [apiMeta, addonMeta]);
   // While the player is open on top, drop the trailer key so useTrailer tears the
   // autoplaying YouTube iframe down (it kept streaming a whole second video behind the
   // player). The modal's `target` stays set, so closing the player restores it — and

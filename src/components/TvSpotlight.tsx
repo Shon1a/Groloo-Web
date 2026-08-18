@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
-import { imgW } from '../lib/img';
+import { imgW, artW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer } from '../lib/queries';
+import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, apiIdOf } from '../lib/queries';
 import { retainImage, isDecoded } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
@@ -921,7 +921,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * never for a card that has one, which is the common case and now costs exactly one request for
    * the preview. (`enrich` rows resolve the same id from the detail they already fetch, below.) */
   const wantImdbLookup = armed && !dwelt?.imdb && !metaImdb;
-  const { data: trailerMeta } = useMeta(wantImdbLookup ? dwelt?.id : undefined, dwelt?.type);
+  const { data: trailerMeta } = useMeta(wantImdbLookup ? apiIdOf(dwelt) : undefined, dwelt?.type);
   useEffect(() => {
     if (typeof trailerMeta?.imdb === 'string' && !dwelt?.imdb) setMetaImdb(trailerMeta.imdb);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1017,7 +1017,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * mid-fade — a flash of the fallback on every press. The map keeps what it has seen, so both
    * layers can always answer for themselves. */
   const [artById, setArtById] = useState<Record<string, Partial<MediaItem>>>({});
-  const { data: detail } = useMeta(enrich && artOn ? resting?.id : undefined, resting?.type);
+  const { data: detail } = useMeta(enrich && artOn ? apiIdOf(resting) : undefined, resting?.type);
   useEffect(() => {
     if (!enrich || !detail || !resting) return;
     const k = String(resting.id);
@@ -1026,9 +1026,43 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     // free, on a request it was already making. (The latch it feeds is documented above.)
     if (typeof detail.imdb === 'string') setMetaImdb(detail.imdb);
     const add: Partial<MediaItem> = {};
-    if (detail.backdrop) add.backdrop = detail.backdrop;
-    if (detail.titleLogo) add.titleLogo = detail.titleLogo;
-    if (detail.plot) add.overview = detail.plot;
+    /* ---- IT FILLS WHAT IS MISSING. IT NEVER REPLACES WHAT IS ALREADY ON SCREEN. --------------
+     *
+     * THE DEFECT, MEASURED, on a fresh load of the home screen: rest on "Upcoming Movies &
+     * Series", press Down, and the Trending Movies billboard changed its PICTURE about two
+     * seconds later — Spider-Man's close-up became the wide shot. Reading the layer off the DOM
+     * against the network:
+     *
+     *     t=4931  billboard = qeQJx07rK2xm   row takes focus (is-open)
+     *     t=5065  GET /api/meta/969681       `enrich` switches on with `started`
+     *     t=5444  billboard = vjMvFSmGUxEt   the detail landed and repainted it
+     *
+     * and the two URLs are two different server fields for the same title: /api/home answers
+     * `backdrop: qeQJx07r…`, /api/meta answers `artBackdrop: vjMvFSmGUxEt…`. Both are correct
+     * pictures of the film. Only one of them was already on the screen.
+     *
+     * WHY IT ONLY EVER HAPPENS ONCE, AND ONLY AFTER A RELOAD: `enrich` is `started` from
+     * TvHomeRow, which latches the first time the remote settles on the row. So the swap fires on
+     * the first visit to each row and never again — which is exactly what makes it read as "it
+     * changes when I focus it" rather than as a row still loading.
+     *
+     * THE INTENT WAS RIGHT AND THE REACH WAS WRONG. `artBackdrop` is the textless frame the baked
+     * poster was cropped from, so preferring it makes the billboard and the tile agree — worth
+     * having on a card that arrived with NO artwork, which is the case this whole block exists
+     * for (history cards carry a poster and a title and nothing else; titles appended from
+     * /api/browse past the server's wordmark cap carry no logo). It was never worth having on a
+     * card whose picture the viewer is already looking at. A swap under the eye is a worse fault
+     * than a billboard and a tile showing two frames of the same film — especially as the tile
+     * beside the billboard belongs to the NEXT title, so the two are never actually compared.
+     *
+     * The same rule applies to all three fields, not just the artwork: /api/home ships a wordmark
+     * (`logos=1`) and a synopsis for its seeded titles, and overwriting either of those on focus
+     * is the identical defect in a quieter register. */
+    if (!resting.backdrop && (detail.artBackdrop || detail.backdrop)) {
+      add.backdrop = detail.artBackdrop || detail.backdrop;
+    }
+    if (!(resting.titleLogo || resting.logo) && detail.titleLogo) add.titleLogo = detail.titleLogo;
+    if (!resting.overview && detail.plot) add.overview = detail.plot;
     if (!Object.keys(add).length) return;
     // Written once per title: re-setting an entry that already exists would re-render this row
     // for no change, and on a state update keyed off a query result that is a loop.
@@ -1072,7 +1106,20 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * should be: one class name on the section. */
   const thumbs = useMemo(() => {
     const tile = (it: MediaItem, key: string) => {
-      const src = imgW(it.poster || it.backdrop || '', THUMB_RENDITION);
+      /* `posterArt` FIRST — the baked art (textless key art, cropped around the subject,
+       * wordmark laid over the bottom) is the same picture the billboard above this strip
+       * shows, which is the whole point: today a tile and its own billboard look like two
+       * different titles. It is a plain CDN URL, so imgW leaves it alone — that helper only
+       * rewrites TMDB's /t/p/<size>/ segment, and the baked art is already tile-sized.
+       *
+       * `poster` stays as the onError fallback below, so a title the art service declined, an
+       * add-on card with no IMDb id, or the service simply not being deployed all land on
+       * exactly the picture this row shows today. */
+      // artW picks w320 or w640 from devicePixelRatio — see img.ts. The TV asks for
+      // the bigger one and still moves fewer bytes than the single size did.
+      const baked = artW(it.posterArt);
+      const src = baked || imgW(it.poster || it.backdrop || '', THUMB_RENDITION);
+      const fallbackSrc = baked ? imgW(it.poster || it.backdrop || '', THUMB_RENDITION) : '';
       const res = resumeOf?.(it);
       return (
         <button
@@ -1114,6 +1161,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
                 const t = img.parentElement;
                 if (t) t.style.background = 'none';
                 img.classList.add('rdy');
+              }}
+              /* One retry, onto the ordinary poster, and then never again — `dataset.fell`
+                 latches so a poster that is ALSO broken cannot ping-pong the two URLs. The
+                 art service is a separate deploy from this app: if it is down, or was never
+                 stood up, every tile quietly renders what it renders today. */
+              onError={(e) => {
+                const img = e.currentTarget;
+                if (!fallbackSrc || img.dataset.fell) return;
+                img.dataset.fell = '1';
+                img.src = fallbackSrc;
               }}
             />
           )}
