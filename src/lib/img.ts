@@ -66,7 +66,10 @@ export const artSize: ArtSize =
  *  undo that. */
 export function artW(url: string | undefined, size: ArtSize = artSize): string {
   if (typeof url !== 'string' || !url) return '';
-  return url.replace(/\/w\d+\.(?:webp|jpe?g)$/i, `/${size}.webp`);
+  // The size is the FIRST segment of a crop url (/crop/w640/f4231/<file>.webp), so
+  // this rewrites that rather than a trailing filename. The focal segment is left
+  // alone: it is what makes a corrected poster a different url.
+  return url.replace(/\/crop\/w\d+\//i, `/crop/${size}/`);
 }
 
 /* ------------------------------------------------------------------ *
