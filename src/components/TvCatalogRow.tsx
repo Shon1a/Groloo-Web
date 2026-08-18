@@ -97,9 +97,11 @@ export default function TvCatalogRow({ desc, title, onSelect, emptyMessage }: Tv
       items={items}
       title={title}
       max={shown}
-      /* /api/browse answers without `titleLogo` — the server resolves those only for the home
-       * payload — so without this the billboard on these three pages is the one in the build
-       * showing a title in plain type. See the prop's note in TvSpotlight. */
+      /* /api/browse answers with `titleLogo` now (`logos=1`, as the home payload does), so the
+       * billboard on these three pages is no longer the one in the build showing a title in plain
+       * type. This stays for what browse still omits — the textless backdrop and the synopsis —
+       * and for a title whose wordmark was past the server's cold-cache budget. See the prop's
+       * note in TvSpotlight. */
       enrich
       onSelect={onSelect}
       onMore={canMore ? () => setShown((s) => s + STEP) : undefined}
