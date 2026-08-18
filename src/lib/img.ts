@@ -56,8 +56,14 @@ export type ArtSize = typeof ART_SIZES[number];
 export const artSize: ArtSize =
   (typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5) ? 'w640' : 'w320';
 
-/** Swap the size segment of a baked-art URL. Anything that is not one leaves
- *  untouched, exactly as imgW does for a non-TMDB poster. */
+/** Swap the size segment of a baked-art URL, leaving everything else — including the
+ *  recipe revision that precedes it — exactly as the server sent it. Anything that is
+ *  not one of our urls passes through untouched, as imgW does for a non-TMDB poster.
+ *
+ *  The revision matters: it is what makes a corrected poster a NEW url, so this cache
+ *  (and the service worker's, and the browser's) misses it instead of serving the
+ *  picture an admin has already replaced. Rewriting or dropping it would silently
+ *  undo that. */
 export function artW(url: string | undefined, size: ArtSize = artSize): string {
   if (typeof url !== 'string' || !url) return '';
   return url.replace(/\/w\d+\.(?:webp|jpe?g)$/i, `/${size}.webp`);
