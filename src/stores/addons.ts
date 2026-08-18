@@ -139,22 +139,77 @@ export interface AddonRecord {
  * convert rather than assume, and to branch on the one field that can be missing. */
 interface ServerAddonRecord { id: string; url?: string; origin?: string; installedAt?: string; manifest?: Manifest }
 
+/* WHY A REMOVAL IS A RECORD AND NOT A DELETION.
+ * Removing an add-on used to be pure subtraction: drop the row here, fire a DELETE at the
+ * server, done. That works for exactly as long as every device is looking. It is not what
+ * the other devices see, and it is not what THIS device sees an hour later.
+ *
+ * Nothing in the old shape could tell the two meanings of an absence apart. A row this
+ * device holds that the server's list does not is either an install the server has not
+ * been told about yet — push it up, which the reconcile at the foot of the pull does — or
+ * one the account removed somewhere else, which must be dropped. Symmetrically, a row the
+ * SERVER holds that this device does not is either an install from another device to adopt
+ * or one this device removed while its DELETE failed. Read one way when it meant the other
+ * and the add-on comes back, and it came back the worst possible way: the pull ADOPTED
+ * remote rows and never dropped local ones, so a device that had not synced since the
+ * removal still held the add-on, found it missing from the server's list, and posted it
+ * back up as if it were a new install. One stale television re-installed, for the whole
+ * account, every add-on the user had just removed on their phone. That is the "it comes
+ * back after a while, and it is still there on my other device" this file now answers.
+ *
+ * So a removal is stored, as `removed: { id: at }`, exactly as the library and block
+ * documents already store theirs, and the same rule decides every case: for a given id the
+ * later stamp wins — an install at `installedAt` against a removal at `at`. A tombstone
+ * ties, for the block store's reason inverted: re-pasting a manifest URL is a chore on a
+ * remote control, but silently resurrecting something the user deleted is the app refusing
+ * to obey, and only one of those is a decision the user can see and redo.
+ *
+ * The stored shape is `{ rows, removed }` where it used to be a bare array; the array
+ * still reads as "these rows, no removals on record", which is what it is. It is NOT
+ * rewritten on read — this bucket is the only copy in existence of the user's credentialed
+ * manifest URLs (see above), so it is rewritten when something actually changes it. */
+const TOMB_TTL = 30 * 24 * 60 * 60 * 1000;   // forget a removal after 30 days, as the server does
+type RemovalMap = Record<string, number>;
+
+/* Drop removals older than the window. The clock is shared with the server's
+ * pruneAddonRemovals so a round trip cannot revive what this side has just retired. What
+ * the TTL costs is stated plainly: a device that has been offline LONGER than the window
+ * comes back holding add-ons the account removed with no tombstone left to tell it, and
+ * re-installs them. The alternative is a map that only ever grows. */
+function prune(removed: RemovalMap): RemovalMap {
+  const now = Date.now();
+  const out: RemovalMap = {};
+  for (const id of Object.keys(removed || {})) {
+    const at = +removed[id] || 0;
+    if (at > 0 && now - at <= TOMB_TTL) out[id] = at;
+  }
+  return out;
+}
+
 /* Both lists live in one localStorage array so the stored shape never forks — a record
  * that gets its URL back is the same row it always was, not a migration between keys.
  * The split happens on the way in, on the only thing that separates them: whether the
  * row carries a URL this device can call. */
-function load(): AddonRecord[] {
-  try { const l = JSON.parse(localStorage.getItem(storeKey()) || '[]'); return Array.isArray(l) ? l : []; } catch { return []; }
+function load(): { rows: AddonRecord[]; removed: RemovalMap } {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(storeKey()) || 'null');
+    if (Array.isArray(raw)) return { rows: raw, removed: {} };   // pre-tombstone shape
+    const doc = raw as { rows?: unknown; removed?: unknown } | null;
+    const rows = Array.isArray(doc?.rows) ? (doc!.rows as AddonRecord[]) : [];
+    const removed = (doc?.removed && typeof doc.removed === 'object' && !Array.isArray(doc.removed))
+      ? (doc.removed as RemovalMap) : {};
+    return { rows, removed: prune(removed) };
+  } catch { return { rows: [], removed: {} }; }
 }
-function save(installed: AddonRecord[], unlinked: AddonRecord[]) {
-  try { localStorage.setItem(storeKey(), JSON.stringify([...installed, ...unlinked])); } catch { /* quota */ }
+function save(installed: AddonRecord[], unlinked: AddonRecord[], removed: RemovalMap) {
+  try { localStorage.setItem(storeKey(), JSON.stringify({ rows: [...installed, ...unlinked], removed })); } catch { /* quota */ }
 }
 
 /* Read the bucket belonging to whoever is signed in right now, performing the one-shot
  * hand-over described above on the way. Done as a raw string copy rather than a
  * parse/re-serialize so a bucket this build cannot make sense of still reaches its owner
  * intact instead of being silently flattened to `[]` by the tolerant reader below. */
-function loadForIdentity(): AddonRecord[] {
+function loadForIdentity() {
   try {
     const key = storeKey();
     if (key !== GUEST_KEY && localStorage.getItem(key) === null) {
@@ -163,6 +218,15 @@ function loadForIdentity(): AddonRecord[] {
     }
   } catch { /* private mode / quota — fall through and just read what we can */ }
   return load();
+}
+
+/* The bucket, arranged the way the store holds it. The removals carried across the
+ * guest→account hand-over along with the rows, deliberately: they are the same person's
+ * decisions, and an add-on the user threw away before making an account should not be
+ * handed back to them by the act of signing up. */
+function stateForIdentity() {
+  const { rows, removed } = loadForIdentity();
+  return { ...split(rows), removed };
 }
 
 /* Optional-chained because this also runs at module load: a single junk entry in the
@@ -285,6 +349,8 @@ interface AddonsState {
   installed: AddonRecord[];
   /** add-ons the account owns whose manifest URL this device does not hold (see header) */
   unlinked: AddonRecord[];
+  /** when each removed add-on was removed — what stops one from coming back (see header) */
+  removed: RemovalMap;
   install: (rawUrl: string) => Promise<void>;
   remove: (id: string) => void;
   /** re-read the signed-in account's namespace (the storage key changes on sign-in/out) */
@@ -296,7 +362,7 @@ interface AddonsState {
 }
 
 export const useAddons = create<AddonsState>((set, get) => ({
-  ...split(loadForIdentity()),
+  ...stateForIdentity(),
   install: async (rawUrl) => {
     const owner = identity();
     /* The core comes up BEFORE the URL is normalised rather than after the fetch, because
@@ -341,19 +407,51 @@ export const useAddons = create<AddonsState>((set, get) => ({
      * relink reaching the account, not a 409 waiting to happen. */
     const unlinked = get().unlinked.filter((a) => addonId(a) !== manifest.id);
     const next = [...get().installed, rec];
-    save(next, unlinked); set({ installed: next, unlinked });
+    /* AN INSTALL RETIRES THE REMOVAL, or the row will not stay installed. The tombstone
+     * outranks nothing here — `rec.installedAt` is now and the removal is necessarily
+     * older — but leaving it in the map means it goes up to the account on the next
+     * reconcile and comes back down to every other device beside a row it is younger
+     * than, which is a comparison this device has already settled by re-installing.
+     * Dropping it is the same move block() makes on the tombstone for a key. */
+    const removed = { ...get().removed };
+    delete removed[manifest.id];
+    save(next, unlinked, removed); set({ installed: next, unlinked, removed });
     serverInstall(rec, owner);
   },
   // The only write in here with nothing to outlive: no await stands between the click and
   // the save, so the identity read for serverRemove is the one the user clicked under.
   remove: (id) => {
     const owner = identity();
-    const installed = get().installed.filter((a) => a.id !== id);
-    const unlinked = get().unlinked.filter((a) => a.id !== id);
-    save(installed, unlinked); set({ installed, unlinked });
+    const hit = (a: AddonRecord) => !!a && (a.id === id || addonId(a) === id);
+    const at = Date.now();
+    /* Record the removal BEFORE dropping the row, because the record is the part that has
+     * to survive: the DELETE below is fire-and-forget, and on a television it is fired at
+     * a network that is frequently not there. When it fails — offline, an expired session,
+     * anything — the server keeps the add-on, and without this map the very next pull
+     * reads it as an install this device had not heard about and puts it straight back.
+     * The pull re-issues the DELETE for as long as the server still lists a tombstoned id,
+     * so a removal made offline lands on its own rather than needing the user to remove
+     * the same add-on a second time.
+     *
+     * BOTH NAMES OF WHATEVER ACTUALLY LEFT are tombstoned, not just the id the button
+     * passed. A row written by an older build can carry an `id` its manifest disagrees
+     * with, and the pull keys on the manifest's — tombstone one name and the merge below
+     * matches on the other, finds no removal, and hands the row back. They are the same
+     * add-on either way, so recording both costs a map entry and closes the gap. */
+    const removed = { ...get().removed, [id]: at };
+    for (const a of [...get().installed, ...get().unlinked]) {
+      if (!hit(a)) continue;
+      if (a.id) removed[a.id] = at;
+      const mid = addonId(a);
+      if (mid) removed[mid] = at;
+    }
+    const live = prune(removed);
+    const installed = get().installed.filter((a) => !hit(a));
+    const unlinked = get().unlinked.filter((a) => !hit(a));
+    save(installed, unlinked, live); set({ installed, unlinked, removed: live });
     serverRemove(id, owner);
   },
-  reload: () => set(split(loadForIdentity())),
+  reload: () => set(stateForIdentity()),
   /* Local only, and deliberately so: this is what a device forgets, not what the account
    * owns. Sign-out must leave /api/addons untouched (the collection is meant to survive
    * onto the user's next device), and account deletion has already had the server drop
@@ -383,23 +481,55 @@ export const useAddons = create<AddonsState>((set, get) => ({
      * this point on the deletion path. See the identity note at the top. */
     epoch += 1;
     try { localStorage.removeItem(storeKey()); } catch { /* private mode */ }
-    set({ installed: [], unlinked: [] });
+    // The removals go with the rows. They are statements about a collection this device is
+    // being told to forget entirely, and on the deletion path the account they describe is
+    // about to stop existing — keeping them would leave one account's uninstall decisions
+    // sitting in the bucket the next sign-in on this device may inherit.
+    set({ installed: [], unlinked: [], removed: {} });
   },
   pullFromServer: async () => {
     if (!authed()) return;
     const owner = identity();
     try {
-      const { addons: remote } = await api<{ addons: ServerAddonRecord[] }>('/api/addons');
+      const { addons: remote, removed: remoteRemoved } =
+        await api<{ addons: ServerAddonRecord[]; removed?: RemovalMap }>('/api/addons');
       /* The list that just arrived describes the account that asked for it, which is not
        * necessarily the account signed in now. Nothing below awaits, so this single check
        * covers the save, the set and the reconcile push at the end. */
       if (!stillMine(owner)) return;
-      const local = get().installed;
+
+      /* THE REMOVALS MERGE FIRST, because every other decision in this function is taken
+       * against them. Union of both sides, newest stamp per id: this device's own removals
+       * matter as much as the account's, since one of them may be a DELETE that never
+       * reached the server, and that is precisely the case the old code got wrong in the
+       * direction of resurrection. */
+      const union: RemovalMap = { ...get().removed };
+      for (const id of Object.keys(remoteRemoved || {})) {
+        const at = +(remoteRemoved || {})[id] || 0;
+        if (at > (union[id] || 0)) union[id] = at;
+      }
+      const removed = prune(union);
+
+      /* Removed, unless it has been installed again since. The stamp comparison is what
+       * makes a re-install able to beat an older removal, and the tombstone takes the tie
+       * (see the header). Both names are checked for the reason remove() records both. */
+      const gone = (a: { id?: string; manifest?: Manifest; installedAt?: number }) => {
+        const t = Math.max(removed[addonId(a)] || 0, (a.id && removed[a.id]) || 0);
+        return t > 0 && t >= (a.installedAt || 0);
+      };
+
+      /* A REMOVAL ELSEWHERE NOW REACHES THIS DEVICE. The pull used to be add-only, so an
+       * add-on removed on a phone stayed installed on the television for as long as that
+       * television lived — and worse, the reconcile at the foot of this function then
+       * posted it back up and undid the removal for every device the account has. Local
+       * rows the account has since removed leave here first, so they are absent from both
+       * the merged state and the push list. */
+      const local = get().installed.filter((a) => !gone(a));
       // Working records go in LAST so that if an id somehow sits in both lists, the one
       // holding the URL is what the skip below tests — the whole point of this function
       // is that a URL-less copy can never shadow a usable one.
       const known = new Map<string, AddonRecord>();
-      for (const a of [...get().unlinked, ...local]) { const id = addonId(a); if (id) known.set(id, a); }
+      for (const a of [...get().unlinked.filter((u) => !gone(u)), ...local]) { const id = addonId(a); if (id) known.set(id, a); }
       /* A pull ADDS ids and never rewrites one this device already works with: an id we
        * hold a URL for is skipped outright, because our copy is at least as good as the
        * server's and may be better — a link re-pasted here a moment ago has not been
@@ -421,23 +551,37 @@ export const useAddons = create<AddonsState>((set, get) => ({
        * the user is asked to knowingly re-paste is the honest state. */
       const installed = [...local];
       const unlinked: AddonRecord[] = [];
+      /* Ids the server still lists that this device knows the account removed — i.e. a
+       * DELETE that never landed. Collected here and re-issued below rather than adopted,
+       * which is what lets a removal made offline finish on its own. */
+      const undelivered: string[] = [];
       for (const r of (remote || [])) {
         const id = addonId(r);
-        const mine = id ? known.get(id) : undefined;
-        if (!id || mine?.url) continue;
+        if (!id) continue;
+        const mine = known.get(id);
+        const installedAt = mine?.installedAt ?? (Date.parse(r.installedAt || '') || Date.now());
+        if (gone({ id, manifest: r.manifest, installedAt })) { undelivered.push(id); continue; }
+        if (mine?.url) continue;
         const manifest = r.manifest || mine?.manifest;
         if (!manifest) continue;
-        const installedAt = mine?.installedAt ?? (Date.parse(r.installedAt || '') || Date.now());
         if (r.url) installed.push({ id, url: r.url, manifest, installedAt });
         else unlinked.push({ id, url: '', origin: r.origin || mine?.origin, manifest, installedAt });
       }
-      save(installed, unlinked); set({ installed, unlinked });
+      save(installed, unlinked, removed); set({ installed, unlinked, removed });
       /* Push any local-only add-ons up so the server matches. Rows the pull just adopted
        * are by definition already there, so this walks the PRE-merge list — reconciling
        * `installed` after the splice would POST every row the server just handed us
-       * straight back to it. */
+       * straight back to it.
+       *
+       * `local` IS THE TOMBSTONE-FILTERED LIST, and that is the whole fix on this side.
+       * This loop is what used to resurrect removed add-ons for the entire account: it
+       * reads "mine, and not on the server" as "the server has not been told", which for a
+       * row the user deleted on another device is the exact opposite of the truth. */
       const remoteIds = new Set((remote || []).map(addonId));
       for (const a of local) if (!remoteIds.has(addonId(a))) serverInstall(a, owner);
+      // Retried every pull for as long as the server keeps listing them. DELETE is
+      // idempotent server-side, so a duplicate costs a request and nothing else.
+      for (const id of undelivered) serverRemove(id, owner);
     } catch { /* offline / not authed — keep local */ }
   },
 }));
