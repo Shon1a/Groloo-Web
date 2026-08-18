@@ -291,23 +291,32 @@ export default defineConfig(({ mode }) => ({
             },
           },
           {
-            /* Baked poster art. Matched on the PATH, not an origin: the art host is
+            /* Our own artwork. Matched on the PATH, not an origin: the art host is
              * configured on the server (ART_CDN_BASE) and arrives inside the API
-             * payload, so this build has no way to name it. `/art/v1/...` is ours
-             * wherever it is served from.
+             * payload, so this build has no way to name it. These three prefixes are
+             * ours wherever they are served from:
              *
-             * This was the gap that made the TV feel slower than the desktop on a
-             * revisit — the rule below covers image.tmdb.org only, so every baked
-             * poster went to the network every time while TMDB's own images came
-             * back instantly from the cache. The URL carries both an algorithm
-             * version and a size, so the bytes behind one can never change. */
-            urlPattern: ({ url }) => /^\/art\/v\d+\//.test(url.pathname),
+             *   /crop/{size}/f{focal}/…  the poster slice
+             *   /img/{size}/…            the billboard, and the curated hero
+             *   /logo/{size}/…           the title lettering
+             *
+             * CacheFirst is safe because every one of those urls is self-describing:
+             * the size, and for a poster the crop, are IN the address, so a picture
+             * that changes is a different url and this cache misses it by itself.
+             * That is the same property the rule below relies on for TMDB.
+             *
+             * This rule named `/art/v\d+/` until now, which is the address the old
+             * baked posters lived at and nothing serves any more — so on a revisit
+             * every one of these went to the network while TMDB's own images came
+             * back instantly from the cache next door. */
+            urlPattern: ({ url }) => /^\/(crop|img|logo)\//.test(url.pathname),
             handler: 'CacheFirst',
             options: {
               cacheName: 'groloo-art',
-              // ~150 tiles are live on a home screen; 600 covers that plus the rows
-              // either side of wherever the viewer has walked to.
-              expiration: { maxEntries: 600, maxAgeSeconds: 60 * 60 * 24 * 60 },
+              // ~150 tiles are live on a home screen, and each row now also holds a
+              // billboard and a wordmark under this same rule — so where 600 covered
+              // the posters plus the rows either side, that needs roughly doubling.
+              expiration: { maxEntries: 1200, maxAgeSeconds: 60 * 60 * 24 * 60 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },

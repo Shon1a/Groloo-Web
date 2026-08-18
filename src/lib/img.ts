@@ -2,10 +2,19 @@
  * identical. See the vanilla source for the reasoning behind each. */
 
 /** Right-size a TMDB image URL to a rendition (w342/w500/w780/w1280/…).
- *  Leaves non-TMDB (add-on) URLs untouched. */
+ *  Leaves non-TMDB (add-on) URLs untouched.
+ *
+ *  BACKDROPS AND WORDMARKS MAY ARRIVE ON OUR OWN EDGE INSTEAD. When ART_CDN_BASE is
+ *  set the server sends `/img/w1280/<file>.webp` and `/logo/w500/<file>.webp` in
+ *  place of a TMDB url — same picture, WebP, and served from something that has
+ *  already seen it (measured 0.032s against TMDB's 0.25-0.33s). The size is a path
+ *  segment there for exactly this reason, so every existing caller keeps asking for
+ *  the rendition it always did and this rewrites whichever of the two forms it got. */
 export function imgW(url: string | undefined, size: string): string {
   return typeof url === 'string'
-    ? url.replace(/\/t\/p\/(?:w\d+|original)\//, `/t/p/${size}/`)
+    ? url
+        .replace(/\/t\/p\/(?:w\d+|original)\//, `/t/p/${size}/`)
+        .replace(/\/(img|logo)\/(?:w\d+|original)\//, `/$1/${size}/`)
     : (url ?? '');
 }
 
@@ -35,15 +44,15 @@ export function hueBg(seed: number): string {
 export const LOGO_BASE = 'https://image.tmdb.org/t/p/w300';
 
 /* ------------------------------------------------------------------ *
- *  Baked poster art
+ *  Cut poster art
  *
- *  The art service bakes two renditions and names the size in the path, so this is
- *  the same trick imgW plays on TMDB: one URL travels on the card, the renderer
- *  swaps in the rendition the screen can actually show.
+ *  The crop url names its size in the path, so this is the same trick imgW plays on
+ *  TMDB: one URL travels on the card, the renderer swaps in the rendition the screen
+ *  can actually show.
  *
  *  WHY IT MATTERS HERE MORE THAN IT LOOKS. The tile is 313x509 CSS px. A desktop at
- *  dpr 1 can display 313 pixels across and a TV at dpr 2 wants 626, and we used to
- *  ship a single 492px bake to both — two and a half times more pixels than the PC
+ *  dpr 1 can display 313 pixels across and a TV at dpr 2 wants 626, and we once
+ *  shipped a single 492px cut to both — two and a half times more pixels than the PC
  *  could use, and not enough for the TV, which is exactly why it looked softer
  *  there. Measured on Reacher: w320 is 20KB and w640 is 87KB, against 107KB for the
  *  one-size-fits-nobody version.
@@ -56,14 +65,15 @@ export type ArtSize = typeof ART_SIZES[number];
 export const artSize: ArtSize =
   (typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5) ? 'w640' : 'w320';
 
-/** Swap the size segment of a baked-art URL, leaving everything else — including the
- *  recipe revision that precedes it — exactly as the server sent it. Anything that is
- *  not one of our urls passes through untouched, as imgW does for a non-TMDB poster.
+/** Swap the size segment of a crop URL, leaving everything else — including the focal
+ *  point that follows it — exactly as the server sent it. Anything that is not one of
+ *  our urls passes through untouched, as imgW does for a non-TMDB poster.
  *
- *  The revision matters: it is what makes a corrected poster a NEW url, so this cache
- *  (and the service worker's, and the browser's) misses it instead of serving the
- *  picture an admin has already replaced. Rewriting or dropping it would silently
- *  undo that. */
+ *  The focal segment matters: it is what makes a corrected poster a NEW url, so this
+ *  cache (and the service worker's, and the browser's) misses it instead of serving
+ *  the picture an admin has already replaced. Rewriting or dropping it would silently
+ *  undo that. It replaced a stored revision number that had to be stamped, published
+ *  and purged to achieve the same thing. */
 export function artW(url: string | undefined, size: ArtSize = artSize): string {
   if (typeof url !== 'string' || !url) return '';
   // The size is the FIRST segment of a crop url (/crop/w640/f4231/<file>.webp), so

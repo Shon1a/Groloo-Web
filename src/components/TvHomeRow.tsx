@@ -132,9 +132,12 @@ export default function TvHomeRow({ cat, title, items, onSelect }: TvHomeRowProp
       items={list}
       title={title}
       max={shown}
-      /* ONLY ONCE THE ROW HAS BEEN REACHED. /api/home resolves a wordmark per title (the `logos=1`
-       * flag) and /api/browse does not, so the seeded titles arrive complete and the appended ones
-       * do not. `enrich` fills the gap with a detail lookup for the rested title — worth one
+      /* ONLY ONCE THE ROW HAS BEEN REACHED. Both /api/home and /api/browse resolve a wordmark per
+       * title now (the `logos=1` flag — /api/browse ignored it until the server learned to attach
+       * wordmarks outside the home payload), so seeded and appended titles arrive alike. What is
+       * left for `enrich` is what browse still does not carry — the textless backdrop and the
+       * synopsis — and the tail of titles past the server's TMDB budget on a cold logo cache.
+       * `enrich` fills those with a detail lookup for the rested title — worth one
        * request on a row someone is walking through, and thirteen requests on a home screen nobody
        * has touched, which is why it is not simply always on.
        *
