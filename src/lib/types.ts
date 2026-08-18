@@ -24,6 +24,13 @@ export interface MediaItem {
   rating?: number;
   genres?: string[];
   poster?: string;
+  /** The BAKED poster: the textless key art cropped to portrait around the subject with the
+   *  wordmark laid over it, so a row tile and the billboard above it are the same picture.
+   *  The backend attaches this URL to every card without resolving anything — the art service
+   *  bakes on first request and 302s to `poster` for titles where no honest crop exists — so
+   *  it is a URL that always resolves, never a promise that one was made. TV only for now;
+   *  the web build keeps `poster`. Always pair it with `poster` as an onError fallback. */
+  posterArt?: string;
   backdrop?: string;
   /** some feeds send a language-specific title logo path */
   logo?: string;
@@ -68,6 +75,11 @@ export interface MetaDetail {
   titleLogo?: string;
   backdrop?: string;
   poster?: string;
+  /** The textless backdrop the baked poster was cropped from — so the billboard and the
+   *  row tile show one picture. Null when TMDB has no backdrop. TV only; the web ignores it. */
+  artBackdrop?: string;
+  /** see MediaItem.posterArt */
+  posterArt?: string;
   tagline?: string;
   plot?: string;
   rating?: number;

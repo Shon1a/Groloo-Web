@@ -931,6 +931,12 @@ export interface AddonMeta {
 interface RawMetaVideo { id?: unknown; title?: unknown; name?: unknown; season?: unknown; episode?: unknown; number?: unknown; released?: unknown; thumbnail?: unknown; overview?: unknown; description?: unknown }
 interface RawMeta {
   id?: unknown; type?: unknown; name?: unknown; poster?: unknown; background?: unknown; logo?: unknown;
+  /* Anime catalogs (Kitsu, MAL, AniList) address a title by their OWN id — `kitsu:12` —
+   * but they also ship the IMDb id alongside it, and we were throwing it away. That one
+   * field is what lets a `kitsu:` card borrow our metadata and our baked art, so the row
+   * stops looking like it came from somewhere else. It is NOT a substitute for `id`:
+   * streams must still be asked for under the add-on's own id (see mapAddonMeta). */
+  imdb_id?: unknown;
   description?: unknown; releaseInfo?: unknown; year?: unknown; imdbRating?: unknown; runtime?: unknown;
   genres?: unknown; genre?: unknown; cast?: unknown; director?: unknown; videos?: unknown;
 }
@@ -1003,9 +1009,16 @@ function mapAddonMeta(raw: RawMeta, fallbackId: string, fallbackType: 'movie' | 
     genre: strArray(raw.genres) || strArray(raw.genre),
     cast: strArray(raw.cast)?.map((name) => ({ name })),
     director: strArray(raw.director)?.[0],
-    // Never invented: only an id that IS an IMDb id yields one. Anything else and the modal
-    // must keep addressing this title by the add-on's own id, which is the point.
-    imdb: /^tt\d+$/.test(id) ? id : undefined,
+    /* Never invented — but no longer thrown away either. `imdb_id` is the add-on TELLING
+     * us the IMDb id (every Kitsu/MAL/AniList card carries one); an id that IS an IMDb id
+     * is the same statement in another position. Both are the add-on's own claim, neither
+     * is inferred by us.
+     *
+     * This does NOT change how streams are addressed. `id` above stays the add-on's id and
+     * remains what the modal asks for streams and episodes under — `kitsu:12:5` is real and
+     * only the add-on knows that shape. `imdb` is metadata: it is the handle our backend
+     * understands, so the card can pull our plot, our rating and our baked poster. */
+    imdb: str(raw.imdb_id) || (/^tt\d+$/.test(id) ? id : undefined),
     episodes: episodes.length ? episodes : undefined,
     seasonList: counts.size
       ? [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([season, n]) => ({ season, episodes: n }))
@@ -1075,6 +1088,31 @@ export async function fetchAddonCatalog(c: AddonCatalog): Promise<MediaItem[]> {
   if (!(await loadCore())) return [];
   try {
     const body = await fetchAddonText(c.base, resourcePath('catalog', c.type, c.id));
-    return callData<MediaItem[]>('catalog_metas', (k) => k.catalog_metas(body)) ?? [];
+    const items = callData<MediaItem[]>('catalog_metas', (k) => k.catalog_metas(body)) ?? [];
+    /* The core maps a catalog card to `CatalogItem`, which has no `imdb` field, so the
+     * add-on's `imdb_id` is dropped on the floor there. Rather than widen the Rust struct
+     * (a wasm rebuild and a parity re-pin for one optional string), recover it HERE from
+     * the very body we just handed the core, and zip it back on by id.
+     *
+     * The core stays the single source of truth for the mapping — this adds a field it
+     * never claimed to produce, and touches nothing it did. A body that does not parse, or
+     * an add-on that sends no `imdb_id`, simply leaves the cards exactly as they are. */
+    try {
+      const rows = (JSON.parse(body) as { metas?: Array<{ id?: unknown; imdb_id?: unknown }> })?.metas;
+      if (Array.isArray(rows)) {
+        const byId = new Map<string, string>();
+        for (const r of rows) {
+          const rid = str(r?.id), imdb = str(r?.imdb_id);
+          if (rid && imdb && /^tt\d+$/.test(imdb)) byId.set(rid, imdb);
+        }
+        if (byId.size) {
+          for (const it of items) {
+            const imdb = byId.get(String(it.id));
+            if (imdb) it.imdb = imdb;
+          }
+        }
+      }
+    } catch { /* the cards are still good without it */ }
+    return items;
   } catch { return []; }
 }

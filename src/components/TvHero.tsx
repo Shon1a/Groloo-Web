@@ -4,21 +4,30 @@ import { useT, useGenre } from '../i18n/i18n';
 import { imgW } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useImdbTrailer, useMeta } from '../lib/queries';
+import { useImdbTrailer, useMeta, apiIdOf } from '../lib/queries';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { FadeBg, FadeImg } from './FadeArt';
 
 /* THE TV FEATURED BILLBOARD — the top of the TV home, and only the top.
  *
- * One title filling a rounded, full-width card under the nav, its copy pinned bottom-left over a
- * left-to-right scrim. It has TWO states and they are the whole interaction:
+ * One title filling a rounded, full-width card under the nav, its copy pinned bottom-left over the
+ * bare artwork — the left-to-right scrim that used to sit under it is gone; see `.tv-hero-scrim`
+ * in tv.css. It has TWO states and they are the whole interaction:
  *
- *   RESTING (the remote is elsewhere) — tag, title logo and the type · genre · year · ★ line.
- *   Nothing else. No synopsis.
+ *   RESTING (the remote is elsewhere) — THE TITLE WORDMARK, and nothing else. No meta line, no
+ *   synopsis. The card is rotating a new title in every seven seconds at this point, and detail
+ *   about a title nobody has reached is detail nobody asked for; the picture and its name are
+ *   the whole of what a resting billboard has to say.
  *
- *   FOCUSED (the remote is on the card) — the synopsis unfolds beneath the logo, which rises to
- *   make room. OK opens the title.
+ *   FOCUSED (the remote is on the card) — the type · genre · year · ★ line unfolds first and the
+ *   synopsis behind it, both beneath the logo, which rises to make room. OK opens the title.
+ *
+ * Both are the same fold the trailer already ran, which is the third state hiding inside the two:
+ * once a preview starts playing, the meta line and synopsis fold BACK away and the wordmark comes
+ * back down, so the card returns to its resting shape over moving footage. Arriving and starting
+ * to play are one gesture in two directions rather than two effects. See `.tv-hero-meta` and the
+ * `has-trailer` block in tv.css — the ordering between them is load-bearing and noted there.
  *
  * WHY THE CARD IS THE FOCUS STOP AND WHY THERE ARE NO BUTTONS ON IT.
  *
@@ -54,6 +63,17 @@ function isSeries(it: MediaItem) {
   return it.type === 'tv' || it.type === 'series';
 }
 
+/* EVERYTHING THE ART LAYER DRAWS, AS ONE STRING. The dissolve below is driven off this rather
+ * than off object identity, and the difference is the whole of the fix recorded there: the feed
+ * hands back a NEW object for the same title on every refetch, so identity says "changed" for a
+ * billboard that is pixel-for-pixel the one already on screen. Url, focal point and the title
+ * that seeds the fallback gradient are the three things a layer renders, so they are the three
+ * things that decide whether there is anything to dissolve TO. */
+function artKeyOf(m: MediaItem | null | undefined): string {
+  if (!m) return '';
+  return [m.backdrop || m.poster || '', m.heroFocusX ?? '', m.heroFocusY ?? '', m.title || ''].join('|');
+}
+
 export interface TvHeroProps {
   items: MediaItem[];
   /** OK / click on the focused card — opens the title. Named `onPlay` because the web Hero's
@@ -75,19 +95,58 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
   const [xfade, setXfade] = useState<{ a: MediaItem; b: MediaItem | null; front: 'a' | 'b' }>(
     () => ({ a: list[0], b: null, front: 'a' }),
   );
-  const firstRun = useRef(true);
 
   const reduceMotion = typeof window !== 'undefined'
     && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
+  /* ---- THE BILLBOARD USED TO DISSOLVE INTO ITSELF ON EVERY RELOAD ----------------------------
+   *
+   * MEASURED IN THE RUNNING APP, reading both layers off the DOM at 60ms:
+   *
+   *     t=155  rest  [ON  qeQJx07r] [off  --      ]     the correct first paint
+   *     t=291  rest  [off qeQJx07r] [ON   qeQJx07r]     front flips, SAME picture, no reason
+   *
+   * — and 291ms is also about when the remote's focus lands on the card, so it reads as "the
+   * billboard changes when I focus it". It is one cross-fade of a picture into an identical copy
+   * of itself: layer a runs 1 -> 0 over 600ms while layer b rises from 0, and because layer b's
+   * FadeBg is mounting for the first time it brings its plate (the fallback gradient) with it. So
+   * the artwork dips through a grey wash and comes back. Once. On every load.
+   *
+   * WHAT ACTUALLY FAILED was the guard, not the dissolve. This effect used to open with a
+   * `firstRun` ref whose job was "do not dissolve on mount" — and under StrictMode React invokes
+   * mount effects TWICE. The first pass spends the ref and returns; the second sails straight
+   * through it and swaps the layers. A one-shot ref cannot express "not on mount" when mount can
+   * happen twice, and no amount of care in that ref would fix it, because it is answering the
+   * wrong question. The question is not "has this effect run before". It is:
+   *
+   *     IS THE PICTURE I AM BEING ASKED TO SHOW ALREADY THE ONE ON SCREEN?
+   *
+   * Asked that way the mount case answers itself — slot `a` was seeded with `list[0]` and
+   * `list[0]` is what we want, so there is nothing to dissolve to and the effect is a no-op,
+   * however many times it runs.
+   *
+   * AND IT FIXES A SECOND, QUIETER FAULT that the ref version could not have. `xfade` was seeded
+   * ONCE, by a `useState` initialiser, and only ever moved by a change of `active`. The copy
+   * beneath reads `list[active]` on every render. So any change to the feed that did NOT change
+   * `active` — a refetch, a language switch, an admin edit to the featured set — updated the
+   * wordmark and the synopsis and left the PHOTOGRAPH on the previous title. Keying on the art
+   * means the layers now follow the data: same picture, no dissolve; different picture, dissolve
+   * to it, which is what the two layers are for.
+   *
+   * DEPENDS ON THE KEY, NEVER ON THE ITEM. `list` is rebuilt by `.slice()` on every render, and
+   * an object dependency here would re-run this forever. */
+  const shown = list[active] || list[0];
+  const shownArt = artKeyOf(shown);
+
   useEffect(() => {
-    if (firstRun.current) { firstRun.current = false; return; }
+    if (!shown) return;
     setXfade((s) => {
+      if (artKeyOf(s[s.front]) === shownArt) return s;
       const back: 'a' | 'b' = s.front === 'a' ? 'b' : 'a';
-      return { ...s, [back]: list[active], front: back };
+      return { ...s, [back]: shown, front: back };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  }, [shownArt]);
 
   /* ---- IT ONLY ROTATES WHILE IT IS ON SCREEN --------------------------------------------------
    *
@@ -192,7 +251,7 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
    * most one lookup per title actually rested on. This is the same fallback TvSpotlight runs for
    * the same reason, and its header already names this card as a feed that needs it. */
   const wantImdbLookup = !!dwelt && !dwelt.imdb && !metaImdb && !trailerFailed;
-  const { data: heroMeta } = useMeta(wantImdbLookup ? dwelt?.id : undefined, dwelt?.type);
+  const { data: heroMeta } = useMeta(wantImdbLookup ? apiIdOf(dwelt) : undefined, dwelt?.type);
   useEffect(() => {
     if (typeof heroMeta?.imdb === 'string' && !dwelt?.imdb) setMetaImdb(heroMeta.imdb);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -240,7 +299,9 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
   );
 
   if (!n) return null;
-  const cur = list[active] || list[0];
+  // The SAME record the art layers were handed, so the wordmark and the photograph can never be
+  // describing two different titles — see the note on the dissolve above.
+  const cur = shown;
 
   /* The gradient holds the frame UNDERNEATH the photograph rather than instead of it — see FadeBg.
    * This is the biggest bitmap in the app (a full-width 16:9 card at the top of the home screen),
@@ -307,10 +368,11 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
           );
         })}
 
-        {/* THE SCRIM IS THE FOCUS TARGET — it already spans the whole card, so the thing the
-            remote lands on is the billboard itself rather than a control inside it. It sits
-            ABOVE both art layers (a scrim baked into each would re-darken the overlap for the
-            500ms a dissolve is half-and-half) and BELOW the copy. */}
+        {/* THE FOCUS TARGET — it spans the whole card, so the thing the remote lands on is the
+            billboard itself rather than a control inside it. It no longer PAINTS anything: this
+            used to be the scrim as well, and the name is kept because the ring, the spatial-nav
+            selector and the measurement script all reach for it. Still sits above both art
+            layers and below the copy, which is where its focus ring belongs. */}
         <div
           className="tv-hero-scrim"
           tabIndex={0}

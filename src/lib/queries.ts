@@ -90,6 +90,27 @@ export function useMeta(id: string | number | undefined, type?: MediaItem['type'
 export const isOurId = (id: string | number | undefined): boolean =>
   id != null && /^(\d+|tt\d+)$/.test(String(id));
 
+/* THE ID OUR BACKEND CAN BE ASKED ABOUT, which is not always the id the card is called by.
+ *
+ * An anime catalog names One Piece `kitsu:12` and, in the same record, states its IMDb id is
+ * `tt0388629`. We used to keep only the former, so the card could never be looked up here: no
+ * synopsis under the billboard, no rating, and the add-on's own artwork — which is a different
+ * shape and a different source from every other row — sitting next to ours.
+ *
+ * So: ask about the IMDb id when the card's own id is not one we speak. `/api/meta/:id` and the
+ * art service both resolve `tt…` already, so nothing downstream needs to learn a new vocabulary.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO is change the id anything is ADDRESSED by. Streams and
+ * episodes are still asked for under the add-on's own id — `kitsu:12:5` is a real handle and
+ * only the add-on knows that shape. This is the metadata handle, and only that. */
+export const apiIdOf = (
+  it: { id?: string | number; imdb?: string } | null | undefined,
+): string | undefined => {
+  if (!it) return undefined;
+  if (isOurId(it.id)) return String(it.id);
+  return it.imdb && /^tt\d+$/.test(it.imdb) ? it.imdb : undefined;
+};
+
 export function useAddonMeta(
   id: string | number | undefined,
   type: MediaItem['type'],

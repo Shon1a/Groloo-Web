@@ -291,6 +291,27 @@ export default defineConfig(({ mode }) => ({
             },
           },
           {
+            /* Baked poster art. Matched on the PATH, not an origin: the art host is
+             * configured on the server (ART_CDN_BASE) and arrives inside the API
+             * payload, so this build has no way to name it. `/art/v1/...` is ours
+             * wherever it is served from.
+             *
+             * This was the gap that made the TV feel slower than the desktop on a
+             * revisit — the rule below covers image.tmdb.org only, so every baked
+             * poster went to the network every time while TMDB's own images came
+             * back instantly from the cache. The URL carries both an algorithm
+             * version and a size, so the bytes behind one can never change. */
+            urlPattern: ({ url }) => /^\/art\/v\d+\//.test(url.pathname),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'groloo-art',
+              // ~150 tiles are live on a home screen; 600 covers that plus the rows
+              // either side of wherever the viewer has walked to.
+              expiration: { maxEntries: 600, maxAgeSeconds: 60 * 60 * 24 * 60 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             // TMDB image paths are content hashes — the bytes behind a URL never change.
             urlPattern: ({ url }) => url.origin === 'https://image.tmdb.org',
             handler: 'CacheFirst',
