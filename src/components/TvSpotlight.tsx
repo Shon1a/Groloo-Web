@@ -376,6 +376,16 @@ const warmed = new Set<string>();
 /* Renditions sized to what is painted, not to the source. The billboard is 16:9 of a <=380px
  * row (~675px wide) and thumbs paint at ~228px — see the note in lib/hero.ts for why reaching
  * for `original` on a TV is fatal rather than merely wasteful. */
+/* ONE RENDITION FOR BOTH ROLES, and it has to be sized for the harder one.
+ *
+ * A poster tile shows only 34.6% of a 16:9 backdrop's width (0.615 / (16/9)), so
+ * whatever this is, the tile gets about a third of it. At the w342 the strip used
+ * to fetch that was 118px of actual poster width in a slot 313 CSS px wide — which
+ * is what "the poster looks poor and the billboard looks fine" was: the billboard
+ * shows the whole frame, the tile shows a third of it.
+ *
+ * Sharing is also only real if both ask for the SAME url. Two renditions would mean
+ * two files, two cache entries and two decodes for one picture. */
 const BILLBOARD_RENDITION = 'w780';
 const THUMB_RENDITION = 'w342';
 /** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
@@ -1119,7 +1129,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        *
        * `poster` stays as the onError fallback: a title with no backdrop at all
        * still renders what this row rendered before any of this existed. */
-      const shared = imgW(it.backdrop || '', THUMB_RENDITION);
+      const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
       const src = shared || imgW(it.poster || '', THUMB_RENDITION);
       const fallbackSrc = shared ? imgW(it.poster || '', THUMB_RENDITION) : '';
       const objectPosition = shared ? artPosition(it.artFocusX as number | null) : '50% 50%';
