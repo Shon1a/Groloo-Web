@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
-import { imgW, artPosition } from '../lib/img';
+import { imgW, artW, artPosition } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, apiIdOf } from '../lib/queries';
@@ -1129,10 +1129,22 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        *
        * `poster` stays as the onError fallback: a title with no backdrop at all
        * still renders what this row rendered before any of this existed. */
+      /* PRE-CUT IF WE HAVE ONE, otherwise crop the shared backdrop here.
+       *
+       * `posterArt` is the slice already cut to the tile's shape — exactly the pixels
+       * shown, so it is both sharper and smaller than fetching the whole frame to
+       * discard two thirds of it. Its url contains the crop, so a correction is a new
+       * url and nothing needs invalidating.
+       *
+       * Falling back to the shared backdrop is not a degradation to paper over: it is
+       * how a title with no focal point yet, or one whose crop we declined, renders —
+       * the same picture, cropped by object-fit, at lower detail. */
+      const cut = artW(it.posterArt);
       const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
-      const src = shared || imgW(it.poster || '', THUMB_RENDITION);
-      const fallbackSrc = shared ? imgW(it.poster || '', THUMB_RENDITION) : '';
-      const objectPosition = shared ? artPosition(it.artFocusX as number | null) : '50% 50%';
+      const src = cut || shared || imgW(it.poster || '', THUMB_RENDITION);
+      const fallbackSrc = cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : '');
+      // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
+      const objectPosition = cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
       const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
       const res = resumeOf?.(it);
       return (
