@@ -1098,6 +1098,30 @@
 }
 .tv-spot-thumbimg.rdy { opacity: 1; }
 
+/* THE WORDMARK ON A POSTER TILE, AND THE DARKENING UNDER IT.
+   These used to be baked into the picture on a server. They are elements now, so the
+   tile and the billboard can share ONE image — the same file, the same decoded bitmap
+   — and so that correcting a poster is a number in the payload rather than a cached
+   file that outlives three caches.
+   The scrim is a fixed gradient rather than one measured against the artwork, which is
+   the one thing the baker did better; the mark carries a shadow to cover the cases a
+   flat gradient cannot. Both sit above the picture and below the progress bar. */
+.tv-spot-thumbscrim {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 48%;
+  background: linear-gradient(0deg, rgba(0,0,0,.86) 0%, rgba(0,0,0,.55) 38%, rgba(0,0,0,0) 100%);
+  pointer-events: none;
+}
+.tv-spot-thumbmark {
+  position: absolute; left: 8%; right: 8%; bottom: 7%;
+  width: 84%; max-height: 22%;
+  object-fit: contain; object-position: 50% 100%;
+  /* A wordmark is usually white, occasionally dark; the shadow keeps the dark ones
+     legible without a second, heavier scrim over the whole tile. */
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.85));
+  opacity: 0; transition: opacity .35s ease; pointer-events: none;
+}
+.tv-spot-thumbmark.rdy { opacity: 1; }
+
 /* THE SEE-ALL CARD — the row's own page, sitting at the end of its strip (see TvSpotlight).
    Deliberately the ONLY thing in a row with no picture on it: an empty framed panel is what makes
    "the titles have run out" legible from across a room, where a card carrying artwork would just

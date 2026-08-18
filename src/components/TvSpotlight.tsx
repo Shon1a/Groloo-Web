@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
-import { imgW, artW } from '../lib/img';
+import { imgW, artPosition } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, apiIdOf } from '../lib/queries';
@@ -1106,20 +1106,24 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * should be: one class name on the section. */
   const thumbs = useMemo(() => {
     const tile = (it: MediaItem, key: string) => {
-      /* `posterArt` FIRST — the baked art (textless key art, cropped around the subject,
-       * wordmark laid over the bottom) is the same picture the billboard above this strip
-       * shows, which is the whole point: today a tile and its own billboard look like two
-       * different titles. It is a plain CDN URL, so imgW leaves it alone — that helper only
-       * rewrites TMDB's /t/p/<size>/ segment, and the baked art is already tile-sized.
+      /* ONE PICTURE, SHOWN TWICE. The tile crops the same backdrop the billboard
+       * above it displays, so the two are one entry in the browser cache and one
+       * decoded bitmap in memory — which on a screen holding ~147 tiles is the cost
+       * that actually matters.
        *
-       * `poster` stays as the onError fallback below, so a title the art service declined, an
-       * add-on card with no IMDb id, or the service simply not being deployed all land on
-       * exactly the picture this row shows today. */
-      // artW picks w320 or w640 from devicePixelRatio — see img.ts. The TV asks for
-      // the bigger one and still moves fewer bytes than the single size did.
-      const baked = artW(it.posterArt);
-      const src = baked || imgW(it.poster || it.backdrop || '', THUMB_RENDITION);
-      const fallbackSrc = baked ? imgW(it.poster || it.backdrop || '', THUMB_RENDITION) : '';
+       * The crop is `object-fit: cover` plus an object-position derived from the
+       * face detector's focal point; the wordmark and its scrim are elements over
+       * the top. Nothing is composited on a server any more, so correcting a poster
+       * changes a NUMBER in this payload rather than a cached picture — which is
+       * why an edit takes effect on the next load instead of outliving three caches.
+       *
+       * `poster` stays as the onError fallback: a title with no backdrop at all
+       * still renders what this row rendered before any of this existed. */
+      const shared = imgW(it.backdrop || '', THUMB_RENDITION);
+      const src = shared || imgW(it.poster || '', THUMB_RENDITION);
+      const fallbackSrc = shared ? imgW(it.poster || '', THUMB_RENDITION) : '';
+      const objectPosition = shared ? artPosition(it.artFocusX as number | null) : '50% 50%';
+      const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
       const res = resumeOf?.(it);
       return (
         <button
@@ -1147,6 +1151,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
               className="tv-spot-thumbimg"
               data-src={src}
               decoding="async"
+              style={{ objectPosition }}
               alt=""
               /* NOT `useImageReady` HERE, and that is deliberate rather than an oversight. These
                  carry `data-src` because a home screen holds ~147 of them and they are fetched
@@ -1172,6 +1177,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
                 img.dataset.fell = '1';
                 img.src = fallbackSrc;
               }}
+            />
+          )}
+          {/* The wordmark and the darkening that keeps it readable, drawn only when a
+              mark exists — a title without one shows clean art rather than a gradient
+              over nothing. `data-src` for the same reason the picture uses it: the
+              windowing effect below promotes these, so a row never fetches 21 at once. */}
+          {!!mark && <span className="tv-spot-thumbscrim" aria-hidden="true" />}
+          {!!mark && (
+            <img
+              className="tv-spot-thumbmark"
+              data-src={mark}
+              decoding="async"
+              alt=""
+              onLoad={(e) => e.currentTarget.classList.add('rdy')}
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
             />
           )}
           {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}

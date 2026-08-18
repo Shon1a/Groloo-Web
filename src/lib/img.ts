@@ -68,3 +68,38 @@ export function artW(url: string | undefined, size: ArtSize = artSize): string {
   if (typeof url !== 'string' || !url) return '';
   return url.replace(/\/w\d+\.(?:webp|jpe?g)$/i, `/${size}.webp`);
 }
+
+/* ------------------------------------------------------------------ *
+ *  Cropping the shared backdrop into a poster, in CSS
+ *
+ *  The tile and the billboard show the SAME picture — one file, one decode, one
+ *  cache entry. The tile just shows a portrait slice of it, which `object-fit:
+ *  cover` already does; all it needs telling is WHERE across the frame to take
+ *  that slice from.
+ * ------------------------------------------------------------------ */
+
+/** The TV poster tile's aspect — `--sp-wp: calc(var(--spot-h) * 0.615)` (tv.css). */
+export const TILE_AR = 0.615;
+/** Backdrops are 16:9. */
+const BACKDROP_AR = 16 / 9;
+
+/**
+ * Turn the detector's focal point into a CSS `object-position`.
+ *
+ * `fx` is the crop centre as a fraction of the SOURCE width. object-position works
+ * in a different space: 0% pins the image's left edge to the box's left edge (so
+ * the slice you see is centred at half a slice-width in), and 100% pins the right.
+ * Mapping between the two is what this does — passing `fx` straight through would
+ * push every crop toward the edges and clip the subject at both ends of the range.
+ *
+ * Vertical never needs a value: a 16:9 source cropped to 0.615 overflows only
+ * horizontally, so the full height is always visible.
+ */
+export function artPosition(fx: number | null | undefined): string {
+  if (typeof fx !== 'number' || !Number.isFinite(fx)) return '50% 50%';
+  const slice = TILE_AR / BACKDROP_AR;             // fraction of the width we show
+  const span = 1 - slice;                          // how far the slice can travel
+  if (span <= 0) return '50% 50%';
+  const pos = (fx - slice / 2) / span;
+  return `${(Math.min(1, Math.max(0, pos)) * 100).toFixed(1)}% 50%`;
+}

@@ -31,6 +31,12 @@ export interface MediaItem {
    *  it is a URL that always resolves, never a promise that one was made. TV only for now;
    *  the web build keeps `poster`. Always pair it with `poster` as an onError fallback. */
   posterArt?: string;
+  /** Where to take the poster's crop from, as a fraction of the shared backdrop's
+   *  width — the face detector's focal point reduced to one number. The tile turns
+   *  it into an object-position (see artPosition in img.ts). Null means no opinion,
+   *  and the crop centres. This is what a hand correction now changes, which is why
+   *  it takes effect immediately: there is no baked picture to invalidate. */
+  artFocusX?: number | null;
   backdrop?: string;
   /** some feeds send a language-specific title logo path */
   logo?: string;
