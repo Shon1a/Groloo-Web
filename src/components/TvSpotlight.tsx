@@ -1362,10 +1362,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       const from = Math.max(0, at - THUMB_BEHIND);
       const to = Math.min(tiles.length - 1, at + THUMB_AHEAD);
       for (let i = from; i <= to; i++) {
-        const img = tiles[i]?.querySelector<HTMLImageElement>('img[data-src]');
-        if (!img) continue;                     // the see-all card, or a tile already promoted
-        img.src = img.dataset.src || '';
-        delete img.dataset.src;
+        /* ALL of them, not the first. A tile holds TWO deferred images — the picture and
+         * the wordmark laid over it — and `querySelector` returns only the picture, so the
+         * mark was left for whichever later pass happened to run once the picture had
+         * given up its `data-src`. That is why the lettering always arrived a beat after
+         * the art it sits on: not a slower image, a promotion cycle behind. */
+        const imgs = tiles[i]?.querySelectorAll<HTMLImageElement>('img[data-src]');
+        if (!imgs || !imgs.length) continue;    // the see-all card, or a tile already promoted
+        for (const img of imgs) {
+          img.src = img.dataset.src || '';
+          delete img.dataset.src;
+        }
       }
     };
     const ric = window.requestIdleCallback;
@@ -1383,10 +1390,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       const from = Math.max(0, active - THUMB_BEHIND);
       const to = Math.min(tiles.length - 1, active + THUMB_AHEAD);
       for (let i = from; i <= to; i++) {
-        const img = tiles[i]?.querySelector<HTMLImageElement>('img[data-src]');
-        if (!img) continue;                     // the see-all card, or a tile already promoted
-        img.src = img.dataset.src || '';
-        delete img.dataset.src;
+        /* ALL of them, not the first. A tile holds TWO deferred images — the picture and
+         * the wordmark laid over it — and `querySelector` returns only the picture, so the
+         * mark was left for whichever later pass happened to run once the picture had
+         * given up its `data-src`. That is why the lettering always arrived a beat after
+         * the art it sits on: not a slower image, a promotion cycle behind. */
+        const imgs = tiles[i]?.querySelectorAll<HTMLImageElement>('img[data-src]');
+        if (!imgs || !imgs.length) continue;    // the see-all card, or a tile already promoted
+        for (const img of imgs) {
+          img.src = img.dataset.src || '';
+          delete img.dataset.src;
+        }
       }
     };
     /* ON THE IDLE FRAME, NEVER ON THE KEYPRESS FRAME, and this is the correction that makes the
