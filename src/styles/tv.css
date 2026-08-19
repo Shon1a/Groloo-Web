@@ -1122,6 +1122,26 @@
 }
 .tv-spot-thumbmark.rdy { opacity: 1; }
 
+/* THE SAME BOX AS THE WORDMARK, for a title that has none. Bottom-anchored and centred
+   so a one-word title and a three-line one both sit where a wordmark would, and clamped
+   so a long one cannot climb into the picture. Uppercase because that is what a wordmark
+   nearly always is, and it keeps a text tile from reading as a different kind of card. */
+.tv-spot-thumbtitle {
+  position: absolute; left: 8%; right: 8%; bottom: 7%;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+  text-align: center;
+  font-size: clamp(13px, calc(var(--spot-h) * 0.055), 34px);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: .005em;
+  text-transform: uppercase;
+  color: #fff;
+  /* Matches the wordmark's shadow so the two read as the same layer of the card. */
+  text-shadow: 0 1px 3px rgba(0,0,0,.85);
+  pointer-events: none;
+}
+
 /* THE SEE-ALL CARD — the row's own page, sitting at the end of its strip (see TvSpotlight).
    Deliberately the ONLY thing in a row with no picture on it: an empty framed panel is what makes
    "the titles have run out" legible from across a room, where a card carrying artwork would just
