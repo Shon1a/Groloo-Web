@@ -391,6 +391,19 @@ const THUMB_RENDITION = 'w342';
 /** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
 const LOGO_RENDITION = 'w300';
 
+/** What the peek at the screen edge shows: a picture and where to sit it in the tile's
+ *  box. Same choice the tile makes, so the card you walked past keeps the artwork it
+ *  had rather than reverting to TMDB's poster on its way out. */
+type PeekArt = { src: string; pos: string };
+const EMPTY_PEEK: PeekArt = { src: '', pos: '50% 50%' };
+function peekArtOf(it: MediaItem): PeekArt {
+  const cut = artW(it.posterArt);
+  if (cut) return { src: cut, pos: '50% 50%' };      // already the tile's shape
+  const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
+  if (shared) return { src: shared, pos: artPosition(it.artFocusX as number | null) };
+  return { src: imgW(it.poster || '', THUMB_RENDITION), pos: '50% 50%' };
+}
+
 /* THE SOUND BADGE'S TWO GLYPHS, and they are the player's own — same 24-unit box, same filled
  * cone, same 1.8 stroke on the waves and on the cross. Copied rather than imported because the
  * player is a lazily-loaded chunk and a home row must not pull it in for two paths; a private
@@ -574,8 +587,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * The effect carries no dependency array on purpose: it runs after every commit and simply moves
    * "current" into "previous", so the render below always sees the value from the commit before it.
    * Writing `peekSrcRef` during render is the same thing `liveActive` already does here. */
-  const prevOutRef = useRef<string>('');
-  const peekSrcRef = useRef<string>('');
+  const prevOutRef = useRef<PeekArt>(EMPTY_PEEK);
+  const peekSrcRef = useRef<PeekArt>(EMPTY_PEEK);
 
   /* ---- THE PEEK SLIDES BY `animate()`, NOT BY REMOUNTING ------------------------------------
    * IT WAS A KEYED REMOUNT, and that is what made the peek go blank for the whole slide. A CSS
@@ -1954,9 +1967,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * The END CARD keeps its peek: standing past the last title, the last title IS the thing just
    * walked off, and it is the one case where `active` is out of the list's range. */
   const previous = active >= n ? list[n - 1] : (active > 0 ? list[active - 1] : undefined);
-  const previousPoster = previous && artOn
-    ? imgW(previous.poster || previous.backdrop || '', THUMB_RENDITION)
-    : '';
+  /* THE SAME PICTURE THE TILE WOULD SHOW, chosen the same way — the pre-cut slice if
+   * there is one, else the shared backdrop cropped to the tile's shape around the same
+   * focal point, else the plain poster.
+   *
+   * It used to prefer `poster` outright, so the card parked at the screen edge was the
+   * one thing in the row still wearing TMDB's own artwork: walking past Reacher left a
+   * sliver of the plain poster beside a strip of cut key art. No wordmark on it — only
+   * a trailing sliver of this card is ever visible, and the lettering would be off
+   * screen anyway. */
+  const previousArt: PeekArt = previous && artOn ? peekArtOf(previous) : EMPTY_PEEK;
 
   /* ---- THE PEEK IS A TWO-TILE STRIP, NOT ONE PICTURE ---------------------------------------
    * MEASURED ON THE REFERENCE: that window is never empty. Its contrast runs 9.2 -> 10.1 -> 10.9
@@ -1982,14 +2002,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    *
    * Guarded on the value having moved, it updates exactly once per change however many renders
    * that change is spread across. */
-  if (peekSrcRef.current !== (previousPoster || '')) {
+  if (peekSrcRef.current.src !== previousArt.src) {
     prevOutRef.current = peekSrcRef.current;
-    peekSrcRef.current = previousPoster || '';
+    peekSrcRef.current = previousArt;
   }
   const outgoingPeek = prevOutRef.current;
   const peekPair = lastDir.current > 0
-    ? [outgoingPeek, previousPoster || '']
-    : [previousPoster || '', outgoingPeek];
+    ? [outgoingPeek, previousArt]
+    : [previousArt, outgoingPeek];
 
   /* ---- THE SLIDE, AND WHY IT IS NOT ONE DURATION -------------------------------------------
    *
@@ -2356,9 +2376,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         >
           <div className="tv-spot-prevtrack" ref={prevTrackRef}>
             {/* The SLOT always renders; only the picture is conditional. See `.tv-spot-prevtile`. */}
-            {peekPair.map((src, i) => (
+            {peekPair.map((art, i) => (
               <div className="tv-spot-prevtile" key={i}>
-                {src ? <FadeImg className="tv-spot-previmg" src={src} alt="" /> : null}
+                {art.src
+                  ? <FadeImg className="tv-spot-previmg" src={art.src} alt=""
+                      style={{ objectPosition: art.pos }} />
+                  : null}
               </div>
             ))}
           </div>
