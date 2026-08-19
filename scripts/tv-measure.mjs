@@ -541,6 +541,46 @@ async function main() {
     return;
   }
 
+  /* ARE WE SENDING MORE PIXELS THAN THE PANEL SHOWS? Decode cost scales with pixel COUNT, not with
+   * file size, so an image sent at twice its displayed width costs four times the decode. This
+   * reports, per kind, the box the set lays out and the picture it was handed. */
+  /* ARE WE SENDING MORE PIXELS THAN THE PANEL SHOWS? Decode cost scales with pixel COUNT, not file
+   * size, so a picture handed over at twice its displayed width costs four times the decode. This
+   * reports, per kind, the box the set lays out against the picture it was given.
+   *
+   * Written as ONE expression with no function bodies: Runtime.evaluate takes an expression, and a
+   * `return` inside an injected wrapper is what the first two attempts died on. */
+  if (CMD === 'img') {
+    await gotoSurface(cdp, 'home');
+    /* A plain wait rather than waitSettled: that reads the app's own perf probe, which only the
+     * measure path arms — without it every poll reads undefined and the wait times out. */
+    await sleep(12000);
+    await seatOnRow(cdp);
+    await sleep(4000);
+    const one = (sel) => `[...document.querySelectorAll('${sel}')].filter(e=>e.naturalWidth>0).slice(0,1).map(e=>[Math.round(e.getBoundingClientRect().width),Math.round(e.getBoundingClientRect().height),e.naturalWidth,e.naturalHeight,e.currentSrc])`;
+    const SNAP = 'JSON.stringify([devicePixelRatio,innerWidth,innerHeight,'
+      + one('.tv-spot-thumbimg') + ',' + one('.tv-spot-thumbmark') + ',' + one('.tv-spot-art')
+      + ',document.images.length])';
+    const d = JSON.parse(await cdp.eval(SNAP));
+    const [dpr, vw, vh, poster, mark, art, imgs] = d;
+    console.log('');
+    console.log('  screen viewport ' + vw + 'x' + vh + '   devicePixelRatio ' + dpr);
+    console.log('  a box W css px wide needs W x dpr real pixels; anything beyond that is decode thrown away');
+    console.log('');
+    for (const [label, hit] of [['poster tile', poster[0]], ['wordmark', mark[0]], ['billboard', art[0]]]) {
+      if (!hit) { console.log('  ' + label.padEnd(12) + ' none loaded'); continue; }
+      const [bw, bh, nw, nh, src] = hit;
+      const need = Math.round(bw * dpr);
+      const asked = (/\/(w\d+|original)\//.exec(src) || [])[1] || '(n/a)';
+      console.log('  ' + label.padEnd(12) + ' box ' + (bw + 'x' + bh).padEnd(11)
+        + ' given ' + (nw + 'x' + nh).padEnd(11) + ' asked ' + String(asked).padEnd(9)
+        + ' needs ' + String(need).padEnd(5) + ' -> ' + Math.round((nw / Math.max(1, need)) * 100) + '% of need');
+    }
+    console.log('');
+    console.log('  images on the page  ' + imgs);
+    return;
+  }
+
   if (CMD === 'functional') {
     /* ---- DOES IT STILL WORK, not how fast --------------------------------------------------
      * The performance blocks only ever press arrows on a page of rows. That exercises none of the
