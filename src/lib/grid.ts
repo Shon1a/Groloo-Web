@@ -26,10 +26,11 @@ export function gridUrl(desc: GridDesc, page: number, lang: string): string {
   }
   if (desc.kind === 'search') {
     const ty = desc.type && desc.type !== 'all' ? `&type=${desc.type}` : '';
-    return `/api/search?q=${encodeURIComponent(desc.query)}&page=${page}&lang=${lang}${ty}`;
+    return `/api/search?q=${encodeURIComponent(desc.query)}&page=${page}&lang=${lang}${ty}${LOGOS}`;
   }
   const sp = new URLSearchParams(desc.filters);
   sp.set('page', String(page));
   sp.set('lang', lang);
+  if (LOGOS) sp.set('logos', '1');
   return '/api/catalog?' + sp.toString();
 }
