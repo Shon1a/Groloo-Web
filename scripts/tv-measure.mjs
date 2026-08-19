@@ -44,6 +44,7 @@ const LABEL = arg('label', 'run');
 const PREVIEWS = arg('previews', 'on');
 const SCROLL = arg('scroll', '');   // '' clears the key so the app default applies; 'window' | 'transform'
 const ROWS_MODE = arg('rows', ''); // '' clears the key; 'virtual' enables the row-window experiment
+const CARDS = arg('cards', '');    // '' clears the key; a number sets how many titles a row carries
 const ROUNDS = Number(arg('rounds', '2'));
 const OUT = arg('out', 'perf-results');
 const SURFACES = arg('surfaces', 'home,series,movies,anime,library').split(',');
@@ -383,6 +384,24 @@ const CADENCES = [
   { label: 'deliberate', gap: 900 },
   { label: 'held', gap: 240 },
   { label: 'settled', gap: 5000 },
+  /* ---- THE PACE ARMS -------------------------------------------------------------------------
+   * A remote repeats about every 120ms and the row refuses to walk faster than HELD_STEP_MIN_MS
+   * (220ms), dropping anything sooner. So the LIMITER IS ONLY EVER A FLOOR: drive presses slower
+   * than it and every one is accepted, and the row's pace is whatever the driver's gap is. That
+   * makes `held300` an exact emulation of raising HELD_STEP_MIN_MS to 300 — no rebuild, no
+   * reinstall, and both arms run against the identical binary, which is the only way the
+   * comparison is worth anything.
+   *
+   * 300 rather than 400 on purpose: SLIDE_CHAIN_WINDOW is 320ms, so past that a press stops
+   * counting as chained and takes the deliberate curve, the un-suppressed decoration and the
+   * slower slide — a different code path, not a slower version of this one.
+   *
+   * `held160` is the other side: faster than the floor, so the limiter starts DROPPING presses.
+   * It says whether the dropping itself costs anything.
+   *
+   * Press counts are matched to `held` so the three arms differ in pace and nothing else. */
+  { label: 'held160', gap: 160, presses: { horizontal: 34, vertical: 20 } },
+  { label: 'held300', gap: 300, presses: { horizontal: 34, vertical: 20 } },
 ];
 
 const HASH = { home: '#/', series: '#/tv', movies: '#/movies', anime: '#/anime', library: '#/library' };
@@ -400,7 +419,7 @@ async function gotoSurface(cdp, surface) {
  * wakes, and the drift lands on whichever went second. One build carrying both code paths, switched
  * by a localStorage key and run interleaved with the order reversed, is the same discipline every
  * other result in this project was settled with. See lib/tvPageScroll.ts. */
-async function setArms(cdp, previewsOn, scroll, rowsMode) {
+async function setArms(cdp, previewsOn, scroll, rowsMode, cards) {
   await cdp.eval(`(function(){
     var K = 'groloo.settings.v1';
     var s = {}; try { s = JSON.parse(localStorage.getItem(K) || '{}'); } catch (e) {}
@@ -408,6 +427,7 @@ async function setArms(cdp, previewsOn, scroll, rowsMode) {
     localStorage.setItem(K, JSON.stringify(s));
     ${scroll ? `localStorage.setItem('groloo.tvscroll', ${JSON.stringify(scroll)});` : `localStorage.removeItem('groloo.tvscroll');`}
     ${rowsMode ? `localStorage.setItem('groloo.tvrows', ${JSON.stringify(rowsMode)});` : `localStorage.removeItem('groloo.tvrows');`}
+    ${cards ? `localStorage.setItem('groloo.tvcards', ${JSON.stringify(cards)});` : `localStorage.removeItem('groloo.tvcards');`}
     ${LS_ARM.split(',').filter(Boolean).map((pair) => {
       const i = pair.indexOf('=');
       const k = pair.slice(0, i).trim();
@@ -482,6 +502,42 @@ async function main() {
       await sleep(1000);
     }
     shutdown();
+    return;
+  }
+
+  /* DOES THE CARD-COUNT ARM ACTUALLY BITE? A row loads with about twenty titles and SPOT_MAX is a
+   * CAP, not a count — it only changes anything once the row has fetched more, which it does on
+   * first focus. Measuring at rest therefore compares two identical rows and reports no difference,
+   * which is exactly what the first A/B did. This seats on a row, walks it far enough to trigger
+   * the fetch, waits, and then reports what the strip is actually made of. */
+  if (CMD === 'cards') {
+    await setArms(cdp, PREVIEWS === 'on', SCROLL, ROWS_MODE, CARDS);
+    await gotoSurface(cdp, 'home');
+    await waitSettled(cdp);
+    await seatOnRow(cdp);
+    for (let i = 0; i < 10; i++) { await press(cdp, 'ArrowRight'); await sleep(260); }
+    await sleep(6000);   // let the row's own fetch land and commit
+    const d = JSON.parse(await cdp.eval(`(() => {
+      const open = document.querySelector('.tv-spot.is-settled') || document.querySelector('.tv-spot.is-open') || document.querySelector('.tv-spot');
+      const strip = open && open.querySelector('.tv-spot-strip');
+      const tiles = strip ? strip.querySelectorAll('.tv-spot-thumb').length : 0;
+      return JSON.stringify({
+        arm: localStorage.getItem('groloo.tvcards'),
+        rows: document.querySelectorAll('.tv-spot').length,
+        cardsTotal: document.querySelectorAll('.tv-spot-thumb').length,
+        tilesInOpenRow: tiles,
+        stripWidthPx: strip ? Math.round(strip.scrollWidth) : 0,
+        imgs: document.images.length,
+      });
+    })()`));
+    console.log(`
+  arm groloo.tvcards = ${d.arm === null ? '(cleared — app default)' : d.arm}`);
+    console.log(`  rows on screen        ${d.rows}`);
+    console.log(`  tiles in focused row  ${d.tilesInOpenRow}`);
+    console.log(`  strip width           ${d.stripWidthPx}px`);
+    console.log(`  cards on the page     ${d.cardsTotal}`);
+    console.log(`  images                ${d.imgs}`);
+    await cdp.close?.();
     return;
   }
 
@@ -596,7 +652,7 @@ async function main() {
     console.log('  If you meant to measure uncommitted work, this is the wrong bundle — rebuild.\n');
   }
 
-  await setArms(cdp, PREVIEWS === 'on', SCROLL, ROWS_MODE);
+  await setArms(cdp, PREVIEWS === 'on', SCROLL, ROWS_MODE, CARDS);
   await cdp.send('Page.reload');
   await sleep(4000);
 
@@ -665,9 +721,11 @@ async function main() {
         const live = await assertLive(cdp, key, backKey);
         if (!live) console.log(`    !! ${surface}/${axis}: a press changed nothing — blocks below are not a measurement`);
         for (const cad of (ONLY_CADENCES.length ? CADENCES.filter((c) => ONLY_CADENCES.includes(c.label)) : CADENCES)) {
-          const presses = horizontal
-            ? (cad.label === 'held' ? 34 : cad.label === 'settled' ? 8 : 23)
-            : (cad.label === 'held' ? 20 : cad.label === 'settled' ? 6 : 12);
+          const presses = cad.presses
+            ? (horizontal ? cad.presses.horizontal : cad.presses.vertical)
+            : horizontal
+              ? (cad.label === 'held' ? 34 : cad.label === 'settled' ? 8 : 23)
+              : (cad.label === 'held' ? 20 : cad.label === 'settled' ? 6 : 12);
           const label = `${surface}-${axis}-${cad.label}`;
           const b = await runBlock(cdp, label, { key, backKey, gap: cad.gap, presses, span });
           blocks.push({ surface, axis, cadence: cad.label, live, ...b });
