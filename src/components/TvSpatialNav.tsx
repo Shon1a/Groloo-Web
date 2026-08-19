@@ -174,17 +174,17 @@ const SCROLL_MS = 280;        // a settled, deliberate move — see the 60fps no
  *   flight and never completes and stalls between rows.
  *
  * MUST TRACK TvSpotlight's HELD_STEP_MIN_MS. Two files, one feel; if one moves, move both.
- * Both moved together on 2026-08-19 — 220 -> 300 — on the measurement recorded there. */
-const HELD_ROW_MIN_MS = 300;
+ * Both moved together on 2026-08-19 — 220 -> 300, then 300 -> 400 by preference — on the measurement recorded there. */
+const HELD_ROW_MIN_MS = 400;
 /** Beyond this gap the remote was tapped, not held. Mirrors SLIDE_CHAIN_WINDOW in TvSpotlight. */
-const CHAIN_WINDOW_MS = 400;
+const CHAIN_WINDOW_MS = 500;
 /* ---- HELD STAYS AT 260, AND THE 140ms TARGET IS DECLINED ON PURPOSE -------------------------
  *
  * The brief for this pass asks for ~140ms on repeated/held input. The tap durations above did come
  * down to their targets, because the 60fps measurement supports them. This one does not, and the
  * reason is a constraint the target cannot be met without breaking:
  *
- *   A HELD DURATION MUST EXCEED THE HELD PACE. Presses arrive every HELD_ROW_MIN_MS (300ms). A
+ *   A HELD DURATION MUST EXCEED THE HELD PACE. Presses arrive every HELD_ROW_MIN_MS (400ms). A
  *   260ms animation is therefore always still in flight when the next press re-aims it, which is
  *   what makes a hold one continuous glide. A 140ms animation would FINISH, the page would sit
  *   still for 80ms, and the next press would start it again from a standstill — a series of little
@@ -198,7 +198,7 @@ const CHAIN_WINDOW_MS = 400;
  *
  * So: 220 pace, 260 duration, unchanged. If a faster hold is wanted as a matter of feel rather than
  * of frames, BOTH numbers move together and the pair is the thing to try, not this one alone. */
-const HELD_SCROLL_MS = 340;
+const HELD_SCROLL_MS = 440;
 /* ---- THE CURVE STARTS SLOW NOW, AND THAT REVERSES WHAT THE NOTE ABOVE SAYS ------------------
  *
  * The note argues against an ease-in-out because "its easing starts slow, which reads as lag on
