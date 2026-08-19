@@ -1159,6 +1159,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
       const objectPosition = cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
       const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
+      /* What names this tile: its wordmark, its title in type, or nothing at all when it
+       * has fallen back to a plain poster that already carries its own. */
+      const name: 'mark' | 'text' | null = mark ? 'mark' : ((cut || shared) ? 'text' : null);
       const res = resumeOf?.(it);
       return (
         <button
@@ -1229,8 +1232,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
               plain TMDB poster, that poster already has the title printed on it, so setting
               it again in type would print it twice. `data-src` for the same reason the picture uses it: the
               windowing effect below promotes these, so a row never fetches 21 at once. */}
-          <span className="tv-spot-thumbscrim" aria-hidden="true" />
-          {!mark && !!(cut || shared) && (
+          {/* The scrim exists to make a NAME legible, so it paints only when there is one.
+              Rendering it unconditionally put a gradient over every tile that shows neither
+              — a plain TMDB poster carries its own title and needs no help. */}
+          {!!name && <span className="tv-spot-thumbscrim" aria-hidden="true" />}
+          {name === 'text' && (
             <span className="tv-spot-thumbtitle" aria-hidden="true">{it.title}</span>
           )}
           {!!mark && (
