@@ -3,6 +3,7 @@ import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW, artW, artPosition } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
+import { tvRowCards } from '../lib/tvRowSize';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
 import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, apiIdOf } from '../lib/queries';
 import { retainImage, isDecoded } from '../lib/useImageReady';
@@ -71,7 +72,7 @@ import { FadeBg, FadeImg } from './FadeArt';
  *     dearer, which is the VERTICAL axis, already the expensive one.
  *
  * Neither has been measured at 40 on the television. */
-export const SPOT_MAX = 40;
+export const SPOT_MAX = tvRowCards();
 
 /* ms the remote must sit still on a title before its trailer is even asked for.
  *
@@ -218,16 +219,16 @@ function isAnimated(it: MediaItem | null | undefined): boolean {
  * press restarts it is discarded from wherever it happened to be; one that has FINISHED is sitting
  * at zero offset, and restarting from zero is the same thing a deliberate press does. So the fix is
  * not to remove the movement, it is to size it so it completes inside one press — which is now
- * possible only because HELD_STEP_MIN_MS paces a hold at 220ms rather than 120ms.
+ * possible only because HELD_STEP_MIN_MS paces a hold at 300ms rather than 120ms.
  *
  * TWO NUMBERS, BOTH FALLING OUT OF THAT PACE:
  *
- *   180ms, comfortably inside 220ms with room for a repeat that arrives a frame early, so each
+ *   180ms, comfortably inside 300ms with room for a repeat that arrives a frame early, so each
  *   drift is done before the next one starts and the picture is never pulled backwards.
  *
  *   1.6%. There is no longer a "deliberate distance" for this to be half of — see above — so it
  *   stands on the pace alone: a hold covers ground fast, and a drift big enough to notice on a
- *   card that is replaced every 220ms is a drift that draws the eye off the posters. Small and
+ *   card that is replaced every 300ms is a drift that draws the eye off the posters. Small and
  *   over quickly is the whole brief.
  *
  * LINEAR, for the reason the strip is linear while held (see HELD_SLIDE_MS): a decelerating curve
@@ -256,7 +257,7 @@ const SLIDE_MS = 267;
  * `.tv-spot-layer` in tv.css.
  *
  * A HELD KEY GETS NEITHER — it gets a symmetric 90ms, for the reason ART_FADE_MS_CHAINED exists:
- * neither duration fits inside the 220ms of a held press, and a trough repeated four times a
+ * neither duration fits inside the 300ms of a held press, and a trough repeated four times a
  * second is a flicker rather than a beat. Written to `--sp-layer-out` and `--sp-layer-fade`. */
 /* ---- THE SPRING ARM'S TWO CONSTANTS ----------------------------------------------------------
  * Critically damped: c = 2*sqrt(k), so the strip settles without ever crossing its target. A row
@@ -284,7 +285,10 @@ const LAYER_FADE_MS_CHAINED = 150;
  * rather than one movement. A held key now uses HELD_SLIDE_MS with linear timing instead; a
  * deliberate press is unchanged and still uses SLIDE_MS. */
 /** Under this gap between presses, the remote is being held rather than tapped. */
-const SLIDE_CHAIN_WINDOW = 320;
+/* Raised with the pace (see HELD_STEP_MIN_MS): it has to sit comfortably ABOVE the pace or a
+ * held press lands outside the window and takes the deliberate path, and comfortably below a real
+ * deliberate press (~900ms) or one gets mistaken for a hold. Same 100ms margin it always had. */
+const SLIDE_CHAIN_WINDOW = 400;
 
 /* ---- HOW FAST A HELD KEY IS ALLOWED TO WALK -------------------------------------------------
  * The television repeats a held key about every 120ms (the figure this file already records at
@@ -301,9 +305,30 @@ const SLIDE_CHAIN_WINDOW = 320;
  * thing that feels broken on a remote. `lastStepAt` is only moved by an ACCEPTED step, so the
  * limiter measures from the last thing the viewer actually saw.
  *
- * Deliberately below SLIDE_CHAIN_WINDOW (320ms), so an accepted held step still counts as chained
+ * Deliberately below SLIDE_CHAIN_WINDOW (400ms), so an accepted held step still counts as chained
  * and keeps the fast slide, the suppressed decoration and the `is-fast` class. */
-const HELD_STEP_MIN_MS = 220;
+
+/* ---- MEASURED ON THE 65UT8100, 2026-08-19 ---------------------------------------------------
+ * Driving synthetic presses at a fixed gap emulates this pace exactly, because the limiter only
+ * ever DROPS presses that arrive sooner — drive slower than it and every one lands, so the gap IS
+ * the pace. Both arms therefore ran against one binary. Four rounds, axis order reversed each
+ * round, idle control 100%% on-time in all four:
+ *
+ *   HORIZONTAL   on-time / frames over 67ms      VERTICAL     on-time / frames over 67ms
+ *     240ms        54.6%% / 33.3                   240ms         57.5%% / 14.8
+ *     300ms        62.9%% / 12.5                   300ms         79.6%% /  5.3
+ *
+ * 300 won every round on both axes. Vertical, the worse axis, gained 22 points of on-time and lost
+ * two thirds of its bad frames; median input latency fell with it (61ms -> 8ms in round one).
+ *
+ * It costs traversal speed — a row walks 36%% slower — which is the trade, and roughly the pacing
+ * a viewer already recognises from other ten-foot apps.
+ *
+ * THE THREE CONSTANTS MOVE TOGETHER OR THE GLIDE BREAKS. The pace was measured against the OLD
+ * slide and chain window, where a 300ms gap left a 260ms slide finishing early and stalling — the
+ * stepping this file's own note warns about — and sat only 20ms under the chain window, so jitter
+ * would drop a held press into the deliberate path mid-walk. Both are corrected below. */
+const HELD_STEP_MIN_MS = 300;
 
 /* ---- AND WHY A HELD KEY GLIDES RATHER THAN STEPS --------------------------------------------
  * Pacing alone did not fix the feel. Each press eases with `cubic-bezier(.25,.46,.45,.94)`, which
@@ -317,7 +342,7 @@ const HELD_STEP_MIN_MS = 220;
  * re-targeted while still in flight and never completes and stalls. Constant velocity, no arrival,
  * no relaunch: one glide for as long as the button is down. Let go and the last step lands on the
  * deliberate curve, so the row still settles rather than stopping dead. */
-const HELD_SLIDE_MS = 260;
+const HELD_SLIDE_MS = 340;   // a little LONGER than the 300ms pace, per the note above
 
 /* How long the focus state waits before committing — see `setOpenNow`.
  *
@@ -631,7 +656,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * THE DEFECT: holding a direction made the up-next posters glide while the peek stepped, since
      * this effect used to bail on `is-fast` entirely. It is the same rail; it has to move like one.
      *
-     * WHY IT CANNOT SIMPLY REPLAY. A held press arrives every 220ms (HELD_STEP_MIN_MS) into a
+     * WHY IT CANNOT SIMPLY REPLAY. A held press arrives every 300ms (HELD_STEP_MIN_MS) into a
      * 260ms glide, so the previous run is ~85% done when the next begins. Restarting from the
      * nominal start would throw the content backwards by the missing 15% — the stutter this row
      * spent a whole pass removing from the strip itself.
