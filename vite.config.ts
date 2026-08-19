@@ -279,10 +279,36 @@ export default defineConfig(({ mode }) => ({
             },
           },
           {
-            // Catalog rows/search/meta. The server already declares these stale-while-revalidate
-            // for 24h, so mirror that: serve instantly from cache, refresh in the background. If
-            // the backend is cold or down the refresh just fails and the cached copy stands.
-            urlPattern: ({ url }) => url.hostname.endsWith('.onrender.com') && /^\/api\/(catalog|search|genres|browse|meta\/|tv\/|introdb\/)/.test(url.pathname),
+            /* Card feeds. These carry admin-editable art — the crop a poster is cut
+             * from, a cover override, a wordmark — so they get the same treatment as
+             * the curated endpoints above and for the same reason: an admin edit has
+             * to appear on the NEXT load, not the one after it.
+             *
+             * Under StaleWhileRevalidate it was the one after it, and only if the
+             * browser's own copy had also expired — the server was sending these
+             * max-age=600, so a corrected poster could sit unchanged for ten minutes
+             * and then take a further load to appear. It reads as "the position I set
+             * did not save", and it is why the server now sends these no-cache.
+             *
+             * This costs no first paint: the home screen is drawn from /api/home, and
+             * these are the drill-down grids and the pages a row appends when someone
+             * asks for more. Same 3s escape hatch — a sleeping backend serves the
+             * cached copy rather than making anyone wait for it. */
+            urlPattern: ({ url }) => url.hostname.endsWith('.onrender.com') && /^\/api\/(browse|catalog|search)/.test(url.pathname),
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'groloo-api-cards',
+              networkTimeoutSeconds: 3,
+              expiration: { maxEntries: 150, maxAgeSeconds: 60 * 60 * 24 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          {
+            // Everything else public: genres, per-title meta, episode lists, introdb. No admin
+            // art rides in these, the server declares them stale-while-revalidate for 24h, so
+            // mirror that: serve instantly from cache, refresh in the background. If the backend
+            // is cold or down the refresh just fails and the cached copy stands.
+            urlPattern: ({ url }) => url.hostname.endsWith('.onrender.com') && /^\/api\/(genres|meta\/|tv\/|introdb\/)/.test(url.pathname),
             handler: 'StaleWhileRevalidate',
             options: {
               cacheName: 'groloo-api-catalog',
