@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react';
+import { useCards } from '../lib/queries';
 import { useHistory } from '../stores/history';
 import { useModal } from '../stores/modal';
 import { useT } from '../i18n/i18n';
@@ -47,9 +48,33 @@ export default function ContinueRow({ onSelect: _onSelect }: { onSelect?: (m: Me
     for (const e of history) m.set(String(e.id), e);
     return m;
   }, [history]);
-  const tvItems: MediaItem[] = useMemo(() => history.map((e) => ({
-    id: e.id, type: e.type, title: e.title, year: e.year, rating: e.rating, poster: e.poster, genre: e.genre,
-  })), [history]);
+  /* A watch entry knows a poster and a title. The row needs what a catalog card
+   * carries — the textless backdrop, where its poster is cut from, the wordmark — so
+   * ask for the real cards and lay them over the entries. Bounded because a long
+   * history is still one row, and add-on entries (a `kitsu:` id) simply do not match
+   * and keep rendering exactly as they do today. */
+  const ids = useMemo(() => history.slice(0, 24)
+    .filter((e) => /^\d+$/.test(String(e.id)))
+    .map((e) => `${e.type === 'tv' || e.type === 'series' ? 'tv' : 'movie'}/${e.id}`), [history]);
+  const { data: cards } = useCards(ids);
+  const artById = useMemo(() => {
+    const m = new Map<string, MediaItem>();
+    for (const c of cards?.results || []) m.set(String(c.id), c);
+    return m;
+  }, [cards]);
+
+  const tvItems: MediaItem[] = useMemo(() => history.map((e) => {
+    const c = artById.get(String(e.id));
+    return {
+      id: e.id, type: e.type, title: e.title, year: e.year, rating: e.rating, poster: e.poster, genre: e.genre,
+      // Only the presentation comes from the card; the entry stays the spine, because it
+      // is what knows the episode and the timecode.
+      ...(c && {
+        posterArt: c.posterArt, artFocusX: c.artFocusX, backdrop: c.backdrop,
+        titleLogo: c.titleLogo, overview: c.overview,
+      }),
+    };
+  }), [history, artById]);
   const resumeOf = useCallback((it: MediaItem) => {
     const e = byId.get(String(it.id));
     if (!e) return undefined;

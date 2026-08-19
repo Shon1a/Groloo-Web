@@ -28,7 +28,36 @@ const refetchFocusUnlessPlaying = () => !usePlayer.getState().source;
  *
  * A server that does not know the flag simply ignores it and the billboards fall back to text,
  * exactly as they do today — so this is safe to ship ahead of the backend. */
-const HOME_QUERY = import.meta.env.MODE === 'tv' ? '&logos=1' : '';
+const IS_TV = import.meta.env.MODE === 'tv';
+const HOME_QUERY = IS_TV ? '&logos=1' : '';
+
+/* CARDS FOR A LIST OF IDS — the other half of /api/cards.
+ *
+ * Continue Watching is not a catalog query, it is a list of titles the viewer already
+ * has. A watch entry stores a poster and a title and nothing else, so its tiles drew
+ * as plain TMDB posters in a row where every other tile is a slice of the title's
+ * textless key art with the lettering laid over it — and the billboard above them
+ * looked right, because a billboard is enriched from /api/meta when it comes to rest
+ * and the tiles never were.
+ *
+ * One request for the whole row, and the cards come back from the same mapMovie the
+ * browse rows use, so they are the same kind of thing a catalog tile is.
+ *
+ * TV only. The website draws these as small posters under a text caption and has no
+ * use for the artwork, so it should not pay for it. */
+export function useCards(ids: string[]) {
+  const { lang } = useLang();
+  const key = ids.join(',');
+  return useQuery({
+    queryKey: ['cards', key, lang],
+    enabled: IS_TV && key.length > 0,
+    queryFn: () => api<{ results: MediaItem[] }>(
+      `/api/cards?ids=${encodeURIComponent(key)}&lang=${encodeURIComponent(lang)}&logos=1`),
+    // Same as the home rows: admin-editable art, so do not hold it long.
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: refetchFocusUnlessPlaying,
+  });
+}
 
 export function useHome() {
   const { lang } = useLang();
