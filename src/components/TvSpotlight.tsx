@@ -1215,10 +1215,24 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
             />
           )}
           {/* The wordmark and the darkening that keeps it readable, drawn only when a
-              mark exists — a title without one shows clean art rather than a gradient
-              over nothing. `data-src` for the same reason the picture uses it: the
+              mark exists — and when it does not, the title is SET IN TYPE in the same
+              place rather than left off, so no tile is ever nameless. That covers three
+              cases at once: a title TMDB has no wordmark for at all, one whose wordmark
+              the page's budget has not resolved yet (it arrives on a later load), and an
+              add-on card that never had one.
+
+              NOT text-first-then-logo. The billboard settled that already — swapping type
+              for a wordmark a beat later is the same flicker the backdrop had — so a tile
+              shows one or the other and never both in turn.
+
+              AND ONLY OVER OUR OWN ARTWORK. When a tile has fallen all the way back to the
+              plain TMDB poster, that poster already has the title printed on it, so setting
+              it again in type would print it twice. `data-src` for the same reason the picture uses it: the
               windowing effect below promotes these, so a row never fetches 21 at once. */}
-          {!!mark && <span className="tv-spot-thumbscrim" aria-hidden="true" />}
+          <span className="tv-spot-thumbscrim" aria-hidden="true" />
+          {!mark && !!(cut || shared) && (
+            <span className="tv-spot-thumbtitle" aria-hidden="true">{it.title}</span>
+          )}
           {!!mark && (
             <img
               className="tv-spot-thumbmark"
