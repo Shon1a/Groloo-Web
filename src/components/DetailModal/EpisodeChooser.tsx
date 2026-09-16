@@ -102,6 +102,15 @@ const INTRO_RISE = '34%';
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
+/* ONE MediaQueryList for the module, not one per render. This was `window.matchMedia(...)`
+ * evaluated inline in EpisodeChooser's body, and that body runs on every frame of a drag —
+ * a style-system call in the hot path to answer a question whose answer almost never changes.
+ * Subscribing to it is also the more correct of the two: the deck now notices the setting
+ * being changed instead of noticing it at the next render that happens to occur. */
+const MOTION_Q = typeof window !== 'undefined' && window.matchMedia
+  ? window.matchMedia('(prefers-reduced-motion: reduce)')
+  : null;
+
 interface CardProps {
   ep: Episode;
   /** distance from the focused card; fractional while a finger is dragging */
@@ -122,6 +131,12 @@ function EpisodeCard({ ep, offset, on, lifted, picked, pct, leftSec, intro, onPi
    * checked as well as `load` because a cached still can finish before React attaches the
    * handler, and a card whose `load` never fires would sit invisible. */
   const [shown, setShown] = useState(false);
+  /* Checked once, on mount, rather than from an inline `ref={(el) => ...}`: an inline callback
+   * ref has a new identity every render, so React detached and re-attached it — and re-read
+   * `complete` — on all six cards on every frame of a drag. A card is keyed by its episode, so
+   * mount is exactly when there is a new <img> to ask. */
+  const imgRef = useRef<HTMLImageElement>(null);
+  useLayoutEffect(() => { if (imgRef.current?.complete) setShown(true); }, []);
   /* The deal's stagger, frozen at mount — see TvEpisodeDeck for why it must not follow `offset`. */
   const introStep = useRef(Math.min(Math.abs(Math.round(offset)), INTRO_STEP_CAP));
   const name = ep.name || t('modal.episode_n', { n: ep.episode });
@@ -163,7 +178,7 @@ function EpisodeCard({ ep, offset, on, lifted, picked, pct, leftSec, intro, onPi
               draggable={false}
               decoding="async"
               loading="lazy"
-              ref={(el) => { if (el?.complete && !shown) setShown(true); }}
+              ref={imgRef}
               onLoad={() => setShown(true)}
               onError={() => setBroken(true)}
             />
@@ -256,8 +271,13 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
   goRef.current = go;
 
   /* ---- the deal -------------------------------------------------------------------------- */
-  const reduceMotion = typeof window !== 'undefined'
-    && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const [reduceMotion, setReduceMotion] = useState(() => !!MOTION_Q?.matches);
+  useEffect(() => {
+    if (!MOTION_Q?.addEventListener) return;
+    const on = () => setReduceMotion(MOTION_Q.matches);
+    MOTION_Q.addEventListener('change', on);
+    return () => MOTION_Q.removeEventListener('change', on);
+  }, []);
   const [intro, setIntro] = useState<IntroPhase>(reduceMotion ? null : 'pre');
   useEffect(() => { setIntro(reduceMotion ? null : 'pre'); }, [season, reduceMotion]);
   // Two frames between placing and moving — see TvEpisodeDeck for why one is not enough.
