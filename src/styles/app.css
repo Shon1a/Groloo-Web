@@ -582,8 +582,20 @@
       linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,.1) 15%,transparent 28%)}
     /* (bottom padding to clear the floating dock is set in the ≤900px dock block below;
        the thumb strip is hidden there too, since the dock owns the bottom edge) */
-    .hero-plot{font-size:14.5px;line-height:1.5;margin-bottom:16px;max-width:92%}
-    .hero-meta{margin-bottom:16px;font-size:14px}
+    /* NO SYNOPSIS ON A PHONE. Two lines of grey copy were the biggest thing in the overlay and
+       sat exactly over the part of the backdrop a portrait crop has left to show; the title,
+       the rating line and PLAY say what the card needs. The paragraph is still in the DOM (the
+       detail sheet has the full text) — it is only not drawn here. */
+    .hero-plot{display:none}
+    .hero-meta{margin-bottom:14px;font-size:14px}
+    .hero-title{margin-bottom:10px}
+    .hero-logo{margin-bottom:10px}
+    /* THE COPY SITS LOWER, so more of the artwork is clear above it. The 86px reserve the ≤900px
+       dock block puts under .hero-inner assumes the hero reaches the bottom of the viewport; on
+       a portrait phone it never does (min-height keeps 320px of rows below it), so the dock
+       floats over the rows, not the hero, and the reserve was pure empty band inside the banner.
+       `.hero .hero-inner` outranks that rule by specificity, which is why it can live here. */
+    .hero .hero-inner{padding-bottom:30px}
     .hero-btn{padding:11px 22px;font-size:17px}
     /* collapse "+ My List" to an icon-only disc — the label can't fit a 44px box */
     .hero-add{width:44px;height:44px;padding:0;gap:0;border-radius:50%;justify-content:center}
@@ -1235,10 +1247,10 @@
   .sw input:checked+.sw-track::after{transform:translateX(20px)}
   .sw input:focus-visible+.sw-track{box-shadow:0 0 0 3px rgba(46,204,113,.35)}
   /* Interface › "Blur unwatched episodes image" — stills of episodes you haven't
-     started are blurred until hovered (both the modal grid and the in-player panel). */
-  .blur-unwatched #epList.ep-grid .ep-row:not(.watched):not(.on) .ep-still img,
+     started are blurred until hovered (both the modal deck and the in-player panel). */
+  .blur-unwatched .ep-deck .ep-card:not(.watched):not(.picked) .ep-art img,
   .blur-unwatched .vp-eppanel-list .ep-row:not(.watched):not(.on) .ep-still img{filter:blur(11px) brightness(.7);transition:filter .22s}
-  .blur-unwatched #epList.ep-grid .ep-row:hover .ep-still img,
+  .blur-unwatched .ep-deck .ep-card:hover .ep-art img,
   .blur-unwatched .vp-eppanel-list .ep-row:hover .ep-still img{filter:none}
 
   /* ── settings polish: sub-sections, live preview, inline control groups,
@@ -1384,8 +1396,8 @@
   .overlay.open{display:flex}
   /* ============================================================ *
    *  DETAIL MODAL — cinematic redesign (all .m- prefixed, real tokens).
-   *  Episode-grid rules are SCOPED TO #epList so the shared in-player
-   *  .vp-eppanel-list .ep-row stays a compact list, not 16:9 cards.
+   *  The episode deck (.ep-deck / .ep-card) has its own names so the shared
+   *  in-player .vp-eppanel-list .ep-row stays a compact list, not a fan of cards.
    * ============================================================ */
   /* shell: widen the box; hero + body scroll as one inner pane */
   /* Fixed height (not just max-height): the overlay centres the modal, so while
@@ -1515,31 +1527,98 @@
   .m-streams .m-rail-head .m-rail-label{margin:0;flex:1 1 auto}
   .m-streams .m-rail-head .lang-select{margin:0;flex:0 0 auto}
 
-  /* EPISODE CARD GRID — SCOPED TO #epList ONLY (in-player .ep-row untouched) */
-  /* vertical LIST rows: thumbnail + E# on the left, title on the right */
-  #epList.ep-grid{display:flex;flex-direction:column;gap:8px;max-height:none;overflow:visible;padding:0}
-  #epList.ep-grid .ep-row{display:flex;align-items:center;gap:14px;position:relative;border:1px solid var(--border);
-    border-radius:10px;overflow:hidden;background:var(--bg-3);cursor:pointer;text-align:left;padding:7px;
-    transition:border-color .2s,box-shadow .2s,background .2s}
-  #epList.ep-grid .ep-row:hover{border-color:rgba(var(--accent-rgb),.5);background:rgba(255,255,255,.04)}
-  #epList.ep-grid .ep-row.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 8px 26px rgba(0,0,0,.4)}
-  #epList.ep-grid .ep-still{position:relative;flex:0 0 150px;width:150px;aspect-ratio:16/9;overflow:hidden;
-    display:block;border-radius:7px;background:var(--bg-3)}
-  #epList.ep-grid .ep-still img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
-    transition:transform .35s cubic-bezier(.2,.7,.2,1)}
-  #epList.ep-grid .ep-row:hover .ep-still img{transform:scale(1.05)}
-  #epList.ep-grid .ep-row.on .ep-still img{filter:brightness(1.06)}
-  #epList.ep-grid .ep-still.no-still{display:grid;place-items:center;background:linear-gradient(150deg,#0a0a0a,#000000)}
-  #epList.ep-grid .ep-still.no-still::after{content:attr(data-n);font-family:var(--font-mono);font-size:22px;color:rgba(255,255,255,.28)}
-  #epList.ep-grid .ep-num{position:absolute;left:12px;bottom:12px;top:auto;z-index:2;font-family:var(--font-mono);font-size:12px;
-    letter-spacing:.06em;color:#ffffff;background:rgba(0,0,0,.6);border:1px solid var(--border);
-    padding:2px 8px;border-radius:5px;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
-  #epList.ep-grid .ep-row.on .ep-num{background:var(--accent);color:var(--ink);border-color:var(--accent)}
-  #epList.ep-grid .ep-body{position:static;flex:1 1 auto;min-width:0;z-index:2;padding:0 6px 0 4px;text-align:left;
-    display:block;background:none}
-  #epList.ep-grid .ep-name{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;
-    font-size:15px;font-weight:600;color:var(--text);line-height:1.32;white-space:normal;overflow:hidden}
-  #epList.ep-grid .ep-row.on .ep-name{color:var(--highlight)}
+  /* ============================================================ *
+   *  THE EPISODE DECK — the season as a stack of cards, not a list of rows. It is the TV's
+   *  TvEpisodeDeck at desk and phone size: every card's transform + opacity comes from
+   *  deckGeometry.ts as an inline style, and --ep-above / --ep-below (how far the fan reaches
+   *  either side of the forward card, in card-heights) arrive the same way. This sheet only
+   *  sizes a card, reserves the fan's height in the modal's flow and dresses the card.
+   *  Inputs (wheel, finger, click, keys) are in EpisodeChooser.tsx.
+   *  Class names are its own (.ep-card, not .tv-ep-card): tv.css is loaded alongside this
+   *  sheet in the TV build and must not be able to reach in.
+   * ============================================================ */
+  /* z: the head sits above the deck, so the season menu opens OVER the back stack rather than
+     under it — the cards carry z-index 100 inside the deck, and without the deck being its own
+     stacking context (z-index:1 below) those numbers would compete with the menu's directly */
+  .ep-head{position:relative;z-index:2;display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  .ep-head .m-rail-label{margin:0;flex:1 1 auto}
+  /* The season chip: the TV's pill — glass, bold, rounded — on the same staggered dropdown the
+     sources head uses, so the modal's two chips open the same way. A long show scrolls. */
+  .ep-season .m-src-trigger{border-radius:999px;padding:8px 13px 8px 16px;font-size:14px;font-weight:600;letter-spacing:0;
+    background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.14)}
+  .ep-season .m-src-trigger:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.28)}
+  /* hangs from the chip's RIGHT edge and opens leftward, over the deck it belongs to — not
+     rightward over the cast column */
+  .ep-season .m-src-menu{left:auto;right:0;min-width:200px;max-width:min(80vw,440px);transform-origin:top right;
+    max-height:min(46vh,380px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+  .ep-season .m-src-opt{overflow:hidden;text-overflow:ellipsis}
+  /* "3 / 24" — what a deck, unlike a list, does not show on its own: how long the season is. */
+  .ep-count{font-family:var(--font-mono);font-size:13px;letter-spacing:.06em;color:var(--text-muted);white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .ep-count b{color:var(--text);font-weight:600}
+  .ep-count i{font-style:normal;margin:0 5px;opacity:.45}
+
+  /* THE DECK IS A STACKING CONTEXT, NOT A LAYOUT. Every card is absolutely positioned at one
+     anchor — the forward card's centre, --ep-above card-heights down from the top — and only the
+     inline transform tells them apart, so walking the deck re-composites a handful of elements
+     and reflows nothing. The height is the fan's reach, top to bottom, so the sources below sit
+     where the last card ends.
+     NO overflow:hidden: the lifted card and its shadow spill a few px past the column on
+     purpose, and a clip would shave the focus ring off the one card the page is pointing at.
+     touch-action:pan-y keeps the page's own scroll native until the deck claims a swipe. */
+  /* --ep-w is set in px by EpisodeChooser (measured; CARD_MAX_W there explains why it cannot be
+     `min(100%,560px)` here); 560px is only the value the first frame has before it is measured. */
+  .ep-deck{--ep-w:560px;--ep-h:calc(var(--ep-w) * 9 / 16);
+    position:relative;z-index:1;height:calc((var(--ep-above) + var(--ep-below)) * var(--ep-h));touch-action:pan-y}
+  .ep-deck.is-empty{height:auto}
+  .ep-card{position:absolute;left:0;top:calc(var(--ep-above) * var(--ep-h));width:var(--ep-w);height:var(--ep-h);
+    margin:calc(var(--ep-h) / -2) 0 0;padding:0;border:0;border-radius:12px;overflow:hidden;background:#101010;
+    color:#fff;font:inherit;text-align:left;cursor:pointer;
+    -webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;
+    /* resting state is an explicit scale(1), not "no transform": a transform that ENDS hands
+       its layer back and the text re-rasterises — a small jump. Every card always has one. */
+    transform:scale(1);transform-origin:0% 50%;
+    /* CARD_IN_MS in EpisodeChooser.tsx tracks the .34s */
+    transition:transform .34s cubic-bezier(.2,.7,.2,1),opacity .34s ease,box-shadow .34s ease}
+  /* under a finger or a held mouse the fan tracks the pointer; the snap on release gets the
+     transition back. The hand closes while it is held; the stills never start a native drag. */
+  .ep-deck.is-dragging .ep-card{transition:none;cursor:grabbing}
+  .ep-art img{-webkit-user-drag:none}
+  .ep-art{position:absolute;inset:0}
+  /* the still fades up out of the card's own background — six of these decode at six different
+     moments, and without it the deck finishes its glide as a burst of hard-edged photographs */
+  .ep-art img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transition:opacity .45s ease,filter .22s ease}
+  .ep-art img.rdy{opacity:1}
+  .ep-nostill{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(135deg,#1a1a1a,#0d0d0d)}
+  .ep-nostill::after{content:attr(data-n);font-family:var(--font-mono);font-size:clamp(22px,3vw,34px);color:rgba(255,255,255,.22)}
+  /* bottom-up only: the copy sits in the bottom third and the picture above it does the work */
+  .ep-scrim{position:absolute;inset:0;background:linear-gradient(0deg,rgba(0,0,0,.92) 0%,rgba(0,0,0,.55) 34%,rgba(0,0,0,0) 68%)}
+  .ep-copy{position:absolute;left:clamp(14px,1.4vw,22px);right:clamp(14px,1.4vw,22px);bottom:clamp(12px,1.3vw,18px);display:block}
+  .ep-title{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    font-size:clamp(16px,1.5vw,22px);font-weight:600;line-height:1.22;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.4)}
+  /* the number is the fastest thing to find on a card — heavier than the name it introduces */
+  .ep-title b{font-weight:800}
+  .ep-sub{display:block;margin-top:5px;font-family:var(--font-mono);font-size:clamp(12px,.95vw,14px);letter-spacing:.04em;color:rgba(255,255,255,.68)}
+  /* resume progress, clipped into the card's own corners — the same 5px the home rows use */
+  .ep-progress{position:absolute;left:0;right:0;bottom:0;height:5px;background:rgba(0,0,0,.55);overflow:hidden}
+  .ep-progress>i{display:block;height:100%;min-width:4px;background:var(--accent)}
+  /* "sources are loaded for this one" — a small disc, top right, on the picked card */
+  .ep-picked{position:absolute;top:10px;right:10px;z-index:2;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;
+    background:var(--accent);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.5)}
+  .ep-picked svg{display:block}
+  /* NO LINE AROUND THE FORWARD CARD — IT LIFTS INSTEAD: biggest, only fully opaque, only one with
+     a shadow, and the shadow deepens while the pointer or the keyboard is in the deck. */
+  .ep-card.on{box-shadow:0 16px 34px rgba(0,0,0,.5)}
+  .ep-card.is-lifted{box-shadow:0 26px 56px rgba(0,0,0,.66)}
+  .ep-card:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  @media (hover:hover){
+    /* a tucked card under the pointer brightens: it is a button, and it says so */
+    .ep-card:not(.on):hover .ep-art img{filter:brightness(1.14)}
+  }
+  /* the fan's silhouette while a season loads, so nothing jumps when it lands */
+  .ep-card.ep-skel{cursor:default;background:linear-gradient(100deg,#121212 30%,#1d1d1d 50%,#121212 70%);background-size:200% 100%;
+    animation:mShimmer 1.2s linear infinite}
+  .ep-empty{font-family:var(--font-mono);font-size:13px;color:var(--text-muted);padding:8px 0}
 
   /* ---------- "You may like" recommendations row (landscape cards) ---------- */
   .m-recs{margin:26px 0 6px;padding:6px clamp(20px,3vw,32px) clamp(30px,3vw,46px)}
@@ -1566,11 +1645,7 @@
      title's min-content from blowing out the tracks and clipping the right column */
   @media(max-width:560px){ .rec-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 12px} }
   @media(max-width:340px){ .rec-grid{grid-template-columns:minmax(0,1fr)} }
-  #epList.ep-grid .ep-skel{aspect-ratio:16/9;border-radius:8px;border:1px solid var(--border);
-    background:linear-gradient(100deg,var(--bg-3) 30%,rgba(var(--accent-rgb),.08) 50%,var(--bg-3) 70%);
-    background-size:200% 100%;animation:mShimmer 1.2s linear infinite}
   @keyframes mShimmer{from{background-position:200% 0}to{background-position:-200% 0}}
-  #epList.ep-grid .ep-empty{grid-column:1/-1;font-family:var(--font-mono);font-size:13px;color:var(--text-muted);padding:8px 0}
 
   /* CASTS & CREDITS sidebar — rides along with the grid column, pinned while it scrolls */
   .m-cast{align-self:start;position:sticky;top:0}
@@ -1616,21 +1691,23 @@
     .m-cast-name,.m-cast-char{white-space:normal;line-height:1.25}
     .m-cast.expanded .m-cast-list{flex-wrap:wrap;overflow:visible;-webkit-mask-image:none;mask-image:none}
     .m-cast.expanded .m-cast-item{width:auto;min-width:78px}
-    #epList.ep-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
     .m-hero-inner{max-width:100%}
   }
   @media(max-width:420px){
     .modal{border-radius:10px}
-    #epList.ep-grid{grid-template-columns:1fr 1fr}
+    /* phone: the card is the column; type steps down with it */
+    .ep-title{font-size:16px}
+    .ep-sub{font-size:12px}
+    .ep-copy{left:14px;right:14px;bottom:12px}
+    .ep-progress{height:4px}
     .m-hero-actions .hero-play{padding:10px 18px;font-size:14px}
     .m-hero-actions .hero-add{width:40px;height:40px}
   }
-  @media(max-width:360px){ #epList.ep-grid{grid-template-columns:1fr} }
 
   @media(prefers-reduced-motion:reduce){
     .m-hero-bg{animation:none}
     .m-hero-inner>*{animation:none}
-    #epList.ep-grid .ep-still img,#epList.ep-grid .ep-row{transition:none}
+    .ep-card{transition:none}
     .m-hero-trailer-slot iframe{transition:none}
     .modal{transition:none}
   }
@@ -1683,13 +1760,6 @@
   .terms-body a:hover{text-decoration:underline}
 
   /* ---------- functional stream list ---------- */
-  /* season + episode chooser (TV / anime) */
-  .ep-chooser{margin-bottom:20px}
-  .season-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-  .season-tab{font-family:var(--font-mono);font-size:13px;letter-spacing:.06em;padding:5px 12px;border-radius:4px;
-    cursor:pointer;border:1px solid var(--border);background:none;color:var(--text-muted);transition:.15s;white-space:nowrap}
-  .season-tab:hover{border-color:var(--accent);color:var(--accent)}
-  .season-tab.on{background:var(--accent);color:var(--ink);border-color:var(--accent)}
   /* Language picker — same staggered dropdown + coloring/height as .m-src-select */
   .lang-select{position:relative;margin:0 0 14px;width:max-content;min-width:210px;font-family:var(--font-mono)}
   .lang-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;
@@ -2155,7 +2225,7 @@
   .vp-season-tab.on{background:var(--accent);color:var(--ink);border-color:var(--accent)}
   .vp-eppanel-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:2px 4px}
   /* in-player rows become 16:9 thumbnail + title cards. Scoped to .vp-eppanel-list so the
-     modal #epList grid and the base .ep-row list elsewhere are left untouched. */
+     modal episode deck and the base .ep-row list elsewhere are left untouched. */
   /* flex:0 0 auto — the list is a column flexbox; without it 20+ rows get crushed to fit the
      panel height, squashing the thumbnails and clipping the titles. Let the list scroll instead. */
   .vp-eppanel-list .ep-row{position:relative;flex:0 0 auto;align-items:stretch;gap:0;padding:0;overflow:hidden;border-radius:8px;background:var(--bg-3)}
@@ -2468,7 +2538,7 @@
     .vp-progress{padding:14px 0}
     .vp-bar{height:6px}
     .vp-thumb{width:18px;height:18px;transform:translate(-50%,-50%) scale(1)}
-    .season-tab{min-height:40px;display:inline-flex;align-items:center}
+    .ep-season .m-src-trigger{min-height:44px}
     .lang-opt{min-height:44px;display:flex;align-items:center}
     .lang-select-trigger{min-height:44px}
     .vp-speed{min-height:40px}
@@ -2818,8 +2888,6 @@
     /* Detail-modal hero: 16:9 capped by max-height:56vh. At both TV sizes the cap is what
        actually renders, so the cap IS the height — no padding hack needed. */
     .m-hero{height:56vh}
-    /* 150px-wide 16:9 still → 84.375px. */
-    #epList.ep-grid .ep-still{height:84px}
     /* 118px-wide 16:9 still → 66.375px. */
     .vp-eppanel-list .ep-still{height:66px}
     /* Recommendation card: 16:9, width driven by the rail. Children are absolute.

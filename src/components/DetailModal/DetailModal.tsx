@@ -836,7 +836,7 @@ export default function DetailModal() {
               {meta?.tagline && <div className="m-tagline" id="mTagline">{meta.tagline}</div>}
               <p className="plot m-plot" id="mPlot">{plot}</p>
 
-              {isTv && meta && <div ref={episodesRef}><EpisodeChooser meta={meta} initial={target.resumeEp} onEpisode={(season, ep) => setPickedEp({ season, ep })} /></div>}
+              {isTv && meta && <div ref={episodesRef}><EpisodeChooser key={String(target.id)} meta={meta} titleId={target.id} initial={target.resumeEp} onEpisode={(season, ep) => setPickedEp({ season, ep })} /></div>}
 
               <div className="m-streams" ref={streamsRef}>
                 <div className="m-rail-head">

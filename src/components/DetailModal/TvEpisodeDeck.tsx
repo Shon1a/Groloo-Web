@@ -5,7 +5,8 @@ import { imgW } from '../../lib/img';
 import { useSeason } from '../../lib/queries';
 import { useHistory } from '../../stores/history';
 import TvChipMenu from './TvChipMenu';
-import type { Episode, MetaDetail, SeasonInfo } from '../../lib/types';
+import { WATCHED, STILL_RENDITION, belowExtent, dur, place, runtimeText, seasonsOf } from './deckGeometry';
+import type { Episode, MetaDetail } from '../../lib/types';
 
 /* ============================================================================
  * THE EPISODE DECK — the season as a stack of cards, not a list of lines.
@@ -58,138 +59,14 @@ import type { Episode, MetaDetail, SeasonInfo } from '../../lib/types';
 const DECK_ABOVE = 2;
 const DECK_BELOW = 3;
 
-/* GEOMETRY, IN PERCENTAGES OF THE CARD'S OWN BOX. A `translate()` percentage resolves against
- * the element being moved, so the deck's proportions survive the `clamp()` that sizes a card off
- * the viewport — one set of numbers for a 720p webOS package and a 1080p set alike. */
-const STEP_DOWN = 56;     // % of card height to the next card ahead
-const STEP_UP = 22;       // …and to the one behind, which is why the back stack reads as a stack
-const STEP_DECAY = 0.82;  // each further card sits closer to its neighbour: the ends bunch
-const STEP_X = 5;         // % of card width each card recedes to the right
-const STEP_X_DECAY = 0.8;
-/* SIZE IS WHAT RANKS THE CARDS, not opacity. Each step away from the selection is drawn this
- * much smaller: 1 · 0.90 · 0.80 · 0.70.
- *
- * It was 0.05 a step, and that is the mistake that made two rounds of brightening feel like they
- * were not working. At 5% a card one place away is 95% the size of the focused one — a
- * difference nobody sees from a sofa — so the ONLY thing separating the selection from its
- * neighbours was how dim they were, and the deck could either be legible or be ranked, not both.
- * Dimming is a poor tool for it anyway: it destroys the picture, which is the whole reason the
- * cards carry stills.
- *
- * At 10% the hierarchy is obvious at a glance and it costs nothing — a bigger card is not a
- * fainter one, so every episode in the deck stays readable while the focused one is plainly the
- * focused one. That is what lets the opacity ratio sit as high as it now does. */
-const STEP_SCALE = 0.1;
-const MIN_SCALE = 0.65;
-/* THE SELECTED CARD LIFTS WHEN THE REMOTE IS ACTUALLY IN THE DECK, and sits flat when it is not.
- * That distinction is the whole reason this is a separate number rather than just a bigger card:
- * a deck still has a selected episode while focus is off on WATCH, and the lift is what says
- * "the remote is HERE", which is exactly what a card cannot say once its ring is taken away.
- *
- * It has to be applied in JS rather than by a `:focus-visible` rule, because `transform` is one
- * property: the cards carry an inline transform that also positions them, and a stylesheet rule
- * setting `transform: scale(...)` would replace the translate along with it — and lose to the
- * inline style anyway. */
-const FOCUS_SCALE = 1.06;
-/* OPACITY FALLS GEOMETRICALLY, AND THE SAME WAY IN BOTH DIRECTIONS: each card keeps this
- * fraction of the one nearer the selection. 1 · 0.85 · 0.72 · 0.61.
- *
- * THE RATIO IS DELIBERATELY SHALLOW, and it took two goes to get there — 0.6 first, then 0.78,
- * both of which looked reasonable as a ladder of numbers and too faint on an actual panel. The
- * mistake behind both was treating opacity as the thing that marks the selection. It is not, and
- * it does not have to be: the focused card is the biggest, the only fully opaque one, the only
- * one with a hairline, and the only one carrying the focus ring. Four signals, none of them
- * opacity. That leaves opacity free to do the one job it is actually good at here — depth — and
- * depth reads at 0.85 per step as well as it does at 0.6, while a season still looks like it
- * continues past the edges of the screen instead of dissolving two cards out.
- *
- * There is a real ceiling above this, though it is not close: as the ratio approaches 1 the
- * cards stop separating from one another and the fan flattens into overlapping rectangles.
- *
- * It used to be a subtraction, and a different one per side (0.78 falling by 0.26 ahead, 0.58
- * by 0.20 behind), on the argument that the next episode is the one you would press and should
- * look available. Two problems with that. A subtraction is not a fade — the same 0.26 is a third
- * of the way down at the top of the run and most of what is left at the bottom, so the steps
- * read as uneven — and the asymmetry meant a card one place BEHIND the selection and one place
- * AHEAD of it, equally far away and equally not-selected, were drawn differently for no reason
- * the viewer could see. A ratio gives every step the same visual weight, which is what "further
- * away" should look like. */
-const OPACITY_STEP = 0.85;
-
-/** Same threshold history.ts uses to stop offering a resume — past this, it's watched. */
-const WATCHED = 0.94;
-
 /* The ids focus can be sitting on without anyone having chosen it — see the seeding note below.
  * `mWatch` is kept for the case where a WATCH button exists; the TV title screen no longer
  * renders one, so in this build the ✕ is the only park that actually occurs. */
 const AUTO_PARKED = new Set(['mWatch', 'closeModal']);
 
-/** Cumulative offset `d` cards out, each step shorter than the last. */
-function stack(step: number, d: number, decay: number) {
-  let total = 0;
-  let s = step;
-  for (let k = 0; k < d; k++) { total += s; s *= decay; }
-  return total;
-}
-
-/* HOW FAR THE FAN REACHES BELOW THE FOCUSED CARD'S CENTRE, in card-heights — the cumulative
- * run of steps, plus half of the last card (which is scaled, so it is half of a smaller box).
- *
- * The CSS needs this to park the fan against the bottom of the column, and it must not be a
- * second copy of the number: it falls out of STEP_DOWN, STEP_DECAY, DECK_BELOW and STEP_SCALE,
- * so change any of those and the anchor follows on its own. Handed over as a custom property on
- * the deck. */
-const BELOW_EXTENT =
-  (stack(STEP_DOWN, DECK_BELOW, STEP_DECAY) + 50 * Math.max(MIN_SCALE, 1 - DECK_BELOW * STEP_SCALE)) / 100;
-
-interface Placement { transform: string; opacity: number; zIndex: number }
-
-/** Where a card sits, given how far it is from the one in focus. `lifted` = the remote is in the
- *  deck, so the selected card takes its focus zoom. */
-function place(offset: number, lifted: boolean): Placement {
-  const d = Math.abs(offset);
-  const y = (offset < 0 ? -1 : 1) * stack(offset < 0 ? STEP_UP : STEP_DOWN, d, STEP_DECAY);
-  const x = stack(STEP_X, d, STEP_X_DECAY);
-  const scale = d === 0
-    ? (lifted ? FOCUS_SCALE : 1)
-    : Math.max(MIN_SCALE, 1 - d * STEP_SCALE);
-  const opacity = OPACITY_STEP ** d;
-  return {
-    transform: `translate(${x}%, ${y}%) scale(${scale})`,
-    opacity,
-    zIndex: 100 - d,
-  };
-}
-
-/* THE STILL IS RE-REQUESTED AT w500. The API hands them out at w300 — right for the web
- * chooser's 150px card and half the resolution this one needs, since a deck card is up to 560px
- * wide. `imgW` only rewrites TMDB URLs, so an add-on's own still passes through untouched. */
-const STILL_RENDITION = 'w500';
-
-/** `1h 22m` / `27m`, from seconds. */
-function dur(sec: number) {
-  const m = Math.max(0, Math.round(sec / 60));
-  const h = Math.floor(m / 60);
-  return h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
-}
-
-/* `Episode.runtime` is typed `number` and the live API sends `"60m"` — a pre-formatted string.
- * Both spellings are in the wild (add-on catalogues supply minutes), so take either rather than
- * printing `NaNm` on whichever one this build did not expect. */
-function runtimeText(runtime: unknown): string {
-  if (typeof runtime === 'number' && runtime > 0) return dur(runtime * 60);
-  if (typeof runtime === 'string' && runtime.trim()) {
-    const mins = Number(runtime);
-    return Number.isFinite(mins) && mins > 0 ? dur(mins * 60) : runtime.trim();
-  }
-  return '';
-}
-
-export function seasonsOf(meta: MetaDetail): SeasonInfo[] {
-  if (meta.seasonList?.length) return meta.seasonList;
-  if (meta.seasons) return Array.from({ length: Number(meta.seasons) }, (_, i) => ({ season: i + 1, episodes: 0 }));
-  return [];
-}
+/* The fan reaches this far below the focused card's centre, in card-heights — handed to the CSS
+ * as `--ep-below` so it can pin the fan to the bottom of the column. See belowExtent. */
+const BELOW_EXTENT = belowExtent(DECK_BELOW);
 
 /** Whether TvDetail should give the panel over to the deck (and drop its own chrome for it).
  *
