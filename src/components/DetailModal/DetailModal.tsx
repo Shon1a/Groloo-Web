@@ -6,12 +6,13 @@ import { useLibrary } from '../../stores/library';
 import { useAuth } from '../../stores/auth';
 import { useHistory } from '../../stores/history';
 import { useReport } from '../../stores/report';
-import { useMeta, useAddonMeta, apiIdOf } from '../../lib/queries';
+import { useMeta, useAddonMeta, useImdbTrailer, apiIdOf } from '../../lib/queries';
 import { useT, useGenre } from '../../i18n/i18n';
 import { hueBg } from '../../lib/img';
 import { epLabel } from '../../lib/utils';
 import type { MetaDetail, MediaItem, CastMember } from '../../lib/types';
 import { useTrailer } from './useTrailer';
+import { useVideoTrailer, INTRO_SKIP } from './useVideoTrailer';
 import EpisodeChooser from './EpisodeChooser';
 import StreamLangSelect from './StreamLangSelect';
 import SourceSelect from './SourceSelect';
@@ -286,6 +287,9 @@ export default function DetailModal() {
    * it, and making it state would re-render the whole title screen on every play. */
   const lastPick = useRef<(StreamPick & { id: string; lang: string }) | null>(null);
   const [bdLoaded, setBdLoaded] = useState(false);
+  /* Set when IMDb's own trailer cannot be played for THIS title — an expired signature, a
+   * decode error, a refused autoplay. Drops the hero to the YouTube embed; cleared per title. */
+  const [videoTrailerFailed, setVideoTrailerFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [pickedEp, setPickedEp] = useState<{ season: number; ep: number } | null>(null);
   const [streams, setStreams] = useState<AddonStream[]>([]);
@@ -344,11 +348,59 @@ export default function DetailModal() {
       imdb: addonMeta.imdb ?? apiMeta.imdb,
     } as typeof addonMeta;
   }, [apiMeta, addonMeta]);
-  // While the player is open on top, drop the trailer key so useTrailer tears the
-  // autoplaying YouTube iframe down (it kept streaming a whole second video behind the
-  // player). The modal's `target` stays set, so closing the player restores it — and
-  // the trailer remounts — exactly where the user left off.
-  const { muted, toggleMute } = useTrailer(slotRef, heroRef, playerOpen ? undefined : (meta?.trailerKey || undefined), meta?.title || target?.title || '');
+  /* ---- THE HERO TRAILER: IMDb's FILE FIRST, THE YOUTUBE EMBED AS FALLBACK -------------
+   *
+   * This was the embed and only the embed. IMDb serves its trailers as ordinary progressive
+   * MP4s — our backend resolves them at /api/imdb-trailer/:imdb — and a <video> we own beats a
+   * cross-origin player on every axis that matters here: no chrome to crop (the embed is
+   * scaled 1.35x purely to push YouTube's title bar outside the slot, which throws away a
+   * third of the picture), no branding, no ads, no region gate, no postMessage handshake, and
+   * a reveal that is simply "the picture moved" instead of a wait tuned to outlast YouTube's
+   * centre pause glyph. The TV has played these for a while; the web was still on the embed.
+   *
+   * IT ALSO FIXES A PHONE-SHAPED HOLE. useTrailer skips the embed entirely on low-power
+   * devices — <=4 cores, <=4 GB, or Save-Data — because an autoplaying YouTube player is the
+   * heaviest thing on the screen. That gate trips on a great many phones, so a phone often got
+   * no trailer at all. It is the right gate for what it guards and the wrong one for a muted
+   * MP4 at the rendition this box actually paints, which is a fraction of the cost; the video
+   * engine has no such gate, so the common phone now gets the trailer the desktop gets.
+   *
+   * WHILE THE PLAYER IS OPEN ON TOP both engines are handed `undefined`, which tears the
+   * trailer down — it used to keep streaming a whole second video behind the player. The
+   * modal's `target` stays set, so closing the player restores it exactly where it was. */
+  const trailerTitle = meta?.title || target?.title || '';
+  const trailerImdb = playerOpen ? undefined : (meta?.imdb || target?.imdb || undefined);
+  const imdbTrailer = useImdbTrailer(videoTrailerFailed ? undefined : trailerImdb);
+  const videoUrl = videoTrailerFailed ? undefined : (imdbTrailer.data?.url || undefined);
+  /* THE EMBED WAITS FOR THE IMDb ANSWER, and this is the whole of the "first / fallback".
+   * Without it the two engines race on one slot: the embed is the cheaper question to answer
+   * (the key is already in `meta`), so it would mount, start streaming, and then be replaced
+   * the moment the MP4 link landed — two videos fetched to show one. A miss answers
+   * `{ url: null }` rather than failing, so `isSuccess` with no url is a real "there isn't
+   * one" and not a pending state. */
+  const imdbSettled = !trailerImdb || videoTrailerFailed || imdbTrailer.isError
+    || (imdbTrailer.isSuccess && !videoUrl);
+  const ytKey = !playerOpen && !videoUrl && imdbSettled ? (meta?.trailerKey || undefined) : undefined;
+
+  const videoTrailer = useVideoTrailer(slotRef, heroRef, videoUrl, trailerTitle, {
+    /* Past the distributor logos and the certification card, which is what essentially every
+     * trailer opens on. Cheap here for the reason spelled out at INTRO_SKIP: seven seconds is
+     * a few hundred KB into a download that is already running, so the seek lands in bytes the
+     * browser has rather than provoking a fresh range request. */
+    startAt: INTRO_SKIP,
+    /* Let the engine measure the hero and take the rendition that fits it. This is what makes
+     * the same code right on both layouts: a desktop hero pulls 1080p, a phone's 16:9 band
+     * pulls 480p, and neither is a decision this file has to make. No `maxRenditionPx` — unlike
+     * the TV shelf, here the video IS the content and there is nothing to cap it for. */
+    renditions: imdbTrailer.data?.urls,
+    /* A dead link costs a beat, not the trailer: an expired signature, a decode error or a
+     * refused autoplay drops to the embed for this title. Cleared with the title below, so the
+     * next visit asks again rather than inheriting a verdict about one stale URL. */
+    onFail: () => setVideoTrailerFailed(true),
+  });
+  const ytTrailer = useTrailer(slotRef, heroRef, ytKey, trailerTitle);
+  // the mute button drives whichever engine is actually playing
+  const { muted, toggleMute } = videoUrl ? videoTrailer : ytTrailer;
 
   /* Reset backdrop fade + scroll on each new title; seed the picked episode from a
    * Continue-Watching resume so OPEN builds the exact-episode key (id:S#E#).
@@ -365,6 +417,7 @@ export default function DetailModal() {
   useEffect(() => {
     setBdLoaded(false);
     setCopied(false);
+    setVideoTrailerFailed(false);
     setPickedEp(!IS_TV && target?.resumeEp ? { season: target.resumeEp.season, ep: target.resumeEp.episode } : null);
     setSrcTab('services');
     scrollRef.current?.scrollTo({ top: 0 });
