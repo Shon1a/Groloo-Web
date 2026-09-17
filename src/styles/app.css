@@ -1265,11 +1265,11 @@
   .sw input:checked+.sw-track::after{transform:translateX(20px)}
   .sw input:focus-visible+.sw-track{box-shadow:0 0 0 3px rgba(46,204,113,.35)}
   /* Interface › "Blur unwatched episodes image" — stills of episodes you haven't
-     started are blurred until hovered (both the modal deck and the in-player panel). */
+     started are blurred until hovered (the modal deck and the in-player shelf). */
   .blur-unwatched .ep-deck .ep-card:not(.watched):not(.picked) .ep-art img,
-  .blur-unwatched .vp-eppanel-list .ep-row:not(.watched):not(.on) .ep-still img{filter:blur(11px) brightness(.7);transition:filter .22s}
+  .blur-unwatched .vp-eprail .vp-epcard:not(.now) .vp-epcard-art img{filter:blur(11px) brightness(.7);transition:filter .22s}
   .blur-unwatched .ep-deck .ep-card:hover .ep-art img,
-  .blur-unwatched .vp-eppanel-list .ep-row:hover .ep-still img{filter:none}
+  .blur-unwatched .vp-eprail .vp-epcard:hover .vp-epcard-art img{filter:none}
 
   /* ── settings polish: sub-sections, live preview, inline control groups,
         signal-dropdown, info note, clock ring ── */
@@ -1414,8 +1414,8 @@
   .overlay.open{display:flex}
   /* ============================================================ *
    *  DETAIL MODAL — cinematic redesign (all .m- prefixed, real tokens).
-   *  The episode deck (.ep-deck / .ep-card) has its own names so the shared
-   *  in-player .vp-eppanel-list .ep-row stays a compact list, not a fan of cards.
+   *  The episode deck (.ep-deck / .ep-card) has its own names; the in-player episode
+   *  shelf (.vp-eprail / .vp-epcard) is a different object and keeps its own too.
    * ============================================================ */
   /* shell: widen the box; hero + body scroll as one inner pane */
   /* Fixed height (not just max-height): the overlay centres the modal, so while
@@ -1998,11 +1998,20 @@
   @keyframes spin{to{transform:rotate(360deg)}}
 
   /* ---------- premium video player ---------- */
+  /* ONE LAYOUT, TWO STYLESHEETS. The player renders the same chrome on the website and on the
+     television (see VideoPlayer.tsx's header): title beside the episode, audio and ⋯ in the
+     top-right corner, a settings sheet on the right edge, one line of disc · elapsed · bar ·
+     duration at the bottom, and a shelf of episode stills under it. The base rules here are
+     what both builds start from; everything scoped to `.vp-overlay.web` is the website's own
+     sizing and its pointer states, and is the counterpart of tv.css's `.vp-overlay.tv` block,
+     which is written for a remote and a 3m viewing distance. The two are kept apart on purpose:
+     the TV loads THIS file too, and a value changed on a bare `.vp-*` selector lands on the set
+     as well unless tv.css happens to restate it. Nothing below `.vp-overlay.web` can. */
   .vp-overlay{position:fixed;inset:0;background:#000;z-index:3000;opacity:0;pointer-events:none;
     overflow:hidden;transition:opacity .35s ease;font-family:var(--font)}
-    /* overflow:hidden clips the episode panel parked off-screen at translateX(100%);
-       without it that fixed-overlay child extends the page's horizontal scroll width
-       (body{overflow-x:hidden} can't clip a position:fixed descendant) */
+    /* overflow:hidden clips the episode shelf parked off-screen at translateY(100%); without it
+       that fixed-overlay child extends the page's scroll height (body{overflow-x:hidden} can't
+       clip a position:fixed descendant) */
   .vp-overlay.open{opacity:1;pointer-events:all}
   .vp-overlay video{position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain}
   /* picture-enhance: an animated film-grain layer over the video image. Doesn't add real detail
@@ -2017,8 +2026,9 @@
   .vp-overlay.enhance-on .vp-grain{display:block}
   @keyframes vpGrain{0%{background-position:0 0}20%{background-position:-30px 10px}40%{background-position:20px -25px}60%{background-position:-15px 30px}80%{background-position:25px 15px}100%{background-position:0 0}}
   @media (prefers-reduced-motion:reduce){.vp-grain{animation:none}}
-  /* enhance intensity slider (lives in the gear menu's Enhance section) */
-  .vp-enh-slider{display:flex;align-items:center;gap:10px;padding:4px 12px 10px}
+  /* enhance intensity sliders (the web's Enhance picture section; the TV uses preset rows) */
+  .vp-enh-row{padding:6px 16px 0;font-size:13px;color:rgba(255,255,255,.6)}
+  .vp-enh-slider{display:flex;align-items:center;gap:10px;padding:4px 16px 10px}
   .vp-enh-slider.off{opacity:.4}
   .vp-enh-slider input[type=range]{flex:1;accent-color:var(--accent);height:4px;cursor:pointer}
   .vp-enh-val{font-size:12px;color:rgba(255,255,255,.6);min-width:36px;text-align:right;font-variant-numeric:tabular-nums}
@@ -2027,8 +2037,7 @@
      on the shared parent creates a stacking context the contextual Skip / Next button
      (a sibling of the bars) can't escape, so it would vanish with the controls. Fading
      the bars individually keeps that floating Skip/Next prompt up and clickable. */
-  .vp-overlay.hide-ui .vp-top,.vp-overlay.hide-ui .vp-bottom,
-  .vp-overlay.hide-ui .vp-center{opacity:0;pointer-events:none}
+  .vp-overlay.hide-ui .vp-top,.vp-overlay.hide-ui .vp-bottom{opacity:0;pointer-events:none}
 
   /* loading / status overlay */
   /* Silent-playback toast. Sits above the chrome, clear of the control bar, and does not
@@ -2075,66 +2084,41 @@
   /* only capture pointer events while the player is actually open — otherwise the
      invisible (opacity:0) control bars would intercept clicks on the real topbar.
      NOTE: .vp-menu is deliberately NOT listed here — it would force pointer-events:auto on
-     the CLOSED (opacity:0) dropdown, whose 264px box floats over the progress bar and would
-     eat scrub clicks. Its own .vp-menu / .vp-menu.open rules gate pointer-events correctly. */
-  .vp-overlay.open .vp-top,.vp-overlay.open .vp-bottom,
-  .vp-overlay.open .vp-center,
-  .vp-overlay.open .vp-skip,.vp-overlay.open .vp-eppanel{pointer-events:auto}
+     the CLOSED (opacity:0) popup. Its own .vp-menu / .vp-menu.open rules gate pointer-events. */
+  .vp-overlay.open .vp-top,.vp-overlay.open .vp-bottom,.vp-overlay.open .vp-skip{pointer-events:auto}
   .vp-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 26px;
     background:linear-gradient(180deg,rgba(0,0,0,.7),transparent);transition:opacity .25s ease}
   .vp-title{font-family:var(--font);font-size:16px;font-weight:700;color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.6);line-height:1.3}
   .vp-top-right{display:flex;align-items:center;gap:14px;flex-shrink:0}
   .vp-status{font-family:var(--font-mono);font-size:15px;color:var(--accent);display:flex;align-items:center;gap:6px;white-space:nowrap}
 
-  /* center play / buffering */
-  .vp-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:76px;height:76px;border-radius:50%;
-    border:none;background:rgba(11,11,11,.55);backdrop-filter:blur(6px);color:#fff;font-size:30px;cursor:pointer;
-    display:grid;place-items:center;transition:transform .2s,background .2s,opacity .2s;z-index:1;
-    box-shadow:0 8px 40px rgba(0,0,0,.5)}
-  .vp-center:hover{transform:translate(-50%,-50%) scale(1.08);background:rgba(255,255,255,.92);color:var(--ink)}
-  .vp-center.hidden{opacity:0;pointer-events:none;transform:translate(-50%,-50%) scale(.7)}
-  /* buffering: swap the play icon for the off-track worm (same loader as the prepare overlay).
-     grid place-items:center handles centering, so the worm's bump transform stays free. */
-  .vp-center .vp-pl{width:58px;height:58px;display:none;filter:drop-shadow(0 2px 7px rgba(0,0,0,.55))}
-  .vp-center.buffering .vp-pl{display:block}
-  .vp-center.buffering .ic{display:none}
-  /* while buffering it's a loader, not a button — drop the disc so only the worm shows */
-  .vp-center.buffering,.vp-center.buffering:hover{background:none;backdrop-filter:none;box-shadow:none;
-    transform:translate(-50%,-50%);cursor:default}
-
   /* bottom controls */
   .vp-bottom{padding:10px 24px 18px;background:linear-gradient(0deg,rgba(0,0,0,.82),rgba(0,0,0,.4) 60%,transparent);transition:opacity .25s ease}
-  .vp-progress{position:relative;padding:10px 0;cursor:pointer}
+  .vp-progress{position:relative;padding:10px 0;cursor:pointer;touch-action:none}
   .vp-bar{position:relative;height:4px;border-radius:3px;background:rgba(255,255,255,.18);transition:height .15s}
-  .vp-progress:hover .vp-bar{height:6px}
   .vp-buffered{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:rgba(255,255,255,.28);width:0}
   .vp-played{position:absolute;left:0;top:0;bottom:0;border-radius:3px;
     background:linear-gradient(90deg,var(--accent),var(--accent-h));width:0}
   .vp-thumb{position:absolute;top:50%;transform:translate(-50%,-50%) scale(0);left:0;width:14px;height:14px;border-radius:50%;
     background:#fff;box-shadow:0 0 10px rgba(255,255,255,.7);transition:transform .15s}
-  .vp-progress:hover .vp-thumb{transform:translate(-50%,-50%) scale(1)}
 
-  .vp-controls{display:flex;align-items:center;gap:8px;margin-top:4px}
+  .vp-controls{display:flex;align-items:center;gap:8px}
   .vp-icon{background:none;border:none;color:#e8e8e8;font-size:17px;cursor:pointer;padding:7px;border-radius:6px;
     line-height:1;transition:.15s;display:flex;align-items:center;justify-content:center;min-width:34px;height:34px}
   .vp-icon:hover{background:rgba(255,255,255,.12);color:#fff}
-  .vp-icon.active{color:var(--accent)}
-  .vp-icon.cc{font-size:16px;font-weight:600;letter-spacing:.04em;border:1.5px solid currentColor;min-width:auto;padding:3px 6px;height:26px}
-  .vp-spacer{flex:1}
-  .vp-time{font-family:var(--font-mono);font-size:16px;color:#cfcfcf;padding:0 8px;white-space:nowrap}
-  .vp-time #vpDur{color:var(--text-muted)}
+  .vp-icon.active,.vp-icon.on{color:#fff;background:rgba(255,255,255,.14)}
   .vp-vol{display:flex;align-items:center;gap:2px}
   .vp-vol-slider{width:0;opacity:0;transition:width .2s,opacity .2s;appearance:none;height:4px;border-radius:3px;
     background:rgba(255,255,255,.25);outline:none;cursor:pointer}
   .vp-vol:hover .vp-vol-slider{width:74px;opacity:1;margin-left:4px}
   .vp-vol-slider::-webkit-slider-thumb{appearance:none;width:12px;height:12px;border-radius:50%;background:#fff;cursor:pointer}
 
-  /* settings menu */
+  /* menus */
   .vp-menu-wrap{position:relative}
-  /* Audio-track popup. Reuses .vp-menu geometry; only the width and the two rows the gear
-     menu has no equivalent for are new. .vp-icon-muted marks the button as present-but-
-     inert: the release has several audio languages and this browser can select none of
-     them, which is a different state from having no button at all. */
+  /* Audio-track popup. Reuses .vp-menu geometry; only the width and the two rows the settings
+     sheet has no equivalent for are new. .vp-icon-muted marks the button as present-but-inert:
+     the release has several audio languages and this browser can select none of them, which is
+     a different state from having no button at all. */
   .vp-audio-menu{width:300px;padding:10px}
   .vp-menu-title{font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
     color:var(--text-muted);padding:2px 8px 8px}
@@ -2153,21 +2137,6 @@
   .vp-menu::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
   .vp-menu::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.24);background-clip:padding-box}
   .vp-menu{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}
-  /* accordion sections — each collapses behind a gear-icon header */
-  .vp-acc + .vp-acc{border-top:1px solid rgba(255,255,255,.06)}
-  .vp-acc-head{position:sticky;top:-6px;z-index:2;display:flex;align-items:center;gap:10px;width:100%;
-    padding:11px 10px;background:rgba(1, 1, 1, 0.99);border:none;cursor:pointer;color:#dadada;
-    font-family:var(--font);font-size:14px;text-align:left;border-radius:8px;transition:background .12s,color .12s}
-  .vp-acc-head:hover{background:rgba(255,255,255,.06);color:#fff}
-  .vp-acc-ic{width:15px;height:15px;flex-shrink:0;color:var(--text-muted);transition:transform .25s cubic-bezier(.2,.8,.2,1),color .15s}
-  .vp-acc.open > .vp-acc-head .vp-acc-ic{color:var(--accent);transform:rotate(90deg)}
-  .vp-acc.open > .vp-acc-head{color:#fff}
-  .vp-acc-label{font-weight:600;letter-spacing:.01em}
-  .vp-acc-val{margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--text-muted);
-    max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .vp-acc.open > .vp-acc-head .vp-acc-val{color:var(--accent)}
-  .vp-acc-body{display:none;padding:2px 0 8px}
-  .vp-acc.open > .vp-acc-body{display:block}
   .vp-opt{display:flex;align-items:center;gap:9px;padding:7px 10px 7px 16px;border-radius:8px;font-size:14px;line-height:1.2;
     color:#cfcfcf;cursor:pointer;transition:background .12s,color .12s}
   .vp-opt:hover{background:rgba(255,255,255,.07);color:#fff}
@@ -2213,18 +2182,16 @@
   .vp-vhud .bar{position:relative;width:120px;height:5px;border-radius:3px;background:rgba(255,255,255,.22);overflow:hidden}
   .vp-vhud .bar i{position:absolute;left:0;top:0;bottom:0;width:50%;border-radius:3px;
     background:linear-gradient(90deg,var(--accent),var(--accent-h))}
+  /* The iOS caption: the meter and the icon stay on their row, the note takes a second line
+     under them. `has-note` turns the HUD into a two-row grid; without it nothing changes. */
+  .vp-vhud.has-note{display:grid;grid-template-columns:auto auto;row-gap:8px;justify-items:center}
+  .vp-vhud .note{grid-column:1/-1;font-size:12px;color:rgba(255,255,255,.7);white-space:nowrap}
 
-  /* Episode label under the player title (series). It carried `display:none` and nothing ever
-     turned it back on: the pre-React player set this element's textContent from script and
-     toggled the display in the same breath, and the port kept the stylesheet's half of that
-     bargain without the script's. So `S1 · E4` was computed, passed through the store and
-     rendered into the DOM on every episode ever played, and never drawn. The element is now
-     conditional at the markup instead — no node at all for a film, which is what the
-     `display:none` was really protecting against (an empty line still owning its margin). */
-  /* Baseline alignment, not centre: the two carry different families (display and mono) at the
-     same size, and centring them would sit the digits fractionally high against the title's
-     x-height. `min-width:0` on the title so a long name truncates instead of shoving the episode
-     out of the row — the episode is the shorter and the more specific of the two. */
+  /* Episode label beside the player title (series). Baseline alignment, not centre: the two carry
+     different families (display and mono) at the same size, and centring them would sit the
+     digits fractionally high against the title's x-height. `min-width:0` on the title so a long
+     name truncates instead of shoving the episode out of the row — the episode is the shorter
+     and the more specific of the two. */
   .vp-titlerow{display:flex;align-items:baseline;gap:10px;min-width:0}
   .vp-titlerow .vp-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .vp-subtitle{font-family:var(--font-mono);font-size:16px;font-weight:700;letter-spacing:.04em;color:#a9a9a9;
@@ -2232,7 +2199,7 @@
 
   /* skip intro / next episode — floating contextual button.
      Sits bottom-right, clearing the control bar via --vp-skip-bottom so the same rule
-     re-targets on every breakpoint (the bar grows taller as controls wrap on phones). */
+     re-targets on every breakpoint. */
   .vp-skip{--vp-skip-bottom:112px;
     position:absolute;right:32px;bottom:var(--vp-skip-bottom);z-index:5;display:none;
     white-space:nowrap;align-items:center;justify-content:center;
@@ -2244,50 +2211,292 @@
   .vp-skip.show{display:flex;opacity:1;transform:none}
   .vp-skip:hover{background:var(--accent);color:var(--ink);border-color:var(--accent);transform:translateY(-1px)}
 
-  /* in-player episodes panel — slides in from the right */
-  .vp-eppanel{position:absolute;top:0;right:0;bottom:0;width:min(384px,86vw);z-index:8;
-    background:linear-gradient(180deg,rgba(7,7,7,.985),rgba(0,0,0,.99));backdrop-filter:blur(20px);
-    border-left:1px solid var(--border);box-shadow:-28px 0 80px rgba(0,0,0,.7);
-    transform:translateX(100%);transition:transform .32s cubic-bezier(.2,.8,.2,1);
-    display:flex;flex-direction:column;padding:20px 16px 16px}
-  .vp-eppanel.open{transform:none}
-  .vp-eppanel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;padding:0 4px}
-  .vp-eppanel-head .ttl{font-size:15px;color:#fff;font-weight:500;line-height:1.3;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .vp-eppanel-head .lbl{font-family:var(--font-mono);font-size:12px;letter-spacing:.2em;color:var(--text-muted)}
-  .vp-eppanel-seasons{display:flex;gap:8px;flex-wrap:wrap;margin:14px 4px;max-height:96px;overflow-y:auto}
-  .vp-season-tab{font-family:var(--font-mono);font-size:13px;letter-spacing:.04em;padding:5px 13px;border-radius:20px;
-    cursor:pointer;border:1px solid var(--border);background:none;color:var(--text-muted);transition:.15s;white-space:nowrap}
-  .vp-season-tab:hover{border-color:var(--accent);color:var(--accent)}
-  .vp-season-tab.on{background:var(--accent);color:var(--ink);border-color:var(--accent)}
-  .vp-eppanel-list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:2px 4px}
-  /* in-player rows become 16:9 thumbnail + title cards. Scoped to .vp-eppanel-list so the
-     modal episode deck and the base .ep-row list elsewhere are left untouched. */
-  /* flex:0 0 auto — the list is a column flexbox; without it 20+ rows get crushed to fit the
-     panel height, squashing the thumbnails and clipping the titles. Let the list scroll instead. */
-  .vp-eppanel-list .ep-row{position:relative;flex:0 0 auto;align-items:stretch;gap:0;padding:0;overflow:hidden;border-radius:8px;background:var(--bg-3)}
-  .vp-eppanel-list .ep-row:hover{background:rgba(var(--accent-rgb),.07)}
-  .vp-eppanel-list .ep-row.on{background:rgba(var(--accent-rgb),.12)}
-  .vp-eppanel-list .ep-still{position:relative;flex:0 0 118px;aspect-ratio:16/9;overflow:hidden;background:var(--bg-3)}
-  .vp-eppanel-list .ep-still img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
-    transition:transform .3s cubic-bezier(.2,.7,.2,1)}
-  .vp-eppanel-list .ep-row:hover .ep-still img{transform:scale(1.06)}
-  .vp-eppanel-list .ep-row.on .ep-still img{filter:brightness(1.07)}
-  .vp-eppanel-list .ep-still.no-still{display:grid;place-items:center;background:linear-gradient(150deg,#140202,#000000)}
-  .vp-eppanel-list .ep-still.no-still::after{content:attr(data-n);font-family:var(--font-mono);font-size:18px;color:rgba(var(--accent-rgb),.4)}
-  .vp-eppanel-list .ep-num{position:absolute;top:5px;left:5px;z-index:2;flex:none;min-width:0;
-    font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:#fff;
-    background:rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.14);padding:1px 6px;border-radius:4px;backdrop-filter:blur(4px)}
-  .vp-eppanel-list .ep-row.on .ep-num{color:var(--ink);background:var(--accent);border-color:var(--accent)}
-  .vp-eppanel-list .ep-body{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:7px 11px}
-  .vp-eppanel-list .ep-name{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;
-    -webkit-box-orient:vertical;overflow:hidden;font-size:14px;line-height:1.3}
-  .vp-eppanel-list .ep-row.on .ep-name{color:var(--highlight)}
+  /* ==========================================================================
+     THE WEB PLAYER'S OWN LOOK — the TV's control bar at 60cm. Every value here has a
+     counterpart under `.vp-overlay.tv` in tv.css; where the two differ it is size (the
+     television is clamp()ed on viewport height for a sofa, this is fixed px for a desk) or
+     input (hover where the TV has focus, a click target where the TV has a badge).
+     ========================================================================== */
+  .vp-overlay.web .vp-top{padding:20px 28px}
+  .vp-overlay.web .vp-title,.vp-overlay.web .vp-subtitle{font-size:18px}
+  .vp-overlay.web .vp-top-right{gap:6px}
+
+  /* ---- ONE LINE: disc · elapsed · bar · duration · tail. `align-items:center` is what makes
+     the disc, both clocks and the bar sit on one axis; `.vp-progress` takes the slack. The scrim
+     moves to a pseudo-element that bleeds past the bar's bottom edge, so that when the episode
+     shelf lifts the bar there is no hard edge to reveal underneath it — the same fade-out-at-both-
+     ends the TV uses, for the same reason (the seam is a function of position, not of state). */
+  .vp-overlay.web{--vp-bar-bleed:90px;--vp-rail-h:clamp(190px,30vh,300px);--vp-rail-ease:.42s cubic-bezier(.32,.72,0,1)}
+  .vp-overlay.web .vp-bottom{display:flex;align-items:center;gap:clamp(10px,1.2vw,20px);padding:10px 28px 20px;
+    background:none;position:relative;isolation:isolate;
+    transition:opacity .25s ease,transform var(--vp-rail-ease)}
+  .vp-overlay.web .vp-bottom::before{content:'';position:absolute;left:0;right:0;top:0;bottom:calc(-1 * var(--vp-bar-bleed));z-index:-1;
+    background:linear-gradient(180deg,transparent 0%,rgba(0,0,0,.5) 32%,rgba(0,0,0,.8) 60%,rgba(0,0,0,.46) 82%,transparent 100%);
+    pointer-events:none}
+  .vp-overlay.web.tv-rail .vp-bottom{transform:translateY(calc(-1 * var(--vp-rail-h)))}
+
+  /* ---- THE PLAY DISC: a filled white circle with a dark glyph, the one solid shape in the row.
+     A real <button> here (the TV's is a badge — see the markup), so it resets the button chrome
+     and takes a hover. Two shadows doing two jobs: the wide soft one lifts the disc off the
+     picture, the tight one gives the white circle an EDGE on a bright frame. */
+  .vp-overlay.web .vp-play-disc{flex:none;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;
+    border-radius:50%;background:#fff;color:#0b0b0b;cursor:pointer;
+    box-shadow:0 2px 14px rgba(0,0,0,.45),0 4px 8px rgba(0,0,0,.28);
+    transform:scale(1);transition:transform .16s cubic-bezier(.2,.7,.2,1)}
+  .vp-overlay.web .vp-play-disc:hover{transform:scale(1.06)}
+  .vp-overlay.web .vp-play-disc:active{transform:scale(.96)}
+  .vp-overlay.web .vp-play-disc:focus-visible{outline:2px solid #fff;outline-offset:3px;border-radius:50%}
+  /* 68% of the disc: the mark fills it rather than floating in a white field. The glyph casts
+     its own shadow (drop-shadow, not box-shadow — these are SVG paths, and a box-shadow would
+     put a soft square behind a triangle). */
+  .vp-overlay.web .vp-play-disc svg{width:100%;height:100%;
+    filter:drop-shadow(1px 1.5px 0 rgba(0,0,0,.2)) drop-shadow(2px 3px 1px rgba(0,0,0,.13)) drop-shadow(4px 5px 3px rgba(0,0,0,.08))}
+  /* PLAY BECOMES PAUSE, RATHER THAN BEING REPLACED BY IT. The two glyphs are stacked in one grid
+     cell and cross over: the outgoing one shrinks and turns slightly away as it fades, the
+     incoming one arrives from the mirror of that. Opacity runs 140ms and the transform 240ms so
+     the arriving glyph is fully opaque while it is still settling — it lands. */
+  .vp-overlay.web .vp-play-disc > span{grid-area:1/1;display:flex;width:68%;height:68%;
+    transform:scale(1) rotate(0deg);transition:opacity .14s ease,transform .24s cubic-bezier(.2,.7,.2,1)}
+  .vp-overlay.web .vp-play-disc .ic-pause{opacity:0;transform:scale(.55) rotate(22deg)}
+  .vp-overlay.web .vp-play-disc.playing .ic-play{opacity:0;transform:scale(.55) rotate(-22deg)}
+  .vp-overlay.web .vp-play-disc.playing .ic-pause{opacity:1;transform:scale(1) rotate(0deg)}
+
+  /* ---- The clocks, one at each end of the bar. Width is pinned to the DURATION's length
+     (`minWidth` at the markup, in ch) so the bar's ends do not shuffle as the digits change;
+     `tabular-nums` keeps the text from jittering inside the cell. Each is aligned to the edge it
+     defends — elapsed to the right, duration to the left. */
+  .vp-overlay.web .vp-t{flex:none;font-size:15px;color:rgba(255,255,255,.9);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .vp-overlay.web .vp-t-cur{text-align:right}
+  .vp-overlay.web .vp-t-dur{color:rgba(255,255,255,.62);text-align:left}
+
+  /* ---- The scrubber. Its thumb is ALWAYS drawn (it used to appear on hover, and a playhead
+     you cannot see is a playhead you cannot aim at), and the track lifts from 18% white to a
+     blue that reads as a control rather than as a divider. The played portion is a heat gradient
+     measured against the PLAYED LENGTH, so the indigo end is always under the disc. */
+  .vp-overlay.web .vp-progress{flex:1;min-width:0;padding:12px 0}
+  .vp-overlay.web .vp-bar{height:5px;border-radius:2.5px;background:#2f8dd0bd;
+    transition:background-color .3s cubic-bezier(.22,.61,.36,1),box-shadow .3s cubic-bezier(.22,.61,.36,1)}
+  .vp-overlay.web .vp-played{background:linear-gradient(90deg,#64f8ff 0%,#1fa5f0 42%,#060eff 72%,#280880 100%);overflow:hidden}
+  .vp-overlay.web .vp-thumb{width:15px;height:15px;transform:translate(-50%,-50%) scale(1);background:#1d0aaa;box-shadow:none;
+    transition:box-shadow .3s cubic-bezier(.22,.61,.36,1)}
+  /* HOVER LIGHTS, IT DOES NOT GROW — the TV's focus treatment, on the pointer. Nothing touches
+     height or layout, so the bar is the same 5px object hovered or not and the playhead does not
+     jump. The playhead's tell is a hairline of white ringing it on a tight contact shadow; the
+     bar's is a 1px inner highlight along its top edge. */
+  .vp-overlay.web .vp-progress:hover .vp-bar{background:#3f9fdecc;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 1px 10px rgba(6,14,255,.3)}
+  .vp-overlay.web .vp-progress:hover .vp-thumb{box-shadow:0 0 0 1.5px rgba(255,255,255,.95),0 2px 6px rgba(0,0,0,.55),0 0 14px rgba(31,165,240,.45)}
+  /* MID-SCRUB it has to be told apart from a hovered disc sitting still: a thicker, fully opaque
+     white ring where hover carries only a hairline. Declared after the hover rule so it wins on
+     document order at equal specificity. */
+  .vp-overlay.web .vp-progress.seeking .vp-thumb{box-shadow:0 0 0 4px rgba(255,255,255,.85),0 0 16px rgba(0,0,0,.6)}
+
+  /* ---- THE SCRUB MOVES, IT DOES NOT TELEPORT. Every keyboard press rewrites `left` and `width`
+     outright; easing them lets the playhead SLIDE between presses, and because each press
+     restarts the transition from wherever the last one had reached, a held key reads as one
+     continuous glide. 190ms is set against a keyboard's autorepeat, the same way the TV's is set
+     against a remote's. Scoped to `.seeking` on purpose: during ordinary playback the same
+     properties are written every frame by the playhead loop in VideoPlayer.tsx, and a transition
+     there would have the disc permanently chasing the video. */
+  .vp-overlay.web .vp-progress.seeking :is(.vp-played,.vp-seek-span,.vp-thumb,.vp-seek-cue){
+    transition:left .19s cubic-bezier(.25,.8,.3,1),width .19s cubic-bezier(.25,.8,.3,1),box-shadow .3s cubic-bezier(.22,.61,.36,1)}
+  /* WHILE THE INPUT IS CONTINUOUS — a held key ramping, a mouse drag, a finger — the easing
+     changes character, and it has to. The curve above is an ease-OUT that decelerates into every
+     new position, right for a tap and wrong for a stream of positions 16ms apart, where each one
+     would be a fresh deceleration that never completes: rubber-banding. Linear, at just over the
+     paint interval, is what makes those samples read as constant velocity. */
+  .vp-overlay.web .vp-progress.ramping :is(.vp-played,.vp-seek-span,.vp-thumb,.vp-seek-cue){
+    transition:left .07s linear,width .07s linear,box-shadow .3s cubic-bezier(.22,.61,.36,1)}
+
+  /* ---- THE SCRUB READOUT: three quiet pieces that all sit OUT OF FLOW, so nothing in the row
+     moves while it is being aimed at.
+       .vp-seek-span    the ground being covered, painted along the bar between where the video
+                        is and where it would land
+       .vp-seek-origin  a hairline at the true playback position, so "back to here" stays legible
+       .vp-seek-cue     the offset itself, floating above the playhead on smoked glass */
+  .vp-overlay.web .vp-seek-span{position:absolute;top:0;bottom:0;border-radius:2.5px;background:rgba(255,255,255,.3);pointer-events:none}
+  .vp-overlay.web .vp-seek-origin{position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;border-radius:1px;
+    background:rgba(255,255,255,.85);pointer-events:none}
+  .vp-overlay.web .vp-seek-cue{position:absolute;bottom:calc(100% - 2px);transform:translateX(-50%);
+    display:flex;align-items:baseline;padding:7px 13px;border-radius:999px;background:rgba(10,14,22,.62);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 6px 20px rgba(0,0,0,.45);
+    backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+    color:#fff;font-variant-numeric:tabular-nums;font-size:15px;font-weight:500;letter-spacing:.01em;line-height:1;
+    white-space:nowrap;pointer-events:none;animation:web-vp-seek-cue-in .22s cubic-bezier(.22,.61,.36,1) both}
+  @keyframes web-vp-seek-cue-in{from{opacity:0;transform:translateX(-50%) translateY(4px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+
+  /* ---- The tail: volume, PiP, fullscreen, after the duration. */
+  .vp-overlay.web .vp-tail{gap:2px;margin-left:2px}
+  .vp-overlay.web .vp-controls{gap:4px}
+
+  /* ---- THE AUDIO PICKER hangs off a button in the TOP-right corner now, so it opens DOWNWARDS.
+     The base `.vp-menu` anchors to `bottom:100%` — right when this button was at the end of the
+     control row and wrong from up here, where it would open off the top of the screen. */
+  .vp-overlay.web .vp-top .vp-audio-menu{top:calc(100% + 12px);bottom:auto;max-height:76vh;transform-origin:top right;
+    transform:translateY(-8px) scale(.98);width:min(300px,calc(100vw - 24px))}
+  .vp-overlay.web .vp-top .vp-audio-menu.open{transform:none}
+
+  /* ---- THE SETTINGS MENU IS A SHEET ON THE RIGHT EDGE. It began as a popup hanging off its
+     button, which is the right shape for a mouse — until the list inside it grew: a subtitle
+     add-on answers with dozens of files, and a dropdown's height is governed by how much room
+     happens to be left below a corner button. A sheet owns a fixed column of the screen and the
+     picture keeps the rest; its height stops being a function of where a button sits.
+     IT IS INSET FROM TOP AND BOTTOM rather than full-height, so the right end of the scrubber
+     and the duration stay readable — and reachable — with the menu open. `position:fixed`
+     because the anchor is the screen, not the button. Flat against the edge it is attached to,
+     rounded on the side it opens from; it SLIDES rather than scaling out of a corner, because
+     travel says "off-screen", which is where it lives. */
+  .vp-overlay.web .vp-top .vp-menu:not(.vp-audio-menu){position:fixed;top:72px;bottom:96px;right:0;left:auto;
+    width:min(420px,92vw);max-height:none;padding:14px 12px;
+    border-radius:22px 0 0 22px;border-right:none;background:rgba(8,10,14,.9);
+    backdrop-filter:blur(22px) saturate(130%);-webkit-backdrop-filter:blur(22px) saturate(130%);
+    box-shadow:-30px 0 80px rgba(0,0,0,.55);
+    transform:translateX(100%);transform-origin:center right;visibility:hidden;
+    transition:transform .32s cubic-bezier(.22,.61,.36,1),opacity .16s ease,visibility 0s linear .32s}
+  .vp-overlay.web .vp-top .vp-menu:not(.vp-audio-menu).open{transform:none;visibility:visible;
+    transition:transform .32s cubic-bezier(.22,.61,.36,1),opacity .16s ease,visibility 0s}
+  .vp-overlay.web .vp-setpanel{display:flex;flex-direction:column;gap:12px}
+  .vp-overlay.web .vp-setbody{display:flex;flex-direction:column;gap:2px}
+  .vp-overlay.web .vp-menu .vp-opt{padding:9px 14px 9px 20px}
+
+  /* ---- THE SECTION CHIP: one control that says which section you are on and opens the rest
+     under it. `TvChipMenu` is the title screen's season picker, styled in tv.css for the TV; the
+     website loads no tv.css, so this is its full dress here — the same object, at desk sizes.
+     FULL WIDTH, a deliberate break from the corner chips: it is the panel's only control and the
+     heading for everything below it, and a small pill floating at the top left would read as a
+     stray tag. Stretching it also puts the chevron hard against the right edge, where a viewer
+     looks for "this opens". 14px corners matching the sheet, not the 999px pill, for the same
+     reason. It inverts to white when open — one meaning, one colour, everywhere in the app. */
+  .vp-overlay.web .tv-chipmenu{position:relative;z-index:300;align-self:stretch}
+  .vp-overlay.web .tv-chipmenu-btn{display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;
+    border:1px solid rgba(255,255,255,.14);border-radius:14px;background:rgba(10,10,10,.92);color:#e8e8e8;
+    font:inherit;font-size:15px;font-weight:600;padding:11px 16px;cursor:pointer;white-space:nowrap;
+    transition:background-color .18s ease,color .18s ease}
+  .vp-overlay.web .tv-chipmenu-btn:hover{background:rgba(24,24,24,.95);color:#fff}
+  .vp-overlay.web .tv-chipmenu-btn:focus-visible,
+  .vp-overlay.web .tv-chipmenu.is-open .tv-chipmenu-btn{outline:none;border-radius:14px;background:#fff;border-color:#fff;color:#0b0b0b}
+  /* Two borders of a square, turned 45°: a chevron that is crisp at any size and inherits the
+     chip's ink. It turns to point at what it opened. */
+  .vp-overlay.web .tv-chipmenu-chev{display:inline-block;width:.42em;height:.42em;border-right:2px solid currentColor;
+    border-bottom:2px solid currentColor;transform:translateY(-.16em) rotate(45deg);transition:transform .2s ease}
+  .vp-overlay.web .tv-chipmenu.is-open .tv-chipmenu-chev{transform:translateY(.08em) rotate(225deg)}
+  /* The list drops from the full-width chip and matches it: a menu narrower than the control
+     that opened it reads as a different object. */
+  .vp-overlay.web .tv-chipmenu-list{position:absolute;top:calc(100% + 8px);left:0;right:0;max-height:46vh;overflow-y:auto;
+    overscroll-behavior:contain;display:flex;flex-direction:column;gap:4px;padding:6px;
+    border:1px solid rgba(255,255,255,.14);border-radius:14px;background:rgba(9,9,9,.96);scrollbar-width:none}
+  .vp-overlay.web .tv-chipmenu-list::-webkit-scrollbar{width:0;height:0;display:none}
+  /* THE TRAVELLING HIGHLIGHT: one white bar behind the options, moved to whichever has keyboard
+     focus (TvChipMenu places it). It is the focus indicator, which is why the options draw no
+     ring; a pointer gets a plain hover tint instead, because a mouse does not move focus. */
+  .vp-overlay.web .tv-chipmenu-mark{position:absolute;left:6px;right:6px;top:0;height:0;opacity:0;border-radius:10px;
+    background:#fff;pointer-events:none;z-index:0}
+  .vp-overlay.web .tv-chipmenu-list.is-armed .tv-chipmenu-mark{transition:transform .22s cubic-bezier(.2,.7,.2,1),height .22s cubic-bezier(.2,.7,.2,1)}
+  .vp-overlay.web .tv-chipmenu-opt{position:relative;z-index:1;border:0;border-radius:10px;background:none;color:#d6d6d6;
+    font:inherit;font-size:14px;text-align:left;white-space:nowrap;padding:9px 14px;cursor:pointer;scroll-margin:8px;
+    transition:color .16s ease,background-color .16s ease}
+  .vp-overlay.web .tv-chipmenu-opt:hover{color:#fff;background:rgba(255,255,255,.08)}
+  .vp-overlay.web .tv-chipmenu-opt.on{color:#fff;background:rgba(255,255,255,.17)}
+  /* `:focus`, not `:focus-visible` — the bar is positioned from the option's focus event, which
+     fires however focus arrived, and the ink has to flip against it in the same cases. */
+  .vp-overlay.web .tv-chipmenu-opt:focus{outline:none;border-radius:10px;color:#0b0b0b;background:none}
+
+  /* ---- LANGUAGE GROUPS IN THE SUBTITLE LIST, collapsed until asked for. The heading is a
+     control: it keeps the small uppercase lettering that makes it scannable as an index, and
+     gains a surface, a count and a chevron that make it obviously a door. Sticky, so the
+     language stays named while its own tracks scroll under it; opaque, matched to the sheet. */
+  .vp-overlay.web .vp-subgroup + .vp-subgroup{margin-top:6px}
+  .vp-overlay.web .vp-subgroup-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:10px;width:100%;
+    padding:9px 12px;border:none;border-radius:10px;background:#0a0e14;color:rgba(255,255,255,.62);
+    font:inherit;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;text-align:left;cursor:pointer;
+    transition:color .15s,background-color .15s}
+  .vp-overlay.web .vp-subgroup-head:hover{color:#fff;background:#121821}
+  /* NAME · RULE · COUNT · CHEVRON. The rule takes all the slack, so the count and the chevron sit
+     hard against the right edge whatever the language is called. */
+  .vp-overlay.web .vp-subgroup-name{order:0;flex:0 0 auto}
+  .vp-overlay.web .vp-subgroup-head::after{content:'';order:1;flex:1;height:1px;background:rgba(255,255,255,.12)}
+  .vp-overlay.web .vp-subgroup-n{order:2;flex:0 0 auto;font-size:.95em;letter-spacing:.04em;color:rgba(255,255,255,.4)}
+  .vp-overlay.web .vp-subgroup-chev{order:3;flex:0 0 auto;width:.5em;height:.5em;border-right:2px solid currentColor;
+    border-bottom:2px solid currentColor;transform:translateY(-.15em) rotate(45deg);transition:transform .2s cubic-bezier(.2,.7,.2,1)}
+  .vp-overlay.web .vp-subgroup.open .vp-subgroup-chev{transform:translateY(.1em) rotate(225deg)}
+  .vp-overlay.web .vp-subgroup.open .vp-subgroup-head{color:rgba(255,255,255,.9)}
+
+  /* ==========================================================================
+     THE EPISODE SHELF (web) — a strip of stills under the scrubber, opened by the Episodes
+     button, by ArrowDown, or on a phone by the same button. The TV's rail in tv.css, at desk
+     sizes; the bar rides up out of its way (`.tv-rail` on the overlay, above) on one shared
+     easing, so the two read as one movement.
+     ========================================================================== */
+  .vp-overlay.web .vp-eprail{position:absolute;left:0;right:0;bottom:0;z-index:8;display:flex;flex-direction:column;gap:8px;
+    height:var(--vp-rail-h);padding:10px 28px 20px;
+    transform:translateY(100%);opacity:0;transition:transform var(--vp-rail-ease),opacity .24s ease;pointer-events:none}
+  .vp-overlay.web .vp-eprail.open{transform:none;opacity:1;pointer-events:auto}
+  /* ONE SCRIM FOR BOTH. The bar's half fades out below itself (`--vp-bar-bleed`); this is the
+     shelf's half — a gradient that overhangs the rail upwards by a full rail-height, so the
+     darkening under the cards reaches the lifted bar and arrives there already transparent. */
+  .vp-overlay.web .vp-eprail::before{content:'';position:absolute;left:0;right:0;bottom:0;top:calc(-1 * var(--vp-rail-h));z-index:0;
+    background:linear-gradient(0deg,rgba(0,0,0,.96) 0%,rgba(0,0,0,.9) 28%,rgba(0,0,0,.66) 52%,rgba(0,0,0,.28) 76%,transparent 100%);
+    pointer-events:none}
+  .vp-overlay.web .vp-eprail-head,.vp-overlay.web .vp-eprail-track,.vp-overlay.web .vp-eprail-empty{position:relative;z-index:1}
+  .vp-overlay.web .vp-eprail-head{flex:none;font-size:17px;font-weight:600;color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.6)}
+  .vp-overlay.web .vp-eprail-empty{color:var(--text-muted);font-size:14px}
+  .vp-overlay.web .vp-eprail-viewport{position:relative;flex:1;min-height:0}
+  /* Free scrolling with a soft snap, not the TV's `mandatory`: a wheel and a finger both want to
+     be able to stop between cards, and there is no press landing on exactly one. No scrollbar —
+     the strip is scrolled by wheel, drag and the trailing spacer below. */
+  .vp-overlay.web .vp-eprail-track{height:100%;display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;
+    scroll-behavior:smooth;scroll-snap-type:x proximity;scrollbar-width:none;overscroll-behavior-x:contain}
+  .vp-overlay.web .vp-eprail-track::-webkit-scrollbar{display:none}
+  /* Room for the last card to reach the left edge, so the episode playing can always be scrolled
+     into the first slot on open — the position the shelf opens on most often. */
+  .vp-overlay.web .vp-eprail-track::after{content:'';flex:0 0 40%}
+  /* The TV parks a selection frame over the first slot and scrolls cards into it. A mouse does
+     not walk the strip, so the frame would ring whatever happened to be under it: hidden here,
+     and the NOW PLAYING card carries its own frame instead (below). */
+  .vp-overlay.web .vp-eprail-marker{display:none}
+
+  .vp-overlay.web .vp-epcard{position:relative;flex:0 0 auto;height:100%;aspect-ratio:16/9;padding:0;border:none;border-radius:10px;
+    overflow:hidden;background:var(--bg-3);text-align:left;cursor:pointer;scroll-snap-align:start;scroll-margin:0;
+    transition:transform .2s cubic-bezier(.2,.7,.2,1)}
+  .vp-overlay.web .vp-epcard:hover{transform:translateY(-3px)}
+  .vp-overlay.web .vp-epcard:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(255,255,255,.92),0 0 0 4px rgba(0,0,0,.55)}
+  .vp-overlay.web .vp-epcard.now{box-shadow:inset 0 0 0 3px rgba(255,255,255,.92),0 6px 22px rgba(0,0,0,.45)}
+  /* THE STAGGERED ENTRANCE: the cards nearest the selection rise into place a beat apart. Only
+     transform and opacity, and the translate is VERTICAL ONLY — `scrollCardToSlot` reads the
+     card's left edge at the moment the shelf opens. `backwards` is what makes the delay a delay. */
+  @keyframes web-vp-epcard-in{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+  .vp-overlay.web .vp-eprail.open .vp-epcard.in{animation:web-vp-epcard-in .38s cubic-bezier(.32,.72,0,1) backwards;animation-delay:calc(var(--i,0) * 42ms)}
+  .vp-overlay.web .vp-epcard-art{position:absolute;inset:0}
+  .vp-overlay.web .vp-epcard-art img{width:100%;height:100%;object-fit:cover;transition:filter .18s ease}
+  .vp-overlay.web .vp-epcard:hover .vp-epcard-art img{filter:brightness(1.16)}
+  .vp-overlay.web .vp-epcard-ph{display:grid;place-items:center;width:100%;height:100%;background:linear-gradient(150deg,#140202,#000000)}
+  .vp-overlay.web .vp-epcard-ph::after{content:attr(data-n);font-family:var(--font-mono);font-size:20px;color:rgba(var(--accent-rgb),.4)}
+  .vp-overlay.web .vp-epcard-scrim{position:absolute;inset:0;background:linear-gradient(0deg,rgba(0,0,0,.94) 0%,rgba(0,0,0,.6) 46%,rgba(0,0,0,.04) 100%)}
+  .vp-overlay.web .vp-epcard-badge{position:absolute;top:0;left:0;z-index:2;padding:4px 8px;border-radius:0 0 7px 0;background:#fff;color:#0b0b0b;
+    font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+  .vp-overlay.web .vp-epcard-meta{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;flex-direction:column;gap:1px;padding:10px 11px}
+  .vp-overlay.web .vp-epcard-show{font-size:14px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vp-overlay.web .vp-epcard-num{font-family:var(--font-mono);font-size:11px;color:rgba(255,255,255,.8)}
+  /* Three lines and then an ellipsis. A synopsis is the one thing on the card with no natural
+     length, and letting it run pushes the title off the bottom of a card whose height is fixed. */
+  .vp-overlay.web .vp-epcard-desc{margin-top:3px;font-size:11.5px;line-height:1.35;color:rgba(255,255,255,.62);
+    display:-webkit-box;-webkit-line-clamp:3;line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .vp-overlay.web .vp-epcard:hover .vp-epcard-desc{color:rgba(255,255,255,.84)}
+
+  @media (prefers-reduced-motion:reduce){
+    .vp-overlay.web .vp-seek-cue{animation:none}
+    .vp-overlay.web .vp-progress:is(.seeking,.ramping) :is(.vp-played,.vp-seek-span,.vp-thumb,.vp-seek-cue){transition:none}
+    .vp-overlay.web .vp-play-disc > span{transition:none}
+    .vp-overlay.web .vp-play-disc .ic-pause,.vp-overlay.web .vp-play-disc.playing .ic-play{transform:scale(1) rotate(0deg)}
+    .vp-overlay.web .vp-eprail,.vp-overlay.web .vp-bottom{transition:opacity .2s ease}
+    .vp-overlay.web .vp-eprail-track{scroll-behavior:auto}
+    .vp-overlay.web .vp-eprail.open .vp-epcard.in{animation:none}
+    .vp-overlay.web .vp-top .vp-menu:not(.vp-audio-menu){transform:none;transition:opacity .16s ease,visibility 0s linear .16s}
+    .vp-overlay.web .vp-top .vp-menu:not(.vp-audio-menu).open{transition:opacity .16s ease,visibility 0s}
+  }
   @media(max-width:640px){
-    /* phones: control bar is taller (time gets its own line + the icon row can wrap),
-       so lift the button higher to clear it; tighten the chip itself */
-    .vp-skip{--vp-skip-bottom:132px;right:16px;font-size:13px;padding:9px 15px;max-width:calc(100vw - 32px)}
-    .vp-eppanel{padding:16px 12px 12px}
+    /* phones: the bar is shorter than it was (one line), but the shelf and the disc are not;
+       lift the skip button to clear the line and tighten the chip itself */
+    .vp-skip{--vp-skip-bottom:112px;right:16px;font-size:13px;padding:9px 15px;max-width:calc(100vw - 32px)}
   }
 
   /* ---------- responsive ---------- */
@@ -2586,10 +2795,10 @@
     /* detail-modal hero discs */
     .modal .close.m-disc,.m-mute{width:46px;height:46px}
 
-    /* video player: a visible scrub handle + thumb-sized controls */
-    .vp-progress{padding:14px 0}
-    .vp-bar{height:6px}
-    .vp-thumb{width:18px;height:18px;transform:translate(-50%,-50%) scale(1)}
+    /* video player: a taller scrub hit area + a thumb a finger can find (the handle itself is
+       always drawn now, on every build) */
+    .vp-overlay.web .vp-progress{padding:14px 0}
+    .vp-overlay.web .vp-thumb{width:17px;height:17px}
     .ep-season .m-src-trigger{min-height:44px}
     .lang-opt{min-height:44px;display:flex;align-items:center}
     .lang-select-trigger{min-height:44px}
@@ -2619,10 +2828,10 @@
     .m-hero{max-height:56vh;max-height:56dvh}
 
     /* video-player chrome clears the home indicator + side notches */
-    .vp-bottom{padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}
-    .vp-progress,.vp-controls{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
-    .vp-top{padding:calc(16px + env(safe-area-inset-top,0px)) calc(18px + env(safe-area-inset-right,0px)) 16px calc(18px + env(safe-area-inset-left,0px))}
-    .vp-menu{max-height:60vh;max-height:min(60dvh,calc(100dvh - 150px));width:min(264px,calc(100vw - 24px));margin-right:env(safe-area-inset-right,0px)}
+    .vp-overlay.web .vp-bottom{padding:10px calc(28px + env(safe-area-inset-right,0px)) calc(20px + env(safe-area-inset-bottom,0px)) calc(28px + env(safe-area-inset-left,0px))}
+    .vp-overlay.web .vp-eprail{padding-left:calc(28px + env(safe-area-inset-left,0px));padding-right:calc(28px + env(safe-area-inset-right,0px))}
+    .vp-overlay.web .vp-top{padding:calc(16px + env(safe-area-inset-top,0px)) calc(18px + env(safe-area-inset-right,0px)) 16px calc(18px + env(safe-area-inset-left,0px))}
+    .vp-audio-menu{max-height:60vh;max-height:min(60dvh,calc(100dvh - 150px));margin-right:env(safe-area-inset-right,0px)}
 
     /* auth + sheet overlays scroll and respect insets (keyboard / short / notch) */
     .auth-overlay{align-items:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;
@@ -2634,29 +2843,33 @@
   @media (max-width:640px){
     .hero-logo{height:clamp(46px,12vw,66px);max-width:86%;margin-bottom:12px}
     /* player */
-    .vp-icon.cc{height:40px;min-width:40px;padding:3px 8px}
-    /* Bottom control bar: keep the WHOLE row on-screen on phones. The desktop row packs
-       ~11 controls + a wide "0:00 / 0:00" readout into one non-wrapping line; on a narrow
-       portrait viewport that overflows the right edge and — because .vp-overlay is
-       overflow:hidden — the trailing controls (CC / ⚙ / PiP / ⛶) get clipped off-screen.
-       Fix: give the time its own full-width line above the buttons (also far more legible),
-       let the icon row wrap as a safety net so nothing can ever clip, and drop the two
-       least-essential controls here so the rest (▶ play, ⤺/⤻ seek, ▦ episodes, CC, ⚙, ⛶)
-       sit on ONE clean row at full 40px tap targets:
-         · ◉ volume — phones control volume with hardware buttons; the inline slider was
-           already hover-only (hidden on touch), so only a redundant mute toggle is dropped.
-           This is exactly how many mobile players omit a volume control;
-         · ⧉ PiP — phones expose OS-level Picture-in-Picture gestures instead. */
-    .vp-controls{flex-wrap:wrap;gap:3px;row-gap:6px}
-    .vp-time{order:-1;flex:0 0 100%;text-align:center;font-size:14px;padding:0 0 3px;color:#dadada}
-    /* #vpBack/#vpFwd dropped on phones — double-tap-left/right gestures replace them */
-    .vp-vol,#vpPip,#vpBack,#vpFwd{display:none}
+    /* The scrubber line drops two of its three tail controls on phones so the bar keeps its
+       length: ◉ volume — phones control volume with hardware buttons (and iOS allows nothing
+       else, see VOL_LOCKED); ⧉ PiP — phones expose OS-level Picture-in-Picture instead.
+       Fullscreen stays; it is the one a phone actually wants. */
+    .vp-vol,#vpPip{display:none}
+    .vp-overlay.web .vp-bottom{gap:10px;padding:8px calc(16px + env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) calc(16px + env(safe-area-inset-left,0px))}
+    .vp-overlay.web .vp-t{font-size:13px}
+    .vp-overlay.web .vp-top{padding:calc(14px + env(safe-area-inset-top,0px)) calc(14px + env(safe-area-inset-right,0px)) 14px calc(14px + env(safe-area-inset-left,0px))}
+    .vp-overlay.web .vp-title,.vp-overlay.web .vp-subtitle{font-size:16px}
+    /* The shelf is shorter, and the bar lifts by the same amount (they share --vp-rail-h). */
+    .vp-overlay.web{--vp-rail-h:clamp(150px,34vh,210px);--vp-bar-bleed:60px}
+    .vp-overlay.web .vp-eprail{padding:8px calc(16px + env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) calc(16px + env(safe-area-inset-left,0px));gap:6px}
+    .vp-overlay.web .vp-eprail-head{font-size:15px}
+    /* THE SETTINGS SHEET COMES UP FROM THE BOTTOM ON A PHONE. A right-edge sheet at 92vw is a
+       full-width panel with a sliver of picture beside it; from the bottom edge the same panel
+       is the shape a phone already knows, and its top stays clear of the title. A FIXED height,
+       not a max: the section chip drops its list inside the sheet, and a sheet that shrink-wraps
+       one row of content clips that list the moment it opens. */
+    .vp-overlay.web .vp-top .vp-menu:not(.vp-audio-menu){top:auto;bottom:0;left:0;right:0;width:auto;
+      height:min(72dvh,560px);max-height:none;border-radius:22px 22px 0 0;border-right:1px solid rgba(255,255,255,.1);border-bottom:none;
+      padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));box-shadow:0 -30px 80px rgba(0,0,0,.55);
+      transform:translateY(100%)}
+    .vp-overlay.web .vp-top .vp-menu:not(.vp-audio-menu).open{transform:none}
     /* …but iOS Safari supports per-video PiP (webkitSetPresentationMode); re-show the button
        there. The .vp-has-webkit-pip class is set at runtime only when that API is real. */
     .vp-overlay.vp-has-webkit-pip #vpPip{display:flex}
     .vp-skip{--vp-skip-bottom:calc(132px + env(safe-area-inset-bottom,0px));right:calc(16px + env(safe-area-inset-right,0px))}
-    .vp-eppanel{padding-bottom:calc(12px + env(safe-area-inset-bottom,0px))}
-    .vp-eppanel-list{-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
     /* footer: stack links left, generous tap rows, clear the home bar */
     .site-footer{padding:22px 0 calc(34px + env(safe-area-inset-bottom,0px));gap:16px 18px}
     .site-footer .sf-disclaimer{flex:1 1 100%}
@@ -2940,8 +3153,6 @@
     /* Detail-modal hero: 16:9 capped by max-height:56vh. At both TV sizes the cap is what
        actually renders, so the cap IS the height — no padding hack needed. */
     .m-hero{height:56vh}
-    /* 118px-wide 16:9 still → 66.375px. */
-    .vp-eppanel-list .ep-still{height:66px}
     /* Recommendation card: 16:9, width driven by the rail. Children are absolute.
        Same 1px border, same -2px correction as the poster above. */
     .rec-thumb{height:0;padding-bottom:calc(56.25% - 2px)}

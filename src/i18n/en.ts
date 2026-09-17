@@ -221,9 +221,12 @@ const SEED: Record<string, string> = {
   // a "still asking" state the old eager-fetch one never needed.
   'menu.loading_subs': 'Looking for subtitles…',
   'menu.sub_failed': 'That subtitle couldn’t be loaded — its host blocks direct downloads. Try another.',
-  // The TV player's episode rail (Down from the scrubber).
+  // The player's episode rail (Down from the scrubber; the Episodes button on the web).
   'player.more_episodes': 'More Episodes',
   'player.now_playing': 'Now Playing',
+  // Under the volume HUD on iOS, where a page cannot set the volume at all — the swipe there
+  // only mutes and unmutes, and this says where the level itself went.
+  'player.vol_ios': 'Volume: use the side buttons',
 
   // discover / search / grid
   'search.ph': 'Search titles, people, genres…',
