@@ -85,10 +85,23 @@ const WHEEL_TAIL_MS = 350;
 /* ---- TOUCH ------------------------------------------------------------------------------- */
 /** Movement before a touch is judged vertical or horizontal — the usual slop. */
 const SWIPE_SLOP = 8;
-/** How far ahead the release velocity is projected, in ms of travel, and the most cards it may
- *  add. Short: a deck is walked, not thrown. */
-const FLING_MS = 120;
-const FLING_CAP = 4;
+/* ---- THE GLIDE: what the deck does after the finger leaves ------------------------------
+ * A release used to project the finger's speed a fixed 120ms ahead, round that to a whole card
+ * and hand the rest to one 340ms ease — so every flick travelled about the same distance and
+ * then stopped, and a hard throw and a lazy nudge landed nearly the same place. The deck now
+ * keeps the velocity it was let go at and sheds it continuously, the way a thrown thing slows:
+ * fast swipe, long run; gentle swipe, short one. Distance is roughly velocity x GLIDE_TAU, so
+ * these read as "how far a flick of this speed goes" rather than as tuning constants. */
+/** Speed decays to 1/e of itself every this many ms. */
+const GLIDE_TAU = 320;
+/** Below this speed (cards per ms) the glide is over and the deck settles on the nearest card. */
+const GLIDE_MIN_V = 0.0016;
+/** The fastest flick the deck will honour — TAU x this is about twelve cards, which is a long
+ *  way through a season and still a distance you can aim. */
+const GLIDE_MAX_V = 0.038;
+/** Velocity is measured only over samples inside this window, so a finger that slides, stops,
+ *  and then lifts lets go of a stationary deck instead of the speed it arrived at. */
+const GLIDE_V_WINDOW = 120;
 /** Resistance past either end of the season. */
 const RUBBER = 0.28;
 
@@ -387,17 +400,25 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
   useEffect(() => {
     const el = deckRef.current;
     if (!el) return;
-    type Gesture = { x: number; y: number; mode: 'undecided' | 'deck' | 'page'; stepPx: number; samples: [number, number][] };
+    type Gesture = { x: number; y: number; mode: 'undecided' | 'deck' | 'page'; stepPx: number; samples: [number, number][];
+      /** the fractional offset the deck was already at when this gesture began — non-zero when
+       *  a finger lands on a deck that is still gliding, so the grab carries on from where the
+       *  cards actually are instead of snapping them to a whole card first */
+      base: number };
     let g: Gesture | null = null;
+    /** the in-flight glide, if there is one */
+    let raf = 0;
+    const stopGlide = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
     /* Set when a mouse drag actually moved the deck, so the click the browser fires on release
      * does not ALSO pick or re-aim a card. Cleared by the capture-phase listener that eats it. */
     let swallowClick = false;
 
     const begin = (x: number, y: number): Gesture => {
+      stopGlide();                       // a hand on the deck stops it, wherever it had got to
       // one step ahead is STEP_DOWN% of a card; offsetHeight ignores the card's transform
       const card = el.querySelector<HTMLElement>('.ep-card');
       const stepPx = Math.max(48, ((card?.offsetHeight ?? 200) * STEP_DOWN) / 100);
-      return { x, y, mode: 'undecided', stepPx, samples: [] };
+      return { x, y, mode: 'undecided', stepPx, samples: [], base: dragRef.current ?? 0 };
     };
     /** The first few pixels decide whose gesture this is. `mayPage` = a vertical move the deck
      *  cannot answer (sideways, or past its end) is left to the page — true for a finger, whose
@@ -408,7 +429,8 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
       if (mayPage) {
         if (Math.abs(dx) > Math.abs(dy)) return 'page';
         const ahead = dy < 0;
-        const atEnd = ahead ? activeRef.current >= lastRef.current : activeRef.current <= 0;
+        const at = activeRef.current + (dragRef.current ?? 0);
+        const atEnd = ahead ? at >= lastRef.current : at <= 0;
         if (atEnd) return 'page';
       }
       return 'deck';
@@ -418,7 +440,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
       const now = performance.now();
       g.samples.push([now, y]);
       if (g.samples.length > 6) g.samples.shift();
-      let frac = -(y - g.y) / g.stepPx;
+      let frac = g.base - (y - g.y) / g.stepPx;
       const lo = -activeRef.current;
       const hi = lastRef.current - activeRef.current;
       if (frac < lo) frac = lo + (frac - lo) * RUBBER;
@@ -426,25 +448,56 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
       dragRef.current = frac;
       setDrag(frac);
     };
+    /** Land on a whole card. Dropping `drag` hands the last fraction of a card back to
+     *  `.ep-card`'s transition, so a glide eases into its place instead of cutting to it. */
+    const settle = (frac: number) => {
+      const target = clamp(Math.round(activeRef.current + frac), 0, lastRef.current);
+      walked.current = true;
+      activeRef.current = target;
+      dragRef.current = null;
+      setActive(target);
+      setDrag(null);
+    };
+    /** Carry the deck on at the speed it was released at, shedding that speed every frame. */
+    const glide = (v0: number) => {
+      let v = clamp(v0, -GLIDE_MAX_V, GLIDE_MAX_V);
+      let frac = dragRef.current ?? 0;
+      let last = performance.now();
+      const lo = -activeRef.current;
+      const hi = lastRef.current - activeRef.current;
+      const step = (now: number) => {
+        // a tab backgrounded mid-glide must not teleport the deck on its first frame back
+        const dt = Math.min(64, now - last);
+        last = now;
+        frac += v * dt;
+        v *= Math.exp(-dt / GLIDE_TAU);
+        // the ends stop it dead rather than rubber-banding: there is nothing past them to show
+        if (frac <= lo) { frac = lo; v = 0; } else if (frac >= hi) { frac = hi; v = 0; }
+        if (Math.abs(v) < GLIDE_MIN_V) { raf = 0; settle(frac); return; }
+        dragRef.current = frac;
+        setDrag(frac);
+        raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    };
     const finish = () => {
       if (!g) return;
       if (g.mode === 'deck') {
         const frac = dragRef.current ?? 0;
-        // release velocity over the last few samples, in px/ms; up is "ahead"
-        let fling = 0;
-        const s = g.samples;
+        /* Release speed in cards/ms, from the samples inside the last GLIDE_V_WINDOW only.
+         * A finger moving UP walks the deck FORWARD, hence the sign. */
+        const now = performance.now();
+        const s = g.samples.filter(([t]) => now - t <= GLIDE_V_WINDOW);
+        let v = 0;
         if (s.length >= 2) {
           const [t1, y1] = s[0];
           const [t2, y2] = s[s.length - 1];
-          const v = t2 > t1 ? (y2 - y1) / (t2 - t1) : 0;
-          fling = clamp((-v * FLING_MS) / g.stepPx, -FLING_CAP, FLING_CAP);
+          if (t2 > t1) v = -((y2 - y1) / (t2 - t1)) / g.stepPx;
         }
-        const target = clamp(Math.round(activeRef.current + frac + fling), 0, lastRef.current);
-        walked.current = true;
-        activeRef.current = target;
-        dragRef.current = null;
-        setActive(target);
-        setDrag(null);
+        g = null;                        // cleared first: the glide outlives the gesture
+        if (Math.abs(v) >= GLIDE_MIN_V && !MOTION_Q?.matches) glide(v);
+        else settle(frac);
+        return;
       }
       g = null;
     };
@@ -511,6 +564,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
     el.addEventListener('pointercancel', onPointerUp);
     el.addEventListener('click', onClickCapture, true);
     return () => {
+      stopGlide();
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
