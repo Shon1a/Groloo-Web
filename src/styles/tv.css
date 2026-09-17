@@ -3251,10 +3251,13 @@
    a size and a shadow to speak with.
 
    What says "this one" now: it is the biggest card (see FOCUS_SCALE / STEP_SCALE in
-   TvEpisodeDeck), the only fully opaque one, and the only one casting a shadow — and the shadow
-   deepens when the remote is actually in the deck. Elevation, not a border. */
-.tv-ep-card.on { box-shadow: 0 16px 34px rgba(0, 0, 0, .5); }
-.tv-ep-card.is-lifted { box-shadow: 0 26px 56px rgba(0, 0, 0, .66); }
+   TvEpisodeDeck) and the only fully opaque one. Size, not a border.
+
+   AND NOT A SHADOW EITHER, any more. It carried `0 16px 34px` on `.on` and `0 26px 56px` while
+   lifted, and both snapped on the frame a step came to rest: the cards settled and a dark halo
+   grew around the one in front a beat later, which read as an outline being drawn on the
+   still — the same complaint the web deck got from a phone, fixed there the same way. The
+   biggest, brightest card in a fan of dimmer ones needs no elevation to be found. */
 /* `.tv-ep-deck` is in the selector for specificity, not scope: the blanket ring at the foot of
    this file is `.tv-det :is(a, button, [tabindex]):focus-visible`, and `:is()` takes its most
    specific argument, so it ties (0,3,0) with `.tv-det .tv-ep-card:focus-visible` and wins on
