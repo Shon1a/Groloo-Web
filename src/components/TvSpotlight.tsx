@@ -286,8 +286,17 @@ const LAYER_FADE_MS_CHAINED = 150;
  * deliberate press is unchanged and still uses SLIDE_MS. */
 /** Under this gap between presses, the remote is being held rather than tapped. */
 /* Raised with the pace (see HELD_STEP_MIN_MS): it has to sit comfortably ABOVE the pace or a
- * held press lands outside the window and takes the deliberate path, and comfortably below a real
- * deliberate press (~900ms) or one gets mistaken for a hold. Same 100ms margin it always had. */
+ * held press lands outside the window and takes the deliberate path.
+ *
+ * IT USED TO BE THE WHOLE TEST, AND THAT WAS THE BUG. The window was picked to sit "comfortably
+ * below a real deliberate press (~900ms)", which is an assumption about how fast a person taps,
+ * and it is wrong: press Right twice in under half a second — which anyone walking a row does —
+ * and the second press was read as a hold. It got the linear glide, it got the decoration
+ * stripped off, and worst of all it was DROPPED outright if it landed inside HELD_STEP_MIN_MS,
+ * so the row both slid when it should have stepped and ignored presses while doing it.
+ *
+ * The window is still here and still right; it is just no longer sufficient on its own. A press
+ * now has to be recent AND arrive while the button is still down — see `heldKey` below. */
 const SLIDE_CHAIN_WINDOW = 500;
 
 /* ---- HOW FAST A HELD KEY IS ALLOWED TO WALK -------------------------------------------------
@@ -599,6 +608,24 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
    *  Up here with the other refs because `step` is defined past an early return. */
   const lastStepAt = useRef(0);
+  /* WHICH ARROW IS PHYSICALLY DOWN, which is the difference between a hold and fast tapping and
+   * cannot be inferred from timing (see SLIDE_CHAIN_WINDOW). A hold sends keydown after keydown
+   * with no keyup between them; separate presses each send a keyup. So a keydown that arrives
+   * while this still names the same key is a repeat, and anything else is a fresh press.
+   *
+   * `e.repeat` is checked first because it is the direct answer where the platform sets it, and
+   * this ref is the fallback for the ones that do not. The ref is also cleared by `endChain`, so
+   * a set that somehow swallows a keyup cannot leave the row believing a button is held forever —
+   * the worst case is one press treated as a hold, not every press after it. */
+  const heldKey = useRef<string | null>(null);
+  /* ON THE WINDOW, not on the billboard: focus can move mid-gesture — Left off the first card
+   * deliberately jumps to the nav bar — and a keyup delivered somewhere else would otherwise
+   * never be seen, leaving the row believing the button was still down. */
+  useEffect(() => {
+    const up = (e: KeyboardEvent) => { if (heldKey.current === e.key) heldKey.current = null; };
+    window.addEventListener('keyup', up);
+    return () => window.removeEventListener('keyup', up);
+  }, []);
   /** Which way the last press went (+1 right). Read while rendering the peek's tile order. */
   const lastDir = useRef(1);
   /** Clears `is-cut` after a catalogue change; held so a second change cannot leave it stuck on. */
@@ -2096,10 +2123,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * property inherits, and the section is the nearest element that is an ancestor of BOTH — put it
    * on the strip and the dissolve could not see it, so a held key would slide at 260ms while the
    * artwork took 500ms to catch up, which is stale art under a card that has already moved on. */
-  const step = (delta: number) => {
+  const step = (delta: number, held = false) => {
     const now = performance.now();
     const since = now - lastStepAt.current;
-    const chained = since < SLIDE_CHAIN_WINDOW;
+    /* BOTH HALVES ARE REQUIRED. Recent enough to be one gesture, and the button still down —
+     * timing alone cannot tell a held key from a quick second tap, and reading it as a hold is
+     * what made the row glide (and swallow presses) under deliberate pressing. */
+    const chained = held && since < SLIDE_CHAIN_WINDOW;
     /* A held key repeating faster than the row is allowed to walk — see HELD_STEP_MIN_MS. Dropped
      * outright, and `lastStepAt` deliberately not moved, so the pace is measured from the last
      * step the viewer actually saw rather than from the last repeat the platform sent. */
@@ -2287,6 +2317,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * armed by hand in that case, because the effect that normally does it is keyed on the resting
    * title's id and that id has not moved. */
   function endChain() {
+    /* The chain is over by definition, so whatever we believed about the button is stale. This is
+     * the backstop for a platform that drops keyups: without it one missing keyup would make every
+     * later press look held. */
+    heldKey.current = null;
     const el = sectionRef.current;
     if (el) {
       el.classList.remove('is-fast');
@@ -2346,7 +2380,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const onHeroKey = (e: ReactKeyboardEvent) => {
     // Left/Right walk the row and are consumed here so the global D-pad handler doesn't also
     // move focus off the billboard. Up/Down bubble on through to it.
-    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); step(1); }
+    /* A REPEAT, not merely a soon-after press: either the platform says so, or the same arrow was
+     * already down when this arrived. Worked out before the branches because Left has an early
+     * return of its own and both directions have to record the key either way. */
+    const held = e.repeat || heldKey.current === e.key;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') heldKey.current = e.key;
+    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); step(1, held); }
     else if (e.key === 'ArrowLeft') {
       e.preventDefault(); e.stopPropagation();
       /* ---- LEFT OFF THE FIRST CARD LEAVES THE ROW --------------------------------------------
@@ -2365,7 +2404,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           || document.querySelector<HTMLElement>('.tv-nav-item');
         if (nav) { nav.focus(); return; }
       }
-      step(-1);
+      step(-1, held);
     }
   };
 
