@@ -1611,7 +1611,8 @@
        repainted six cards for 340ms instead of handing two properties to the GPU. Measured on
        the production build at 4x CPU throttle, per card step: paint 24.0ms -> 5.4ms, compositor
        commit 44.2ms -> 21.4ms, style 17.5ms -> 12.2ms, script 10.7ms -> 8.2ms. The shadow that
-       used to fade now lives on .ep-card.on::after and cross-fades on opacity instead. */
+       used to fade went to an ::after that cross-faded on opacity, and has since gone entirely
+       (see the note above .ep-card:focus-visible). */
     transition:transform .34s cubic-bezier(.2,.7,.2,1),opacity .34s ease;
     /* A LAYER PER CARD, ALWAYS — for the finger, not for the step. Measured on the STEP this
        changed nothing (24.5ms paint either way), and the old note here said so: a running CSS
@@ -1626,7 +1627,7 @@
     will-change:transform,opacity}
   /* under a finger or a held mouse the fan tracks the pointer; the snap on release gets the
      transition back. The hand closes while it is held; the stills never start a native drag. */
-  .ep-deck.is-dragging .ep-card,.ep-deck.is-dragging .ep-card.on::after,.ep-deck.is-dragging .ep-dim{transition:none}
+  .ep-deck.is-dragging .ep-card,.ep-deck.is-dragging .ep-dim{transition:none}
   /* THE DEPTH IS A DIM SHEET, NOT TRANSPARENCY — see the card's note in EpisodeChooser.tsx. Its
      opacity is the one thing that changes per card (and per frame under a finger), so it gets its
      own layer; a solid black rectangle is the cheapest layer there is. Above the copy, because it
@@ -1674,13 +1675,11 @@
      later — read from a phone as an outline being drawn on the picture. It was there to lift the
      forward card off translucent neighbours; the cards are opaque now and the front one is the
      biggest and the only undimmed one, which is all the lift it needs at rest.
-     THE LIFT IS THE ONE PEOPLE LOOK AT — it happens to a card sitting still, when the pointer or
-     the keyboard arrives — so it keeps its shadow, drawn in its own layer and cross-faded with
-     `opacity`, which composites. It is on `.on` alone (never on all six) because two
-     pseudo-elements per card cost the walk ~8ms/step of extra style recalc — measured, lost. */
-  .ep-card.on::after{content:"";position:absolute;inset:0;border-radius:12px;pointer-events:none;
-    box-shadow:0 26px 56px rgba(0,0,0,.66);opacity:0;transition:opacity .34s ease}
-  .ep-card.on.is-lifted::after{opacity:1}
+     NOR UNDER THE LIFT. The hover / keyboard lift used to add a deeper one (`0 26px 56px`,
+     cross-faded on an `::after` of its own), and it had the same defect from the other side:
+     with the pointer resting on the deck, every glide ended with the front card growing its
+     halo. The lift is the 1.06 scale (`FOCUS_SCALE`, via `place`) and nothing else now — a
+     card that comes forward under the cursor is bigger, and that already says it. */
   .ep-card:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
   @media (hover:hover){
     /* a tucked card under the pointer brightens: it is a button, and it says so */
@@ -1778,7 +1777,7 @@
   @media(prefers-reduced-motion:reduce){
     .m-hero-bg{animation:none}
     .m-hero-inner>*{animation:none}
-    .ep-card,.ep-card.on::after,.ep-dim{transition:none}
+    .ep-card,.ep-dim{transition:none}
     .m-hero-trailer-slot iframe,.m-hero-trailer-slot video{transition:none}
     .modal{transition:none}
   }
