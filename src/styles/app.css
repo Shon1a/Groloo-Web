@@ -2561,7 +2561,22 @@
        bottom gradient just darkens the backdrop art for no payoff — lighten it so the
        thumbnails read crisply on phones. */
     .upcoming-card .uc-grad{background:linear-gradient(180deg,rgba(10,10,10,0) 62%,rgba(10,10,10,.5) 100%)}
-    .strip-row{scroll-snap-type:x proximity}
+    /* TOUCH GETS THE THROW, AND Rail.tsx SQUARES IT UP AFTERWARDS. This was `x proximity`,
+       and proximity turns out to be no better than mandatory for a fling: measured phone-sized
+       with a real hand-dispatched swipe, as px coasted AFTER the finger lifts against how fast
+       the finger was going (px/ms -> px coasted),
+           mandatory   4.4->51    3.5->101   2.5->89    1.5->101   0.6->83
+           proximity   5.3->114   3.1->98    2.4->81    1.5->100   0.6->83
+           none        5.2->1236  3.6->1236  2.2->1236  1.6->477   0.6->77
+       BOTH SNAP MODES ARE FLAT. The rail coasted the same ~90px whether the swipe was a flick
+       or a shove, because the browser ends a fling at the nearest snap point and throwing
+       harder buys nothing — which is exactly the "it stops early" this is here to fix. Only
+       `none` lets the throw run, and it is the only one where a harder throw goes further.
+       The alignment snapping used to give comes back in Rail.tsx, which nudges the rail onto
+       a card once it has COME TO REST, and only if it rested near one.
+       `scroll-behavior:auto` goes with it: it is only set for the arrow buttons, which are
+       display:none here, and it would otherwise animate corrections on top of a fling. */
+    .strip-row{scroll-snap-type:none;scroll-behavior:auto}
 
     /* upcoming marquee labels never get a hover on touch — keep them shown */
     .upcoming-card .uc-title{opacity:1;transform:none}
