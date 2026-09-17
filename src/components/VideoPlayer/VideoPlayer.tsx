@@ -13,16 +13,33 @@ import { playWithWasmAudio, needsWasmDecoder, type WasmAudioHandle } from '../..
 import { langName, normalizeSubLang, collectAddonSubtitles } from '../../lib/addonClient';
 import { apiFetch } from '../../lib/api';
 import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
-import EpisodePanel from './EpisodePanel';
 import EpisodeRail from './EpisodeRail';
 import TvChipMenu from '../DetailModal/TvChipMenu';
 import { scrollCardToSlot } from './railScroll';
 
-/* THE TV BUILD IS A DIFFERENT PLAYER, and this constant is what splits them. `import.meta.env.MODE`
- * is a Vite compile-time string, so every `IS_TV` branch below is resolved at build time and the
- * losing side is dropped: the website never carries the remote-control code, and the TV never
- * carries the mouse-gesture code or the controls a set has no use for. See "TEN FEET AWAY" below. */
+/* THE TWO BUILDS ARE ONE PLAYER WITH TWO INPUTS, and this constant is what splits them.
+ * `import.meta.env.MODE` is a Vite compile-time string, so every `IS_TV` branch below is resolved
+ * at build time and the losing side is dropped: the website never carries the remote-control
+ * code, and the TV never carries the mouse-gesture code. See "TEN FEET AWAY" below.
+ *
+ * THE CHROME IS THE SAME ON BOTH NOW. It used to be two players — a YouTube-shaped row of eleven
+ * buttons under a thin bar on the web, and the one-line disc · elapsed · bar · duration transport
+ * on the television — and the web one was the older and the worse of the two. The TV's layout is
+ * the layout: title beside the episode, audio and ⋯ in the top-right corner, the settings menu a
+ * sheet on the right edge with a section chip over its list, and the episodes a shelf of stills
+ * under the scrubber. What still differs is what each input NEEDS: the web keeps a close button,
+ * fullscreen, picture-in-picture and a volume control, because a mouse has no Back key, no
+ * fullscreen key and no volume rocker; the TV keeps none of them for the opposite reason. */
 const IS_TV = import.meta.env.MODE === 'tv';
+
+/* iOS IS THE ONE PLATFORM WHERE `video.volume` IS READ-ONLY. Setting it is silently ignored — the
+ * value reads back 1 forever — because Apple reserves volume for the hardware rocker; only
+ * `muted` takes. The volume swipe worked on every Android phone and did nothing on any iPhone,
+ * with the HUD cheerfully drawing a level the audio was not following. Detected up front rather
+ * than probed on the element (a probe fires two `volumechange` events on every other browser),
+ * and iPadOS is caught by the touch-points test because it reports itself as a Mac. */
+const VOL_LOCKED = typeof navigator !== 'undefined'
+  && (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
 // skip-intro heuristic window (s) + credits-tail length when no IntroDB markers exist
 const INTRO_FROM = 8, INTRO_TO = 92, CREDITS_TAIL = 35;
@@ -192,10 +209,8 @@ const IcPause = (
     <rect x="13.6" y="4.8" width="4.2" height="14.4" rx="1.7" />
   </svg>
 );
-const IcBack = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12.5 7V4l-5 5 5 5V11a4.5 4.5 0 1 1-4.5 4.5H6A6 6 0 1 0 12.5 7z" /></svg>;
-const IcFwd = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M11.5 7V4l5 5-5 5V11A4.5 4.5 0 1 0 16 15.5h1.5A6 6 0 1 1 11.5 7z" /></svg>;
+// a single checkable option row (OptRow, below) is what every menu section is built from
 const IcMute = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4z" /><path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M18.5 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>;
-const IcGear = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.8 7.8 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1l-.4-2.6h-3.8l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L4.6 11a7.8 7.8 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.6h3.8l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4zM12 15.2A3.2 3.2 0 1 1 12 8.8a3.2 3.2 0 0 1 0 6.4z" /></svg>;
 /* The TV's settings button. A cogwheel is a fiddly shape at three metres — a lot of small teeth
  * that turn to mush once a set scales the frame — and it also names a category ("machine
  * settings") narrower than what the menu now holds. Three dots read at any distance and mean
@@ -274,8 +289,6 @@ const TV_RAMP_V0 = 45;          // seconds of film per second at the instant a h
 const TV_RAMP_GROWTH = 3.2;     // and how that rate multiplies per further second of holding
 const TV_HIDE_MS = 5000;        // chrome auto-hide — longer than the desktop's 3s; reading is slower from a sofa
 
-// each menu section's collapsible gear-header icon + a single checkable option row
-const AccIc = <svg className="vp-acc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>;
 
 function OptRow({ on, label, sub, onClick }: { on: boolean; label: string; sub?: string; onClick: () => void }) {
   return (
@@ -317,6 +330,8 @@ export default function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<HlsInstance | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  const playedRef = useRef<HTMLDivElement>(null); // written directly by the playhead loop (web)
+  const thumbRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<number | undefined>(undefined);
   const recordedRef = useRef(false);   // record watch-history once per opened source
   const lastProgRef = useRef(0);       // throttle progress writes
@@ -348,7 +363,6 @@ export default function VideoPlayer() {
   const [currentSub, setCurrentSub] = useState(-1); // -1 = subtitles off
   const [audioTracks, setAudioTracks] = useState<Array<{ i: number; name: string }>>([]);
   const [curAudio, setCurAudio] = useState(0);
-  const [acc, setAcc] = useState<Record<string, boolean>>({}); // expanded accordion sections (web)
   const [setTab, setSetTab] = useState<SetTab>('subs');        // which section the TV panel is showing
   const [subLang, setSubLang] = useState<string | null>(null); // which language group is expanded
   const [fs, setFs] = useState(false);
@@ -380,7 +394,6 @@ export default function VideoPlayer() {
   const [audioOpen, setAudioOpen] = useState(false); // the audio-track popup
   // why in-page demuxing is not driving this source; null when it is
   const [demuxBlocker, setDemuxBlocker] = useState<DemuxBlocker | null>(null);
-  const ccOn = currentSub >= 0;
 
   // --- TV remote (see "TEN FEET AWAY" above; all of this is dropped from the web build) ---
   const [tvNav, setTvNav] = useState(false);              // the D-pad is driving the chrome
@@ -421,8 +434,12 @@ export default function VideoPlayer() {
   const [webkitPip, setWebkitPip] = useState(false); // iPad/iOS per-video PiP
   const [bright, setBright] = useState(1);            // 1 = full; web can't set device brightness so we dim the frame
   const [seekHud, setSeekHud] = useState<{ side: 'left' | 'right'; secs: number } | null>(null);
-  const [vHud, setVHud] = useState<{ kind: 'vol' | 'bright'; val: number } | null>(null);
+  // `note` is the one-line caption under the meter — only iOS uses it, to say where volume went
+  const [vHud, setVHud] = useState<{ kind: 'vol' | 'bright'; val: number; note?: string } | null>(null);
   const hideUiRef = useRef(false);                    // fresh read for deferred single-tap
+  /* When a tap outside a menu closed it. The single-tap timer consults this so the same tap does
+   * not ALSO hide the chrome 280ms later — closing a sheet is not a request to lose the bar. */
+  const menuClosedAt = useRef(0);
   const gestRef = useRef({ active: false, x0: 0, y0: 0, t0: 0, w: 1, h: 1, mode: '' as '' | 'seek' | 'vol' | 'bright', startVol: 1, startBright: 1, startTime: 0 });
   const lastTapRef = useRef({ t: 0, x: 0, side: '' as '' | 'left' | 'center' | 'right' });
   const seekAccumRef = useRef<{ side: '' | 'left' | 'right'; secs: number }>({ side: '', secs: 0 });
@@ -844,7 +861,6 @@ export default function VideoPlayer() {
     const v = videoRef.current; if (!v) return;
     if (v.paused) v.play().catch(() => {}); else v.pause();
   }, []);
-  const nudge = useCallback((d: number) => { const v = videoRef.current; if (v) v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + d)); }, []);
 
   /** Tear down the hold ramp. Safe to call when no ramp is running. */
   const stopRamp = useCallback(() => {
@@ -1065,13 +1081,14 @@ export default function VideoPlayer() {
    * the reason this menu is opened most of the time, and on a TV those two agreeing is what makes
    * the common case cost one press. Taking the first control in DOM order gives it without
    * hard-coding an id — if the rows are ever reordered, this follows the order rather than
-   * contradicting it. Two selectors because the panel is chips on a television and accordions on
-   * the web, and this effect is the one piece of it that both builds share.
+   * contradicting it. Both builds run this now that both have the chip panel: on the web the
+   * focus is for a keyboard, and a mouse never sees it (Chrome does not paint `:focus-visible`
+   * for a focus() issued from a click).
    *
    * A frame's delay, because the panel is mounted by the same render that sets `menuOpen` and is
    * not in the document to be focused until after it commits. */
   useEffect(() => {
-    if (!IS_TV || !menuOpen) return;
+    if (!menuOpen) return;
     // Every open starts on Subtitles rather than resuming wherever the last visit ended. The panel
     // is opened for one errand at a time and the common errand is subtitles; remembering a section
     // the viewer chose ten minutes ago only means they have to notice and undo it.
@@ -1085,16 +1102,15 @@ export default function VideoPlayer() {
      * the remote the moment a track from another language was chosen. */
     setSubLang(currentSub >= 0 ? (subs[currentSub]?.lang || null) : null);
     const id = requestAnimationFrame(() => {
-      overlayRef.current?.querySelector<HTMLElement>('#vpMenu .tv-chipmenu-btn, #vpMenu .vp-acc-head')?.focus({ preventScroll: true });
+      overlayRef.current?.querySelector<HTMLElement>('#vpMenu .tv-chipmenu-btn')?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(id);
   }, [menuOpen]);
   /* Drive the rail's mount/slide off `epPanelOpen`. 470ms is the 420ms transform (`--vp-rail-ease`
-   * in tv.css) plus margin; it only has to OUTLAST the animation — unmounting a few ms late costs
-   * nothing, unmounting early is the blink this exists to prevent, so if the curve is ever
-   * lengthened this number goes up with it. */
+   * in tv.css and app.css) plus margin; it only has to OUTLAST the animation — unmounting a few ms
+   * late costs nothing, unmounting early is the blink this exists to prevent, so if the curve is
+   * ever lengthened this number goes up with it. */
   useEffect(() => {
-    if (!IS_TV) return;
     if (epPanelOpen) {
       setRailMounted(true);
       /* TWO FRAMES, NOT ONE, AND THAT IS THE WHOLE REASON THE SHELF DID NOT SLIDE.
@@ -1145,7 +1161,6 @@ export default function VideoPlayer() {
    * was fetched, and the effect that mounts it also sets its mode. Setting a mode here
    * would be setting it on the OUTGOING track, one commit before the incoming one exists. */
   const selectSub = (i: number) => { subPicked.current = true; setCurrentSub(i); };
-  const toggleCC = () => { if (!subs.length) return; selectSub(ccOn ? -1 : Math.max(0, currentSub)); };
   /* Manual audio switch. hls.js owns the list when it is attached; otherwise the list came
    * from the element itself, where switching means enabling one track and disabling the
    * rest (a native AudioTrackList permits several enabled at once, which would mix them). */
@@ -1197,27 +1212,81 @@ export default function VideoPlayer() {
     audioPrefDone.current = true; // an explicit pick outranks any later preference pass
     setCurAudio(i);
   };
-  const toggleAcc = (sec: string) => setAcc((a) => ({ ...a, [sec]: !a[sec] }));
 
-  // scrub
-  const seekToClient = useCallback((clientX: number) => {
+  /* ---- A POINTER SCRUB IS A PREVIEW TOO, and that is what made the web bar stop stuttering.
+   *
+   * Dragging used to write `currentTime` on every pointermove — a real seek per mouse event, so
+   * the demuxer was asked for a new position a hundred times a second and the playhead, which
+   * only moves on `timeupdate` after each seek LANDS, lurched along a few hundred milliseconds
+   * behind the cursor and froze on every miss. The remote solved the same problem with a preview
+   * that the bar renders and a single seek on release (see "SEEKING IS PREVIEWED" above), and the
+   * pointer now uses exactly that machinery: `seekPreviewRef` is where the finger is, `.ramping`
+   * gives the fill and the disc the short linear transition that tracks a continuous motion, and
+   * `commitSeek` on pointer-up is the one seek. A click with no drag is a press and a release in
+   * the same place, which commits at once. */
+  const previewToClient = useCallback((clientX: number) => {
     const bar = barRef.current, v = videoRef.current; if (!bar || !v || !v.duration) return;
     const r = bar.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
-    v.currentTime = ratio * v.duration;
+    const pos = clamp((clientX - r.left) / r.width, 0, 1) * v.duration;
+    seekPreviewRef.current = pos;
+    setSeekPreview(pos);
   }, []);
   const onBarPointerDown = (e: React.PointerEvent) => {
-    seekToClient(e.clientX);
-    const move = (ev: PointerEvent) => seekToClient(ev.clientX);
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.preventDefault();
+    window.clearTimeout(seekReleaseTimer.current);
+    window.clearTimeout(seekCommitTimer.current);
+    setRamping(true);                       // the linear curve — the cursor is a continuous input
+    setHideUi(false); window.clearTimeout(hideTimer.current);
+    previewToClient(e.clientX);
+    const move = (ev: PointerEvent) => previewToClient(ev.clientX);
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      commitSeek();
+    };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   };
+
+  /* ---- THE PLAYHEAD MOVES EVERY FRAME, NOT EVERY QUARTER SECOND (web only).
+   *
+   * `timeupdate` fires about four times a second, so a bar driven from `cur` alone advances in
+   * 250ms steps — on a two-hour film that is a sub-pixel twitch nobody sees, on a three-minute
+   * trailer it is a visible tick, and either way it is not the glide the TV's scrub has. This
+   * loop reads `currentTime` on every animation frame and writes the two positions straight to
+   * the DOM, bypassing React: the same two numbers React would compute, sixty times a second
+   * instead of four, and with no re-render to pay for. React still owns the elements — its own
+   * render writes the same values from `cur` a moment behind, and the next frame here corrects
+   * a difference no larger than 250ms of film.
+   *
+   * It stands aside whenever a preview is up (the transition is doing the moving then, and this
+   * loop would fight it) and while the element reports `seeking` — some browsers hand back the
+   * OLD position for a tick after a seek is issued, which is the recoil `commitSeek` documents.
+   * Not on the television: a style write per frame is a style recalc per frame, and that budget
+   * is spent (see the TV build's effect ceiling). The TV's bar steps, as it always has. */
+  useEffect(() => {
+    if (IS_TV || !playing) return;
+    let raf = 0;
+    const tick = () => {
+      const v = videoRef.current, played = playedRef.current, thumb = thumbRef.current;
+      if (v && played && thumb && v.duration && !v.seeking && seekPreviewRef.current == null) {
+        const p = `${(v.currentTime / v.duration) * 100}%`;
+        played.style.width = p;
+        thumb.style.left = p;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
 
   // --- touch gesture handlers (single tap toggles chrome; double-tap the left/right
   // third seeks ±10s and accumulates; a vertical drag adjusts volume on the right half
   // and brightness on the left; a horizontal drag scrubs) ---
-  const showVHud = (kind: 'vol' | 'bright', val: number) => { window.clearTimeout(vHudTimer.current); setVHud({ kind, val }); };
+  const showVHud = (kind: 'vol' | 'bright', val: number, note?: string) => { window.clearTimeout(vHudTimer.current); setVHud({ kind, val, note }); };
   const hideVHudSoon = () => { window.clearTimeout(vHudTimer.current); vHudTimer.current = window.setTimeout(() => setVHud(null), 650); };
 
   const doDoubleTap = (region: 'left' | 'center' | 'right') => {
@@ -1240,7 +1309,9 @@ export default function VideoPlayer() {
     const r = el.getBoundingClientRect(), tch = e.touches[0];
     g.active = true; g.mode = ''; g.t0 = performance.now();
     g.x0 = tch.clientX - r.left; g.y0 = tch.clientY - r.top; g.w = r.width; g.h = r.height;
-    g.startVol = v?.muted ? 0 : (v?.volume ?? 1); g.startBright = bright; g.startTime = v?.currentTime ?? 0;
+    g.startVol = v?.muted ? 0 : (v?.volume ?? 1); g.startBright = bright;
+    // A swipe that begins while a scrub is still previewing extends the preview, not the video.
+    g.startTime = seekPreviewRef.current ?? v?.currentTime ?? 0;
   };
   const onGestureMove = (e: React.TouchEvent) => {
     const g = gestRef.current;
@@ -1251,19 +1322,35 @@ export default function VideoPlayer() {
     if (!g.mode) {
       if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;       // below intent threshold
       g.mode = Math.abs(dx) > Math.abs(dy) ? 'seek' : (g.x0 < g.w / 2 ? 'bright' : 'vol');
-      if (g.mode === 'seek') { setHideUi(false); window.clearTimeout(hideTimer.current); } // reveal scrubber
+      if (g.mode === 'seek') {
+        // Reveal the scrubber and put it in its continuous-motion state — a finger is a ramp.
+        setHideUi(false); window.clearTimeout(hideTimer.current);
+        window.clearTimeout(seekReleaseTimer.current); window.clearTimeout(seekCommitTimer.current);
+        setRamping(true);
+      }
     }
     const span = g.h * 0.6;                                     // full-scale drag distance
     if (g.mode === 'vol' && v) {
-      const nv = clamp(g.startVol - dy / span, 0, 1);
-      v.volume = nv; v.muted = nv <= 0.001;
-      showVHud('vol', nv);
+      if (VOL_LOCKED) {
+        /* iOS: the level is the rocker's alone (see VOL_LOCKED), so the swipe drives the one
+         * thing it CAN — mute. Down past a short dead zone mutes, up past it unmutes, and the
+         * HUD says where the volume itself went so the gesture does not look broken. */
+        if (dy > span * 0.12) v.muted = true; else if (dy < -span * 0.12) v.muted = false;
+        showVHud('vol', v.muted ? 0 : 1, t('player.vol_ios'));
+      } else {
+        const nv = clamp(g.startVol - dy / span, 0, 1);
+        v.volume = nv; v.muted = nv <= 0.001;
+        showVHud('vol', nv);
+      }
     } else if (g.mode === 'bright') {
       const nb = clamp(g.startBright - dy / span, 0.15, 1);
       setBright(nb); showVHud('bright', (nb - 0.15) / 0.85);
     } else if (g.mode === 'seek' && v && v.duration) {
       const reach = Math.min(v.duration, 180);                  // full swipe = ±180s (or whole clip)
-      v.currentTime = clamp(g.startTime + (dx / g.w) * reach, 0, v.duration);
+      // Previewed, not applied — the seek happens once, when the finger lifts (onGestureEnd).
+      const pos = clamp(g.startTime + (dx / g.w) * reach, 0, v.duration);
+      seekPreviewRef.current = pos;
+      setSeekPreview(pos);
     }
   };
   const onGestureEnd = () => {
@@ -1272,7 +1359,7 @@ export default function VideoPlayer() {
     g.active = false;
     if (g.mode) {                                               // a drag — settle HUDs
       if (g.mode === 'vol' || g.mode === 'bright') hideVHudSoon();
-      else bump();                                              // scrub: restart auto-hide
+      else commitSeek();                                        // scrub: the one real seek, then auto-hide
       return;
     }
     const dt = performance.now() - g.t0;
@@ -1287,6 +1374,7 @@ export default function VideoPlayer() {
       lastTapRef.current = { t: now, x: g.x0, side: region };
       window.clearTimeout(singleTapTimer.current);
       singleTapTimer.current = window.setTimeout(() => {       // defer so a 2nd tap can upgrade
+        if (performance.now() - menuClosedAt.current < 600) { bump(); return; } // this tap closed a sheet
         if (hideUiRef.current) bump(); else { setHideUi(true); window.clearTimeout(hideTimer.current); }
       }, 280);
     }
@@ -1321,14 +1409,29 @@ export default function VideoPlayer() {
         return;
       }
       /* Transport keys belong to the VIDEO, so they stand down while a panel is over it —
-       * otherwise Left/Right seeks the film underneath the menu the user is reading. */
+       * otherwise Left/Right seeks the film underneath the menu the user is reading. The one
+       * exception is Up with the shelf open, which is how the shelf closes — the same axis that
+       * opened it, exactly as on the remote. */
+      if (epPanelOpen && e.key === 'ArrowUp') { e.preventDefault(); setEpPanelOpen(false); bump(); return; }
       if (menuOpen || epPanelOpen) return;
+      // Not from inside a text field or a slider — the volume range wants its own arrows.
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === ' ' || e.key === 'k') { e.preventDefault(); togglePlay(); }
-      else if (e.key === 'ArrowLeft') nudge(-10);
-      else if (e.key === 'ArrowRight') nudge(10);
+      /* THE KEYBOARD SCRUBS THE WAY THE REMOTE DOES. Left/Right used to seek ten seconds on the
+       * spot, and holding the key was a seek per autorepeat — the black-screen-and-spinner the
+       * TV section describes, at a keyboard's 30ms repeat rate. `tvSeek` is not TV-specific in
+       * anything but its name: a press extends a preview the bar glides to, a held key ramps,
+       * and the release (below) is the one seek. */
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); tvSeek(-1); return; }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); tvSeek(1); return; }
+      else if (e.key === 'ArrowDown' && source.series) { e.preventDefault(); railFrom.current = 'bar'; setEpPanelOpen(true); }
       else if (e.key === 'm') toggleMute();
       else if (e.key === 'f') toggleFs();
       bump();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') tvSeekRelease();
     };
     const onFs = () => setFs(!!document.fullscreenElement);
     /* NOT ON THE TV. The remote handler below replaces this one wholesale rather than layering
@@ -1336,10 +1439,14 @@ export default function VideoPlayer() {
      * ArrowLeft reaching here would seek the film a second time on top of the scrub the remote
      * handler had already started. The fullscreen listener stays either way; it costs nothing
      * and a TV shell can still be in and out of it. */
-    if (!IS_TV) window.addEventListener('keydown', onKey);
+    if (!IS_TV) { window.addEventListener('keydown', onKey); window.addEventListener('keyup', onKeyUp); }
     document.addEventListener('fullscreenchange', onFs);
-    return () => { window.removeEventListener('keydown', onKey); document.removeEventListener('fullscreenchange', onFs); };
-  }, [source, close, togglePlay, nudge, toggleMute, toggleFs, bump, menuOpen, epPanelOpen]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('fullscreenchange', onFs);
+    };
+  }, [source, close, togglePlay, tvSeek, tvSeekRelease, toggleMute, toggleFs, bump, menuOpen, epPanelOpen]);
 
   /* ---- THE REMOTE ---------------------------------------------------------------------------
    * CAPTURE PHASE, and load-bearing for the same reason tvKeys' Back listener is: TvSpatialNav
@@ -1701,7 +1808,6 @@ export default function VideoPlayer() {
   })();
   const spanFrom = Math.min(pct, curPct);
   const spanWidth = Math.abs(pct - curPct);
-  const hasSubs = subs.length > 0;
 
   // ::cue styling from the subtitle settings (color / bg / size / outline)
   const ow = settings.subOutlineW, oc = settings.subOutline;
@@ -1723,67 +1829,32 @@ export default function VideoPlayer() {
     }
   }
 
-  /* THE CONTROL GROUP, BUILT ONCE AND MOUNTED IN ONE OF TWO PLACES.
+  /* THE CORNER GROUP: audio, then ⋯, in the top-right on BOTH builds.
    *
-   * On the web it is the row under the scrubber, exactly as before. On a television everything
-   * in it that belonged to a transport row has been taken out — play moved into the scrubber
-   * line as a badge, skip and mute went to the remote, CC went to the menu it duplicates, and
-   * Episodes went to the shelf that Down already opens — which leaves the audio picker and the
-   * settings menu. Those two are not transport; they are what the corner of a TV player is for,
-   * so on that build this whole group is rendered inside `.vp-top-right` instead.
+   * These two are not transport; they are what the corner of a player is for, and the web now
+   * mounts them where the television always did. Everything that used to sit in a row under the
+   * web's scrubber has gone the way it went on the TV — play into the scrubber line as a disc,
+   * skip ±10 to the keyboard and the double-tap, CC into the menu it duplicated — with three
+   * exceptions that only a web page has any use for, which sit at the END of the scrubber line
+   * (see `tailRow`): volume, picture-in-picture and fullscreen. Episodes is the fourth: the TV
+   * opens the shelf with Down on the bar, and the keyboard now does too, but a mouse needs a
+   * button, so the web gets one here, first in the corner.
    *
-   * A VARIABLE RATHER THAN THE JSX TWICE. The settings menu underneath is two hundred lines of
-   * accordions, and a second copy behind an `IS_TV` branch is two copies to keep in step — the
-   * exact drift the add-on client's header warns about, in a file where nobody would think to
-   * look for it. Built here, mounted once, in whichever parent the build calls for. */
+   * A VARIABLE RATHER THAN THE JSX TWICE. The settings sheet underneath is a hundred lines of
+   * panel, and a second copy behind an `IS_TV` branch is two copies to keep in step — the exact
+   * drift the add-on client's header warns about, in a file where nobody would think to look. */
   const controlsRow = (
     <div className="vp-controls">
-            {/* Play is the scrubber line's own disc on a TV — see the note where it is rendered. */}
-            {!IS_TV && <button className="vp-icon" id="vpPlay" aria-label={t('ctl.play_a')} onClick={togglePlay}>{playing ? IcPause : IcPlay}</button>}
-            {/* SKIP ±10 AND MUTE ARE WEB-ONLY NOW, and both for the same reason: on a television
-                the remote already does them better than a button the viewer has to walk to.
-                Left/Right on the scrubber seek, with a step that grows while the key is held (see
-                "SEEKING IS PREVIEWED" above) — reaching a ⏪ button costs presses to do something
-                worse. Mute is on the remote and handled below the browser on all three TV
-                platforms, exactly as volume already was; the note that kept mute here argued it
-                "IS ours", which was true and is not the same as it being worth a slot in a row
-                walked by a D-pad. Nothing is lost from the web player. */}
-            {!IS_TV && (
-              <>
-                <button className="vp-icon" id="vpBack" aria-label={t('ctl.back_a')} onClick={() => nudge(-10)}>{IcBack}</button>
-                <button className="vp-icon" id="vpFwd" aria-label={t('ctl.fwd_a')} onClick={() => nudge(10)}>{IcFwd}</button>
-                <div className="vp-vol">
-                  <button className="vp-icon" id="vpMute" aria-label={t('ctl.mute_a')} aria-pressed={muted} onClick={toggleMute}>{IcMute}</button>
-                  <input type="range" className="vp-vol-slider" id="vpVol" min={0} max={1} step={0.02} value={muted ? 0 : vol} aria-label={t('ctl.vol_a')}
-                    onChange={(e) => { const v = videoRef.current; if (v) { v.volume = +e.target.value; v.muted = +e.target.value === 0; } }} />
-                </div>
-                <div className="vp-time">
-                  <span id="vpCur">{fmt(shownTime)}</span> / <span id="vpDur">{fmt(dur)}</span>
-                  {seekDelta !== 0 && <span className="vp-seekdelta">{seekDelta > 0 ? '+' : '−'}{fmt(Math.abs(seekDelta))}</span>}
-                </div>
-              </>
-            )}
-            {!IS_TV && <div className="vp-spacer" />}
-            {/* EPISODES AND CC ARE WEB-ONLY NOW, and both are duplicates on a television rather
-                than losses. Down from the scrubber opens the episode shelf, which is a better
-                instrument than this button ever was and is already one press away; and the CC
-                toggle only ever switched between "off" and "the first track", which the menu's
-                Subtitles list does with the track names visible. Two fewer stops in a row the
-                D-pad walks, and nothing that can no longer be reached. */}
             {!IS_TV && source.series && (
               <button className={`vp-icon${epPanelOpen ? ' on' : ''}`} id="vpEpisodes" aria-label={t('ctl.episodes_a')} aria-pressed={epPanelOpen}
                 onClick={() => { railFrom.current = 'button'; setEpPanelOpen((o) => !o); }}>{IcEpisodes}</button>
             )}
-            {!IS_TV && hasSubs && (
-              <button className={`vp-icon cc${ccOn ? ' on' : ''}`} id="vpCC" aria-label={t('ctl.subs_a')} aria-pressed={ccOn} onClick={toggleCC}>CC</button>
-            )}
 
-            {/* AUDIO TRACK — a control bar button, not a row buried three levels into the gear
-                menu's Settings accordion, which is where the only way to change audio used to
-                live. It is rendered whenever the RELEASE claims more than one language, even
-                when none of them can be selected, because "the button is missing" and "this
-                browser cannot switch tracks" look identical from the outside and only one of
-                them is true. When it cannot switch it says so in place of the list. */}
+            {/* AUDIO TRACK — a corner button, not a row buried in the settings sheet. It is
+                rendered whenever the RELEASE claims more than one language, even when none of
+                them can be selected, because "the button is missing" and "this browser cannot
+                switch tracks" look identical from the outside and only one of them is true. When
+                it cannot switch it says so in place of the list. */}
             {(audioTracks.length > 1 || (source.langs?.length ?? 0) > 1) && (
               <div className="vp-menu-wrap">
                 <button
@@ -1811,17 +1882,16 @@ export default function VideoPlayer() {
             )}
 
             <div className="vp-menu-wrap">
-              <button className="vp-icon" id="vpGear" aria-label={t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuOpen((o) => !o); setAudioOpen(false); }}>{IS_TV ? IcMore : IcGear}</button>
-              {/* A CLOSED DROPDOWN IS STILL IN THE DOM, AND THAT IS A BUG FOR A REMOTE. `.vp-menu`
+              <button className="vp-icon" id="vpGear" aria-label={t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuOpen((o) => !o); setAudioOpen(false); }}>{IcMore}</button>
+              {/* A CLOSED SHEET IS STILL IN THE DOM, AND THAT IS A BUG FOR A REMOTE. `.vp-menu`
                   hides itself with opacity + pointer-events, which a pointer respects and
-                  geometry does not: every row inside it keeps a real bounding box floating above
-                  the gear button, so TvSpatialNav offered "Subtitles / Off / English…" as targets
-                  while the menu was shut. Not rendering it is the fix — and it also spares the TV
-                  the cost of a menu nobody opened. The web keeps the node so it can animate. */}
+                  geometry does not: every row inside it keeps a real bounding box, so
+                  TvSpatialNav offered "Subtitles / Off / English…" as targets while the menu
+                  was shut. Not rendering it is the fix — and it also spares the TV the cost of
+                  a menu nobody opened. The web keeps the node so it can slide. */}
               {(!IS_TV || menuOpen) && (
               <div className={`vp-menu${menuOpen ? ' open' : ''}`} id="vpMenu" role="menu">
-                {IS_TV ? (
-                  /* ONE PICKER, THEN WHATEVER IT PICKED.
+                  {/* ONE PICKER, THEN WHATEVER IT PICKED.
                    *
                    * The panel was four accordions, then four label-and-chip rows, and both had the
                    * same flaw at ten feet: four controls on screen at once, of which the viewer
@@ -1833,11 +1903,12 @@ export default function VideoPlayer() {
                    * under it swaps, and nothing above the chosen option can move — which is what
                    * makes the second press (choosing a value) safe to make without re-reading the
                    * screen. It is also the shape the title screen already uses for seasons and
-                   * sources, so the remote's habits carry straight over.
+                   * sources, so the remote's habits carry straight over — and, now that the web
+                   * shares it, the mouse's habits from the same title screen do too.
                    *
                    * The options below stay plain rows rather than becoming a second chip: they are
                    * the destination, not another branch, and a menu that opens a menu is the thing
-                   * this panel keeps being redesigned to avoid. */
+                   * this panel keeps being redesigned to avoid. */}
                   <div className="vp-setpanel" onKeyDown={onSetPanelKey}>
                     <TvChipMenu
                       options={SET_TABS.map((s) => ({ key: s.key, label: t(s.i18n) }))}
@@ -1854,11 +1925,7 @@ export default function VideoPlayer() {
                               back from the add-ons with a dozen English files and a dozen Spanish
                               ones, interleaved in whatever order they were fetched, and a viewer
                               scrolling for Spanish had to read every English row on the way past.
-                              Under a heading, the same twelve rows are one thing to skip.
-
-                              The heading is not a focus stop: it is a `<div>` with no tabIndex, so
-                              the D-pad steps straight from the last track of one language to the
-                              first of the next. It orients, it does not obstruct. */}
+                              Under a heading, the same twelve rows are one thing to skip. */}
                           {subGroups.map((g) => (
                             <div className={`vp-subgroup${subLang === g.lang ? ' open' : ''}`} key={g.lang}>
                               {/* ONE LANGUAGE OPEN AT A TIME, and that is the point rather than a
@@ -1888,6 +1955,11 @@ export default function VideoPlayer() {
                               ))}
                             </div>
                           ))}
+                          {/* The three end states are deliberately distinct: still asking, asked
+                              and nothing came back, and nothing was asked because no subtitle
+                              add-on is installed. The last one is the only one the user can act
+                              on, and conflating it with "none found" is what made a missing
+                              feature look like a missing subtitle. */}
                           {subsLoading && <div className="vp-opt" style={{ opacity: 0.5 }}>{t('menu.loading_subs')}</div>}
                           {!subsLoading && subs.length === 0 && (
                             <div className="vp-opt" style={{ opacity: 0.5 }}>
@@ -1912,10 +1984,16 @@ export default function VideoPlayer() {
                       )}
                       {setTab === 'enhance' && (
                         <>
-                          {/* Switching it on has to land on a level rather than only raising a
-                              flag — the grain rows set `enhance: g > 0`, so an enhancement can
-                              otherwise be on and doing nothing. See the web branch below, which
-                              documents the same trap at length. */}
+                          {/* SWITCHING IT ON HAS TO LAND ON A LEVEL, not just raise a flag.
+                              `enhance: !enhance` alone can produce an enhancement that is on and
+                              doing nothing: the grain rows set `enhance: g > 0`, so choosing
+                              "Grain · Off" is how you turn the whole thing off — which leaves
+                              `grain` at 0. Switching back on from here then gave 0% grain, no row
+                              ticked, and a picture identical to the one before the press.
+                              So a level that is at Off comes up at LOW, which is where the
+                              defaults start and the gentlest thing that is actually visible. A
+                              level the viewer has already set to Medium or High is left alone —
+                              this is a resume, not a reset. */}
                           <OptRow on={settings.enhance} label={t('menu.enhance_on')}
                             onClick={() => updateSettings(settings.enhance
                               ? { enhance: false }
@@ -1924,179 +2002,102 @@ export default function VideoPlayer() {
                                   grain: settings.grain > 0 ? settings.grain : TV_GRAIN[1],
                                   clarity: settings.clarity > 0 ? settings.clarity : TV_CLARITY[1],
                                 })} />
-                          {TV_GRAIN.map((g, i) => (
-                            <OptRow key={g} on={settings.enhance && settings.grain === g} label={`${t('ctl.grain')} · ${t(TV_LEVEL_KEYS[i])}`}
-                              onClick={() => updateSettings({ enhance: g > 0, grain: g })} />
-                          ))}
-                          {TV_CLARITY.map((c, i) => (
-                            <OptRow key={c} on={settings.enhance && settings.clarity === c} label={`${t('menu.clarity')} · ${t(TV_LEVEL_KEYS[i])}`}
-                              onClick={() => updateSettings({ clarity: c })} />
-                          ))}
+                          {/* PRESETS ON THE TV, SLIDERS ON THE WEB — see TV_GRAIN above. A range
+                              input is the one control a D-pad cannot get back out of: arrows move
+                              the value, so nothing is left to move focus, and the remote is
+                              trapped on it. A mouse has the opposite problem — four fixed steps
+                              are a coarser instrument than the one it is holding. Same panel,
+                              same rows above; only the strength control differs. */}
+                          {IS_TV ? (
+                            <>
+                              {TV_GRAIN.map((g, i) => (
+                                <OptRow key={g} on={settings.enhance && settings.grain === g} label={`${t('ctl.grain')} · ${t(TV_LEVEL_KEYS[i])}`}
+                                  onClick={() => updateSettings({ enhance: g > 0, grain: g })} />
+                              ))}
+                              {/* GATED ON `enhance`, THE SAME WAY THE GRAIN ROWS ARE. A ✓ against
+                                  something that is not in effect is the menu disagreeing with the
+                                  picture. */}
+                              {TV_CLARITY.map((c, i) => (
+                                <OptRow key={c} on={settings.enhance && settings.clarity === c} label={`${t('menu.clarity')} · ${t(TV_LEVEL_KEYS[i])}`}
+                                  onClick={() => updateSettings({ clarity: c })} />
+                              ))}
+                            </>
+                          ) : (
+                            <>
+                              <div className="vp-enh-row"><span className="vp-enh-label">{t('ctl.grain')}</span></div>
+                              <div className={`vp-enh-slider${settings.enhance ? '' : ' off'}`}>
+                                <input type="range" min={0} max={0.35} step={0.01} value={settings.grain} disabled={!settings.enhance} onChange={(e) => updateSettings({ grain: +e.target.value })} aria-label={t('ctl.grain')} />
+                                <span className="vp-enh-val">{Math.round(settings.grain * 100)}%</span>
+                              </div>
+                              <OptRow on={settings.enhance && settings.clarity > 0} label={t('menu.clarity')} onClick={() => updateSettings({ clarity: settings.clarity > 0 ? 0 : 0.5 })} />
+                              <div className={`vp-enh-slider${settings.enhance && settings.clarity > 0 ? '' : ' off'}`}>
+                                <input type="range" min={0} max={1} step={0.05} value={settings.clarity} disabled={!settings.enhance || settings.clarity <= 0} onChange={(e) => updateSettings({ clarity: +e.target.value })} aria-label={t('ctl.clarity')} />
+                                <span className="vp-enh-val">{Math.round(settings.clarity * 100)}%</span>
+                              </div>
+                            </>
+                          )}
                         </>
                       )}
                     </div>
                   </div>
-                ) : (
-                  <>
-                {/* Subtitles */}
-                <div className={`vp-acc${acc.subs ? ' open' : ''}`}>
-                  <button className="vp-acc-head" aria-expanded={acc.subs} onClick={() => toggleAcc('subs')}>
-                    {AccIc}<span className="vp-acc-label">{t('menu.subtitles')}</span>
-                    <span className="vp-acc-val">{currentSub < 0 ? t('menu.off') : (subs[currentSub]?.label || subs[currentSub]?.lang || '')}</span>
-                  </button>
-                  <div className="vp-acc-body">
-                    <OptRow on={currentSub < 0} label={t('menu.off')} onClick={() => selectSub(-1)} />
-                    {subs.map((s, i) => (
-                      <OptRow key={`${s.source || ''}${s.url}`} on={i === currentSub}
-                        label={s.label || s.lang || `${t('menu.track')}${i + 1}`}
-                        sub={s.source} onClick={() => selectSub(i)} />
-                    ))}
-                    {/* The three end states are deliberately distinct: still asking, asked
-                        and nothing came back, and nothing was asked because no subtitle
-                        add-on is installed. The last one is the only one the user can act
-                        on, and conflating it with "none found" is what made a missing
-                        feature look like a missing subtitle. */}
-                    {subsLoading && <div className="vp-opt" style={{ opacity: 0.5 }}>{t('menu.loading_subs')}</div>}
-                    {!subsLoading && subs.length === 0 && (
-                      <div className="vp-opt" style={{ opacity: 0.5 }}>
-                        {source.subsQuery ? t('menu.no_subs_found') : t('menu.install_sub_addon')}
-                      </div>
-                    )}
-                    {subFailed && <div className="vp-menu-note">{t('menu.sub_failed')}</div>}
-                  </div>
-                </div>
-                {/* Audio language (HLS renditions) */}
-                {audioTracks.length > 1 && (
-                  <div className={`vp-acc${acc.audio ? ' open' : ''}`}>
-                    <button className="vp-acc-head" aria-expanded={acc.audio} onClick={() => toggleAcc('audio')}>
-                      {AccIc}<span className="vp-acc-label">{t('menu.audio_lang')}</span>
-                      <span className="vp-acc-val">{audioTracks.find((a) => a.i === curAudio)?.name || ''}</span>
-                    </button>
-                    <div className="vp-acc-body">
-                      {audioTracks.map((a) => <OptRow key={a.i} on={a.i === curAudio} label={a.name} onClick={() => selectAudio(a.i)} />)}
-                    </div>
-                  </div>
-                )}
-                {/* Playback speed */}
-                <div className={`vp-acc${acc.speed ? ' open' : ''}`}>
-                  <button className="vp-acc-head" aria-expanded={acc.speed} onClick={() => toggleAcc('speed')}>
-                    {AccIc}<span className="vp-acc-label">{t('menu.speed')}</span><span className="vp-acc-val">{rate}×</span>
-                  </button>
-                  <div className="vp-acc-body">
-                    <div className="vp-speeds">
-                      {SPEEDS.map((r) => <button key={r} type="button" className={`vp-speed${r === rate ? ' on' : ''}`} onClick={() => setSpeed(r)}>{r}×</button>)}
-                    </div>
-                  </div>
-                </div>
-                {/* QUALITY / SOURCE (HLS levels).
-                    On the web this section appears only when there is a genuine choice to make —
-                    a single-level stream has nothing to offer and an inert row is clutter beside
-                    a cursor. The TV keeps it up unconditionally, which is the opposite call for
-                    the opposite reason: this menu is walked by a D-pad, and a list whose LENGTH
-                    depends on the stream means the row under the remote changes identity between
-                    one title and the next. Muscle memory is worth more here than one saved row,
-                    so the four sections are always the same four, in the same order. */}
-                {(IS_TV || levels.length > 1) && (
-                  <div className={`vp-acc${acc.quality ? ' open' : ''}`}>
-                    <button className="vp-acc-head" aria-expanded={acc.quality} onClick={() => toggleAcc('quality')}>
-                      {AccIc}<span className="vp-acc-label">{t('menu.quality')}</span>
-                      <span className="vp-acc-val">{curLevel < 0 ? t('menu.auto') : levelLabel(levels.find((l) => l.i === curLevel) || {})}</span>
-                    </button>
-                    <div className="vp-acc-body">
-                      <OptRow on={curLevel < 0} label={t('menu.auto')} onClick={() => setLevel(-1)} />
-                      {[...levels].sort((a, b) => (b.height || 0) - (a.height || 0)).map((l) => <OptRow key={l.i} on={l.i === curLevel} label={levelLabel(l)} onClick={() => setLevel(l.i)} />)}
-                    </div>
-                  </div>
-                )}
-                {/* Picture enhance */}
-                <div className={`vp-acc${acc.enhance ? ' open' : ''}`}>
-                  <button className="vp-acc-head" aria-expanded={acc.enhance} onClick={() => toggleAcc('enhance')}>
-                    {AccIc}<span className="vp-acc-label">{t('menu.enhance')}</span>
-                    <span className="vp-acc-val">{settings.enhance ? `${Math.round(settings.grain * 100)}%` : t('menu.off')}</span>
-                  </button>
-                  <div className="vp-acc-body">
-                    {/* SWITCHING IT ON HAS TO LAND ON A LEVEL, not just raise a flag.
-                        `enhance: !enhance` alone can produce an enhancement that is on and doing
-                        nothing: the grain rows set `enhance: g > 0`, so choosing "Grain · Off" is
-                        how you turn the whole thing off — which leaves `grain` at 0. Switching
-                        back on from here then gave 0% grain, no row ticked, and a picture
-                        identical to the one before the press.
-                        So a level that is at Off comes up at LOW, which is where the defaults
-                        start and the gentlest thing that is actually visible. A level the viewer
-                        has already set to Medium or High is left alone — this is a resume, not a
-                        reset, and re-picking their strength on every toggle would be the more
-                        annoying failure of the two. */}
-                    <OptRow on={settings.enhance} label={t('menu.enhance_on')}
-                      onClick={() => updateSettings(settings.enhance
-                        ? { enhance: false }
-                        : {
-                            enhance: true,
-                            grain: settings.grain > 0 ? settings.grain : TV_GRAIN[1],
-                            clarity: settings.clarity > 0 ? settings.clarity : TV_CLARITY[1],
-                          })} />
-                    {/* PRESETS ON THE TV, SLIDERS ON THE WEB — see TV_GRAIN above. A range input
-                        is the one control a D-pad cannot get back out of: arrows move the value,
-                        so nothing is left to move focus, and the remote is trapped on it. */}
-                    {IS_TV ? (
-                      <>
-                        {TV_GRAIN.map((g, i) => (
-                          <OptRow key={g} on={settings.enhance && settings.grain === g} label={`${t('ctl.grain')} · ${t(TV_LEVEL_KEYS[i])}`}
-                            onClick={() => updateSettings({ enhance: g > 0, grain: g })} />
-                        ))}
-                      </>
-                    ) : (
-                      <div className={`vp-enh-slider${settings.enhance ? '' : ' off'}`}>
-                        <input type="range" min={0} max={0.35} step={0.01} value={settings.grain} disabled={!settings.enhance} onChange={(e) => updateSettings({ grain: +e.target.value })} aria-label={t('ctl.grain')} />
-                        <span className="vp-enh-val">{Math.round(settings.grain * 100)}%</span>
-                      </div>
-                    )}
-                    {IS_TV ? (
-                      <>
-                        {/* GATED ON `enhance`, THE SAME WAY THE GRAIN ROWS ARE. The tick was on
-                            `clarity === c` alone, so with the enhancement switched off the menu
-                            still showed "Clarity · Low" marked — while the sharpen filter it
-                            names is applied only when `enhance` is true (see the <video>'s
-                            `filter` above). A ✓ against something that is not in effect is worse
-                            than no ✓: it is the menu disagreeing with the picture. */}
-                        {TV_CLARITY.map((c, i) => (
-                          <OptRow key={c} on={settings.enhance && settings.clarity === c} label={`${t('menu.clarity')} · ${t(TV_LEVEL_KEYS[i])}`}
-                            onClick={() => updateSettings({ clarity: c })} />
-                        ))}
-                      </>
-                    ) : (
-                      <>
-                        <OptRow on={settings.clarity > 0} label={t('menu.clarity')} onClick={() => updateSettings({ clarity: settings.clarity > 0 ? 0 : 0.5 })} />
-                        <div className={`vp-enh-slider${settings.clarity > 0 ? '' : ' off'}`}>
-                          <input type="range" min={0} max={1} step={0.05} value={settings.clarity} disabled={settings.clarity <= 0} onChange={(e) => updateSettings({ clarity: +e.target.value })} aria-label={t('ctl.clarity')} />
-                          <span className="vp-enh-val">{Math.round(settings.clarity * 100)}%</span>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-                  </>
-                )}
               </div>
               )}
             </div>
-            {/* NEITHER OF THESE MEANS ANYTHING ON A TELEVISION. The app is already the whole
-                screen, so fullscreen has nothing to toggle, and picture-in-picture has no second
-                window to go to. Left in, they are two dead stops the D-pad has to walk past to
-                reach the gear — which on a remote is a real cost, unlike an unused button on a
-                web page. */}
-            {!IS_TV && (document.pictureInPictureEnabled || webkitPip) && (
-              <button className="vp-icon" id="vpPip" aria-label={t('ctl.pip_a')} onClick={togglePip}>{IcPip}</button>
-            )}
-            {!IS_TV && <button className="vp-icon" id="vpFs" aria-label={t('ctl.fs_a')} aria-pressed={fs} onClick={toggleFs}>{IcFs}</button>}
     </div>
   );
+
+  /* THE TAIL OF THE SCRUBBER LINE — web only. Three controls a television has no use for and a
+   * browser cannot do without: NEITHER fullscreen nor picture-in-picture means anything on a set
+   * that is already the whole screen, and volume is on the remote. On a page they are the only
+   * way to those three things, so they sit after the duration, small, at the end of the one
+   * line, where the eye is not. Phones drop volume and PiP again in CSS — hardware buttons and
+   * the OS's own PiP gesture do both — and on iOS the slider is dropped by the markup, because
+   * `video.volume` cannot be set there at all (see VOL_LOCKED). */
+  const tailRow = !IS_TV && (
+    <div className="vp-controls vp-tail">
+      <div className="vp-vol">
+        <button className="vp-icon" id="vpMute" aria-label={t('ctl.mute_a')} aria-pressed={muted} onClick={toggleMute}>{IcMute}</button>
+        {!VOL_LOCKED && (
+          <input type="range" className="vp-vol-slider" id="vpVol" min={0} max={1} step={0.02} value={muted ? 0 : vol} aria-label={t('ctl.vol_a')}
+            onChange={(e) => { const v = videoRef.current; if (v) { v.volume = +e.target.value; v.muted = +e.target.value === 0; } }} />
+        )}
+      </div>
+      {(document.pictureInPictureEnabled || webkitPip) && (
+        <button className="vp-icon" id="vpPip" aria-label={t('ctl.pip_a')} onClick={togglePip}>{IcPip}</button>
+      )}
+      <button className="vp-icon" id="vpFs" aria-label={t('ctl.fs_a')} aria-pressed={fs} onClick={toggleFs}>{IcFs}</button>
+    </div>
+  );
+
+  /* THE PLAY DISC. BOTH GLYPHS ARE ALWAYS MOUNTED, one on top of the other, and the class decides
+   * which is visible. Swapping `playing ? IcPause : IcPlay` replaces the node, and a node that
+   * does not exist yet cannot animate out of anything — the best that gets you is the incoming
+   * mark appearing while the outgoing one has already blinked away. Stacked, the change is one
+   * state on one element: two opacities and two transforms cross over each other, which is the
+   * only kind of transition that reads as one thing BECOMING another rather than as a cut.
+   *
+   * A BADGE ON THE TV, A BUTTON ON THE WEB. On a television it is not focusable: OK toggles
+   * playback from transport mode and from the scrubber, so a second play control in the D-pad's
+   * path would be one more stop that does what OK already did, and TvSpatialNav would offer it
+   * beside the bar. On the web it is the play button — the only one, now that the centre disc
+   * is gone (its note is below) — and a <button> is what a click and a Tab key both expect. */
+  const discInner = (
+    <>
+      <span className="ic-play">{IcPlay}</span>
+      <span className="ic-pause">{IcPause}</span>
+    </>
+  );
+  const playDisc = IS_TV
+    ? <div className={`vp-play-disc${playing ? ' playing' : ''}`} aria-hidden="true">{discInner}</div>
+    : <button type="button" className={`vp-play-disc${playing ? ' playing' : ''}`} id="vpPlay" aria-label={t('ctl.play_a')} onClick={togglePlay}>{discInner}</button>;
 
   return (
     <div
       /* `tv-nav` is the flag TvSpatialNav watches: present means the D-pad drives the chrome,
-         absent means the arrows are transport and it must stand down. `tv` is the styling hook
-         for the 10-foot control bar. */
-      className={`vp-overlay open${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ''}${IS_TV && tvNav ? ' tv-nav' : ''}${IS_TV && railShown ? ' tv-rail' : ''}`}
+         absent means the arrows are transport and it must stand down. `tv` / `web` are the
+         styling hooks for the two builds' own stylesheets; `tv-rail` lifts the bar clear of the
+         episode shelf on both. */
+      className={`vp-overlay open${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}`}
       id="playerOverlay"
       ref={overlayRef}
       /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
@@ -2104,7 +2105,15 @@ export default function VideoPlayer() {
       tabIndex={IS_TV ? -1 : undefined}
       style={{ ['--grain' as string]: settings.enhance ? settings.grain : 0 }}
       onPointerMove={bump}
-      onClick={(e) => { if (e.target === videoRef.current) togglePlay(); }}
+      onClick={(e) => {
+        /* A CLICK OUTSIDE A SHEET CLOSES IT — the settings sheet and the audio popup are the two
+           layers on this screen with no close button of their own, and a mouse has no Back key.
+           The click that closes one does nothing else: it must not also toggle playback. */
+        const el = e.target as HTMLElement;
+        if (menuOpen && !el.closest('#vpMenu, #vpGear')) { setMenuOpen(false); menuClosedAt.current = performance.now(); return; }
+        if (audioOpen && !el.closest('.vp-audio-menu, #vpAudio')) { setAudioOpen(false); menuClosedAt.current = performance.now(); return; }
+        if (e.target === videoRef.current) togglePlay();
+      }}
     >
       {/* unsharp-mask filter for the Clarity control (kernel rewritten live above) */}
       <svg aria-hidden="true" width="0" height="0" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
@@ -2217,9 +2226,10 @@ export default function VideoPlayer() {
             <span className="rip" />
             <span className="lbl">{(seekHud?.side === 'right' ? seekHud.secs : 10)}s{IcFF}</span>
           </div>
-          <div className={`vp-vhud${vHud ? ' show' : ''}`}>
+          <div className={`vp-vhud${vHud ? ' show' : ''}${vHud?.note ? ' has-note' : ''}`}>
             <span className="ic">{vHud?.kind === 'bright' ? IcSun : (vHud && vHud.val <= 0.001 ? IcVolMuteHud : IcVolHud)}</span>
             <span className="bar"><i style={{ width: `${Math.round((vHud?.val ?? 0) * 100)}%` }} /></span>
+            {vHud?.note && <span className="note">{vHud.note}</span>}
           </div>
         </div>
       )}
@@ -2271,80 +2281,48 @@ export default function VideoPlayer() {
           </div>
           <div className="vp-top-right">
             <div className="vp-status" id="playerStatus" role="status" aria-live="polite" />
+            {controlsRow}
             {/* NO CLOSE BUTTON ON A TELEVISION. Back on the remote closes the player — that is
                 the gesture people already use to leave anything, it costs no travel, and it is
                 the one this build's Back chain now ends in (see `registerBackHandler`). A ✕ in
                 the far corner was a D-pad journey to do what one press already did, and it was
-                the target focus fell back to whenever anything else went wrong. */}
+                the target focus fell back to whenever anything else went wrong. The web keeps
+                it, last in the corner: a phone has no Escape key. */}
             {!IS_TV && <button className="vp-icon" id="vpClose" title="Close (Esc)" aria-label={t('player.close')} onClick={close}>✕</button>}
-            {/* The settings group lives up here on a TV — see the note where it is built. */}
-            {IS_TV && controlsRow}
           </div>
         </div>
 
-        {/* THE CENTRE DISC IS WEB-ONLY NOW. On a TV it had already been demoted from a button to a
-            badge — it could not be focusable, because it is a second, ambiguous play control in the
-            middle of the screen and TvSpatialNav would offer it above the bar's own ▶ — which left
-            it as a "this is paused" sign, drawn as a dark circle over the middle of the picture.
-            That is a caption on a still frame nobody asked for: the control bar comes up with the
-            same glyph on its own disc whenever playback stops, so the state was already stated
-            somewhere the viewer is looking, by something they can actually press. Two signs for
-            one fact, and this was the one sitting on the film. */}
-        {!IS_TV && (
-          <button className={`vp-center${playing ? ' hidden' : ''}`} aria-label="Play / Pause" onClick={togglePlay}>
-            <span className="ic">{playing ? IcPause : IcPlay}</span>
-          </button>
-        )}
+        {/* THE CENTRE DISC IS GONE FROM BOTH BUILDS. On the TV it had already been demoted from a
+            button to a badge — a "this is paused" sign drawn as a dark circle over the middle of
+            the picture. That is a caption on a still frame nobody asked for: the control bar comes
+            up with the same glyph on its own disc whenever playback stops, so the state was
+            already stated somewhere the viewer is looking, by something they can actually press.
+            Two signs for one fact, and this was the one sitting on the film. The web's was a real
+            button, and the bar's disc is one there too now, at a size a thumb can hit. */}
 
         <div className="vp-bottom">
-          {/* ONE LINE ON A TELEVISION: disc, elapsed, bar, duration. The buttons that used to sit
-              under the scrubber are gone (skip and mute to the remote, CC and Episodes to the
-              menu and the shelf) and the settings group has moved to the top-right corner, which
-              leaves the transport with nothing to say that this row cannot say inline. Each time
-              sits at the end of the bar it describes rather than both being crammed into one
-              "13:27 / 23:40" cell. */}
-          {IS_TV && (
-            <>
-              {/* A BADGE, NOT A BUTTON — the same decision the centre disc documents. It is not
-                  focusable: OK toggles playback from transport mode and from the scrubber, so a
-                  second play control in the D-pad's path would be one more stop that does what
-                  OK already did, and TvSpatialNav would offer it beside the bar. */}
-              {/* BOTH GLYPHS ARE ALWAYS MOUNTED, one on top of the other, and the class decides
-                  which is visible. Swapping `playing ? IcPause : IcPlay` replaces the node, and a
-                  node that does not exist yet cannot animate out of anything — the best that gets
-                  you is the incoming mark appearing while the outgoing one has already blinked
-                  away. Stacked, the change is one state on one element: two opacities and two
-                  transforms cross over each other, which is the only kind of transition that
-                  reads as one thing BECOMING another rather than as a cut. It costs a second
-                  inert <svg> in the DOM, which is nothing beside the alternative. */}
-              <div className={`vp-play-disc${playing ? ' playing' : ''}`} aria-hidden="true">
-                <span className="ic-play">{IcPlay}</span>
-                <span className="ic-pause">{IcPause}</span>
-              </div>
-              {/* The scrub offset used to ride here, inline, in red. It had to move: this cell is
-                  in the flex row that also holds the bar, so a number appearing inside it widened
-                  the cell and squeezed the scrubber — the bar changed length every time the viewer
-                  touched Left or Right, which is the one element that must not move while it is
-                  being aimed. It now floats over the bar instead, out of flow. See `.vp-seek-cue`
-                  below the scrubber. */}
-              {/* THE CELL IS SIZED FROM THE DURATION, NOT FROM ITS OWN CONTENTS. `tabular-nums`
-                  alone was not enough and the comment on `.vp-t` used to claim otherwise: equal
-                  digit widths keep 1:11 and 9:99 the same size, but they do nothing about the
-                  digit COUNT, so 9:59 → 10:00 still widened this cell and pushed the bar's left
-                  end along with it — mid-scrub, while the viewer is aiming at it. The duration is
-                  fixed for the whole film and is always the longest the elapsed time can get, so
-                  measuring the cell against it holds the ends still for good. */}
-              <span className="vp-t vp-t-cur" id="vpCur" style={{ minWidth: `${clockCh}ch` }}>{fmt(shownTime)}</span>
-            </>
-          )}
+          {/* ONE LINE: disc, elapsed, bar, duration — and on the web, the three tail controls.
+              The buttons that used to sit under the scrubber are gone (skip and mute to the
+              remote and the keyboard, CC to the menu, Episodes to the shelf) and the settings
+              group has moved to the top-right corner, which leaves the transport with nothing
+              to say that this row cannot say inline. Each time sits at the end of the bar it
+              describes rather than both being crammed into one "13:27 / 23:40" cell. */}
+          {playDisc}
+          {/* THE CELL IS SIZED FROM THE DURATION, NOT FROM ITS OWN CONTENTS. `tabular-nums`
+              alone was not enough: equal digit widths keep 1:11 and 9:99 the same size, but they
+              do nothing about the digit COUNT, so 9:59 → 10:00 still widened this cell and pushed
+              the bar's left end along with it — mid-scrub, while the viewer is aiming at it. The
+              duration is fixed for the whole film and is always the longest the elapsed time can
+              get, so measuring the cell against it holds the ends still for good. */}
+          <span className="vp-t vp-t-cur" id="vpCur" style={{ minWidth: `${clockCh}ch` }}>{fmt(shownTime)}</span>
           <div
             className={`vp-progress${seekPreview != null ? ' seeking' : ''}${ramping ? ' ramping' : ''}${landed ? ' landed' : ''}`}
             id="vpProgress"
             ref={barRef}
             onPointerDown={onBarPointerDown}
             /* On the TV the bar is a control in its own right — the remote lands on it and
-               Left/Right move the preview, which is exactly a slider. On the web it stays a
-               click target and nothing about it changes. */
+               Left/Right move the preview, which is exactly a slider. On the web it is a drag
+               target and the keyboard's arrows do the same job from anywhere. */
             tabIndex={IS_TV ? 0 : undefined}
             role={IS_TV ? 'slider' : undefined}
             aria-label={IS_TV ? t('player.seek') : undefined}
@@ -2355,21 +2333,21 @@ export default function VideoPlayer() {
           >
             <div className="vp-bar">
               <div className="vp-buffered" id="vpBuffered" style={{ width: `${bufPct}%` }} />
-              <div className="vp-played" id="vpPlayed" style={{ width: `${pct}%` }} />
+              <div className="vp-played" id="vpPlayed" ref={playedRef} style={{ width: `${pct}%` }} />
               {/* THE GROUND THE SCRUB HAS COVERED, drawn between where the video is and where it
                   would land. Absolutely positioned inside the bar, so it costs the layout nothing
                   and the bar keeps its length. */}
-              {IS_TV && seekPreview != null && spanWidth > 0 && (
+              {seekPreview != null && spanWidth > 0 && (
                 <div className="vp-seek-span" style={{ left: `${spanFrom}%`, width: `${spanWidth}%` }} aria-hidden="true" />
               )}
-              {IS_TV && seekPreview != null && <div className="vp-seek-origin" style={{ left: `${curPct}%` }} aria-hidden="true" />}
-              <div className="vp-thumb" id="vpThumb" style={{ left: `${pct}%` }} />
+              {seekPreview != null && <div className="vp-seek-origin" style={{ left: `${curPct}%` }} aria-hidden="true" />}
+              <div className="vp-thumb" id="vpThumb" ref={thumbRef} style={{ left: `${pct}%` }} />
             </div>
             {/* THE OFFSET, FLOATING OVER THE BAR AND CLAMPED OFF ITS ENDS. `left` is clamped in px
                 rather than in % because the guard is about the pill's own width, which does not
                 scale with the bar: near 0:00 an uncorrected pill would hang off the left edge of
                 the screen. */}
-            {IS_TV && seekDelta !== 0 && (
+            {seekDelta !== 0 && (
               <div
                 className={`vp-seek-cue${seekDelta > 0 ? ' fwd' : ' back'}`}
                 style={{ left: `clamp(64px, ${pct}%, calc(100% - 64px))` }}
@@ -2385,8 +2363,8 @@ export default function VideoPlayer() {
               </div>
             )}
           </div>
-          {IS_TV && <span className="vp-t vp-t-dur" id="vpDur" style={{ minWidth: `${clockCh}ch` }}>{fmt(dur)}</span>}
-          {!IS_TV && controlsRow}
+          <span className="vp-t vp-t-dur" id="vpDur" style={{ minWidth: `${clockCh}ch` }}>{fmt(dur)}</span>
+          {tailRow}
         </div>
       </div>
 
@@ -2407,18 +2385,20 @@ export default function VideoPlayer() {
         </button>
       )}
 
-      {/* IN-PLAYER EPISODES (series) — SAME STATE, SAME `playEp`, TWO INSTRUMENTS. The web keeps
-          the right-hand slide-in panel; the television gets the bottom rail. `epPanelOpen` drives
-          both, so the Episodes button, the Back chain and the focus-restore effect are untouched
-          and there is only ever one "episodes are open" truth.
+      {/* IN-PLAYER EPISODES (series) — THE SHELF, ON BOTH BUILDS. `epPanelOpen` drives it, so
+          the Episodes button, the keyboard's Down, the remote's Down, the Back chain and the
+          focus-restore effect all share one "episodes are open" truth. The right-hand slide-in
+          panel the web used to have is gone: a vertical list pinned to the right edge covered
+          half the picture to show 118px thumbnails, and the next episode you want is one press
+          away in the direction you are already looking — down, from the bar.
 
-          The TV branch is unmounted when closed, for the same reason the gear menu is: parked
+          Unmounted when closed, for the same reason the settings sheet is on the TV: parked
           off-screen it still has real geometry, so every card would be a live D-pad target while
-          the shelf was shut. It also saves the season fetches on mount. The web branch stays
-          mounted so it can slide. */}
-      {source.series && (IS_TV
-        ? railMounted && <EpisodeRail open={railShown} series={source.series} onClose={() => setEpPanelOpen(false)} />
-        : <EpisodePanel open={epPanelOpen} series={source.series} onClose={() => setEpPanelOpen(false)} />)}
+          the shelf was shut. It also saves the season fetches on mount. `railMounted` outlives
+          `epPanelOpen` by the length of the slide-down so the close can animate. */}
+      {source.series && railMounted && (
+        <EpisodeRail open={railShown} series={source.series} onClose={() => setEpPanelOpen(false)} />
+      )}
     </div>
   );
 }

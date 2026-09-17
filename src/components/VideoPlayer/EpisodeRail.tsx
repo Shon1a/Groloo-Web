@@ -6,17 +6,23 @@ import type { Episode } from '../../lib/types';
 import type { PlaySeries } from '../../stores/player';
 import { scrollCardToSlot } from './railScroll';
 
-/* THE TV EPISODE RAIL — a horizontal shelf of 16:9 cards under the scrubber, reached by
- * pressing Down from it. The television counterpart of `EpisodePanel`, which stays exactly
- * as it is on the web.
+/* THE EPISODE RAIL — a horizontal shelf of 16:9 cards under the scrubber, reached by pressing
+ * Down from it on a remote or a keyboard, and by the Episodes button with a mouse. Both builds
+ * mount it; it replaced the web's right-hand slide-in panel (`EpisodePanel`, deleted).
  *
- * WHY NOT JUST USE THE SIDE PANEL ON A TV. It works, and it is the wrong shape for the room.
- * The panel is a vertical list pinned to the right edge: it covers close to half the picture,
- * its rows are sized for a pointer, and reaching it is a trip to a button in the corner of the
- * control bar. None of that is a defect at 60cm with a mouse. At three metres with a D-pad the
- * episode you want next is one press away in the direction you are already looking — down,
- * from the bar — and it should be a wide still you can read the title off, not a 118px
- * thumbnail. Same data, same `playEp`, different instrument.
+ * WHY THE SIDE PANEL LOST, on the television first and then everywhere. The panel was a
+ * vertical list pinned to the right edge: it covered close to half the picture, its rows were
+ * sized for a pointer, and reaching it was a trip to a button in the corner of the control bar.
+ * At three metres with a D-pad the episode you want next is one press away in the direction you
+ * are already looking — down, from the bar — and it should be a wide still you can read the
+ * title off, not a 118px thumbnail. That turned out to be as true at 60cm: the shelf covers a
+ * third of the picture instead of half of it, and it shows the synopsis. Same data, same
+ * `playEp`, one instrument.
+ *
+ * THE WEB SCROLLS IT WITH A WHEEL. A mouse wheel is vertical and the strip is horizontal, so
+ * `onWheel` below turns the one into the other; a trackpad's horizontal swipe and a phone's
+ * finger already work through the browser's own overflow scrolling. On the TV there is no
+ * wheel, and the handler is inert.
  *
  * WHAT IS IN IT: the whole of the season being watched, then the whole of the next one, in one
  * continuous strip. Not "what comes after this episode", which is the obvious reading of a
@@ -142,7 +148,10 @@ export default function EpisodeRail({ open, series, onClose }: { open: boolean; 
           purely decorative — the real focus is still on a button, which is what the remote, the
           spatial nav and a screen reader all work from. */}
       <div className="vp-eprail-viewport">
-        <div className="vp-eprail-track" ref={trackRef}>
+        <div className="vp-eprail-track" ref={trackRef}
+          /* Only a vertical wheel is redirected; a horizontal one (trackpad, tilt wheel) already
+             scrolls the strip natively and would move twice if it were added here too. */
+          onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}>
         {items.length === 0
           ? <div className="vp-eprail-empty">{cur.isLoading ? t('common.loading') : t('modal.episodes_unavailable')}</div>
           : items.map((it, i) => (
