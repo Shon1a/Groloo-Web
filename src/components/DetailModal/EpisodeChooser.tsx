@@ -35,7 +35,9 @@ import type { Episode, MetaDetail } from '../../lib/types';
  *     the deck a few cards further. The first few pixels decide whether the swipe is the deck's
  *     or the page's (vertical and the deck can move that way = the deck's; anything else = the
  *     page's), which is the same chaining rule as the wheel, done by hand because a touch
- *     gesture cannot be handed back once it has been claimed.
+ *     gesture cannot be handed back once it has been claimed. While it is held the fan is
+ *     positioned by a frame loop writing straight to the cards (see the drag effect) — React
+ *     renders only when a card enters or leaves the window, and once more on release.
  *   · A HELD MOUSE drags it the same way: press on any card, pull, release. Same slop, same
  *     snap and fling; the only difference is that a mouse drag has no page meaning, so the deck
  *     never hands it over — it rubber-bands at the ends instead. A drag is not a click: the
@@ -83,8 +85,17 @@ const WHEEL_GESTURE_MS = 200;
 const WHEEL_TAIL_MS = 350;
 
 /* ---- TOUCH ------------------------------------------------------------------------------- */
-/** Movement before a touch is judged vertical or horizontal — the usual slop. */
+/** Movement before a held mouse is judged vertical or horizontal — the usual slop. */
 const SWIPE_SLOP = 8;
+/** The same decision for a finger, made sooner, and the reason is a race. Chrome on Android
+ *  drops touchmoves inside its own ~8px slop and starts the page SCROLL the moment a touchmove
+ *  is dispatched without being cancelled — so a first event that landed at 7px was left
+ *  undecided here, went uncancelled, and the browser took the gesture for the page; every
+ *  touchmove after that is uncancelable, the deck then claimed the same finger at 8px, and the
+ *  two scrolled together. A move Chrome bothers to deliver has already cleared its slop, so a
+ *  few pixels is enough to read its direction, and cancelling the FIRST delivered move is the
+ *  only way to keep the page still. */
+const TOUCH_SLOP = 4;
 /* ---- THE GLIDE: what the deck does after the finger leaves ------------------------------
  * A release used to project the finger's speed a fixed 120ms ahead, round that to a whole card
  * and hand the rest to one 340ms ease — so every flick travelled about the same distance and
@@ -126,6 +137,8 @@ const MOTION_Q = typeof window !== 'undefined' && window.matchMedia
 
 interface CardProps {
   ep: Episode;
+  /** the card's index in the season — what the drag loop reads back off the DOM (`data-idx`) */
+  idx: number;
   /** distance from the focused card; fractional while a finger is dragging */
   offset: number;
   on: boolean;
@@ -137,7 +150,7 @@ interface CardProps {
   onPick: () => void;
 }
 
-function EpisodeCard({ ep, offset, on, lifted, picked, pct, leftSec, intro, onPick }: CardProps) {
+function EpisodeCard({ ep, idx, offset, on, lifted, picked, pct, leftSec, intro, onPick }: CardProps) {
   const t = useT();
   const [broken, setBroken] = useState(false);
   /* The still fades up when it arrives — see the note on `.ep-art img` in app.css. `complete` is
@@ -175,6 +188,7 @@ function EpisodeCard({ ep, offset, on, lifted, picked, pct, leftSec, intro, onPi
       type="button"
       className={`ep-card${on ? ' on' : ''}${on && lifted ? ' is-lifted' : ''}${picked ? ' picked' : ''}${watched ? ' watched' : ''}`}
       style={style}
+      data-idx={idx}
       tabIndex={on ? 0 : -1}
       aria-hidden={on ? undefined : true}
       aria-current={picked ? 'true' : undefined}
@@ -269,6 +283,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
   const activeRef = useRef(0);
   const lastRef = useRef(-1);
   const dragRef = useRef<number | null>(null);
+  const liftedRef = useRef(false);
   activeRef.current = active;
   lastRef.current = episodes.length - 1;
 
@@ -409,6 +424,48 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
     /** the in-flight glide, if there is one */
     let raf = 0;
     const stopGlide = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
+
+    /* ---- THE FRAME IS WRITTEN TO THE DOM, NOT RENDERED THROUGH REACT --------------------------
+     * Every touchmove used to `setDrag(frac)`, and every one of those re-rendered the chooser and
+     * its six cards — a component function, a `place()` and a reconcile per card, per event, and
+     * a phone reports touchmove at up to 120Hz. None of that work produced anything but six new
+     * inline styles. So a moving finger now sets those six styles itself, coalesced to one write
+     * per animation frame (three touchmoves in a frame are one paint, not three), and React is
+     * asked to render only when the WINDOW changes — when the fraction crosses a card boundary
+     * and a card has to mount at one end and unmount at the other — and once more on release.
+     *
+     * The two agree by construction: React's render computes exactly `place(idx - centre)` from
+     * the same `drag` it is handed here, so the styles it writes on a window change are the ones
+     * the frame loop would have written, and the loop carries on from them. `data-idx` is how the
+     * loop knows which card is which without React's help.
+     *
+     * `.is-dragging` is put on the deck directly as well as through state, and that is not belt
+     * and braces: it is what turns the card's transition OFF, and it has to be off before the
+     * first direct write lands, or that write is eased over 340ms instead of applied. State
+     * arrives a render later; the classList does not. */
+    let frameRaf = 0;
+    let pending: number | null = null;
+    let lastMid = NaN;
+    const paint = () => {
+      frameRaf = 0;
+      if (pending == null) return;
+      const centre = activeRef.current + pending;
+      el.querySelectorAll<HTMLElement>('.ep-card[data-idx]').forEach((c) => {
+        const p = place(Number(c.dataset.idx) - centre, liftedRef.current);
+        c.style.transform = p.transform;
+        c.style.opacity = String(p.opacity);
+        c.style.zIndex = String(p.zIndex);
+      });
+    };
+    /** Move the fan to `frac`: the DOM this frame, React only if the window of cards moved. */
+    const show = (frac: number) => {
+      dragRef.current = frac;
+      pending = frac;
+      if (!frameRaf) frameRaf = requestAnimationFrame(paint);
+      const mid = Math.round(activeRef.current + frac);
+      if (mid !== lastMid) { lastMid = mid; el.classList.add('is-dragging'); setDrag(frac); }
+    };
+    const stopFrames = () => { if (frameRaf) { cancelAnimationFrame(frameRaf); frameRaf = 0; } pending = null; lastMid = NaN; };
     /* Set when a mouse drag actually moved the deck, so the click the browser fires on release
      * does not ALSO pick or re-aim a card. Cleared by the capture-phase listener that eats it. */
     let swallowClick = false;
@@ -425,7 +482,8 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
      *  swipe would otherwise scroll the modal; a mouse drag has no page meaning, so the deck
      *  keeps it and rubber-bands instead. */
     const decide = (dx: number, dy: number, mayPage: boolean): Gesture['mode'] => {
-      if (Math.abs(dx) < SWIPE_SLOP && Math.abs(dy) < SWIPE_SLOP) return 'undecided';
+      const slop = mayPage ? TOUCH_SLOP : SWIPE_SLOP;   // a finger decides sooner — see TOUCH_SLOP
+      if (Math.abs(dx) < slop && Math.abs(dy) < slop) return 'undecided';
       if (mayPage) {
         if (Math.abs(dx) > Math.abs(dy)) return 'page';
         const ahead = dy < 0;
@@ -445,12 +503,14 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
       const hi = lastRef.current - activeRef.current;
       if (frac < lo) frac = lo + (frac - lo) * RUBBER;
       else if (frac > hi) frac = hi + (frac - hi) * RUBBER;
-      dragRef.current = frac;
-      setDrag(frac);
+      show(frac);
     };
     /** Land on a whole card. Dropping `drag` hands the last fraction of a card back to
-     *  `.ep-card`'s transition, so a glide eases into its place instead of cutting to it. */
+     *  `.ep-card`'s transition, so a glide eases into its place instead of cutting to it.
+     *  React takes the frame back here: its render writes the whole-card placements and drops
+     *  `.is-dragging`, and the transition carries the cards the rest of the way. */
     const settle = (frac: number) => {
+      stopFrames();
       const target = clamp(Math.round(activeRef.current + frac), 0, lastRef.current);
       walked.current = true;
       activeRef.current = target;
@@ -474,8 +534,10 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
         // the ends stop it dead rather than rubber-banding: there is nothing past them to show
         if (frac <= lo) { frac = lo; v = 0; } else if (frac >= hi) { frac = hi; v = 0; }
         if (Math.abs(v) < GLIDE_MIN_V) { raf = 0; settle(frac); return; }
-        dragRef.current = frac;
-        setDrag(frac);
+        // already inside a frame callback: paint now rather than queueing a second rAF a frame late
+        show(frac);
+        if (frameRaf) cancelAnimationFrame(frameRaf);
+        paint();
         raf = requestAnimationFrame(step);
       };
       raf = requestAnimationFrame(step);
@@ -565,6 +627,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
     el.addEventListener('click', onClickCapture, true);
     return () => {
       stopGlide();
+      stopFrames();
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
@@ -594,6 +657,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
   const dragging = drag != null;
   // Held through a drag: the lift is where a grabbed card starts from, not a state it leaves.
   const lifted = hover || focusIn;
+  liftedRef.current = lifted;    // the frame loop reads it off the ref
   const centre = active + (drag ?? 0);
   const mid = clamp(Math.round(centre), 0, Math.max(0, episodes.length - 1));
   const base = Math.max(0, mid - DECK_ABOVE);
@@ -638,6 +702,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
               <EpisodeCard
                 key={e.episode}
                 ep={e}
+                idx={idx}
                 offset={idx - centre}
                 on={idx === active}
                 lifted={lifted}

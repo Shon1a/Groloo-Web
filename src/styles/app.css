@@ -1611,10 +1611,19 @@
        repainted six cards for 340ms instead of handing two properties to the GPU. Measured on
        the production build at 4x CPU throttle, per card step: paint 24.0ms -> 5.4ms, compositor
        commit 44.2ms -> 21.4ms, style 17.5ms -> 12.2ms, script 10.7ms -> 8.2ms. The shadow that
-       used to fade now lives on .ep-card.on::after and cross-fades on opacity instead.
-       `will-change:transform,opacity` was measured here too and changes NOTHING (24.5ms paint,
-       i.e. base) — the transition list was the whole story, not layer promotion. */
-    transition:transform .34s cubic-bezier(.2,.7,.2,1),opacity .34s ease}
+       used to fade now lives on .ep-card.on::after and cross-fades on opacity instead. */
+    transition:transform .34s cubic-bezier(.2,.7,.2,1),opacity .34s ease;
+    /* A LAYER PER CARD, ALWAYS — for the finger, not for the step. Measured on the STEP this
+       changed nothing (24.5ms paint either way), and the old note here said so: a running CSS
+       transition already promotes the card, so the step was layered whether or not this said it.
+       A DRAG is different. Under a finger `.is-dragging` turns the transition off and script
+       writes the transform every frame, and a transform written by script promotes nothing — so
+       every frame of a drag re-rastered six scaled stills at device resolution, which on a phone
+       is six ~1170x660 textures redrawn and re-uploaded per frame. Production build, phone
+       emulation at dpr 3, 4x CPU, per drag+glide: raster 39.5ms -> 2.1ms, paint 70 -> 61. With a
+       layer the compositor scales a texture it already holds, which is what native scrolling
+       does and why the poster rows never stutter. Six layers of one card each is the cost. */
+    will-change:transform,opacity}
   /* under a finger or a held mouse the fan tracks the pointer; the snap on release gets the
      transition back. The hand closes while it is held; the stills never start a native drag. */
   .ep-deck.is-dragging .ep-card,.ep-deck.is-dragging .ep-card.on::after{transition:none}
