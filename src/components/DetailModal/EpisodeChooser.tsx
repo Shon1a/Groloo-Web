@@ -62,6 +62,13 @@ import type { Episode, MetaDetail } from '../../lib/types';
  * deck reserves in the modal's flow. */
 const DECK_ABOVE = 2;
 const DECK_BELOW = 3;
+/* AND TWO MORE MOUNTED AT EACH END, OUT OF SIGHT. A card used to exist only while it was in the
+ * fan, so the one about to enter was created — element, <img>, fetch, decode — on the very
+ * frame it became visible, and it came in black and faded up under the finger. Parked cards
+ * (`.ep-parked`, visibility:hidden) hold their still ready two cards before it is needed, and
+ * a card leaving the fan keeps its picture for two cards more in case the finger comes back.
+ * Hidden, they cost no raster; they do cost four more stills per season, which is the price. */
+const DECK_PARK = 2;
 const ABOVE_EXTENT = aboveExtent(DECK_ABOVE);
 const BELOW_EXTENT = belowExtent(DECK_BELOW);
 /* A card is the column's width up to this — the TV's cap, so the forward card is the same size
@@ -99,17 +106,32 @@ const TOUCH_SLOP = 4;
 /* ---- THE GLIDE: what the deck does after the finger leaves ------------------------------
  * A release used to project the finger's speed a fixed 120ms ahead, round that to a whole card
  * and hand the rest to one 340ms ease — so every flick travelled about the same distance and
- * then stopped, and a hard throw and a lazy nudge landed nearly the same place. The deck now
- * keeps the velocity it was let go at and sheds it continuously, the way a thrown thing slows:
- * fast swipe, long run; gentle swipe, short one. Distance is roughly velocity x GLIDE_TAU, so
- * these read as "how far a flick of this speed goes" rather than as tuning constants. */
-/** Speed decays to 1/e of itself every this many ms. */
+ * then stopped, and a hard throw and a lazy nudge landed nearly the same place. The next version
+ * kept the release velocity and shed it exponentially, the way a thrown thing slows — and that
+ * was right about the distance and wrong about the ENDING: the decay ran until it was nearly
+ * still, wherever that happened to be, and only then was the remainder to a whole card handed
+ * to a fresh 340ms ease. Two motions with a seam between them, and when the decay died at x.4
+ * the second one ran BACKWARDS to card x. That reversal is what "the stop is not natural" was.
+ *
+ * Now the destination is chosen at release and the whole motion is one curve into it. Distance
+ * is still velocity x GLIDE_TAU (fast swipe, long run), rounded to a whole card in the flick's
+ * own direction; the curve is a cubic ease-out whose initial slope is set equal to the release
+ * speed, so the cards leave the finger at the speed the finger was moving and lose it
+ * continuously until they are exactly on a card. No seam, no second ease, no reversal — the
+ * deck stops the way a scroll view with paging does. */
+/** Distance a flick carries, in ms of its release speed: rest = position + speed x TAU. */
 const GLIDE_TAU = 320;
-/** Below this speed (cards per ms) the glide is over and the deck settles on the nearest card. */
+/** Below this speed (cards per ms) a release is a lift, not a throw: the deck snaps to the
+ *  nearest card on the card transition instead of gliding. */
 const GLIDE_MIN_V = 0.0016;
 /** The fastest flick the deck will honour — TAU x this is about twelve cards, which is a long
  *  way through a season and still a distance you can aim. */
 const GLIDE_MAX_V = 0.038;
+/** Bounds on the glide's length. The duration comes from the physics (three times distance over
+ *  speed, for a cubic ease-out to leave at the release speed); these only keep a nudge from
+ *  being instant and a crawl from outstaying its welcome. */
+const GLIDE_MIN_MS = 260;
+const GLIDE_MAX_MS = 900;
 /** Velocity is measured only over samples inside this window, so a finger that slides, stops,
  *  and then lifts lets go of a stationary deck instead of the speed it arrived at. */
 const GLIDE_V_WINDOW = 120;
@@ -135,12 +157,38 @@ const MOTION_Q = typeof window !== 'undefined' && window.matchMedia
   ? window.matchMedia('(prefers-reduced-motion: reduce)')
   : null;
 
+/* STILLS THE DECK HAS ALREADY SHOWN, by URL. A card that leaves the mounted range and comes back
+ * is a new <img>, and without this it came back the way it first arrived: blank, then a 450ms
+ * fade — "the pictures go black and load again" on a phone, every time the deck was dragged
+ * back a few cards. The browser still has the bytes; what it does not have is our `shown`
+ * state, so that is what is kept. Module-level on purpose: it outlives the chooser, so opening
+ * the same title twice is also instant. */
+const shownStills = new Set<string>();
+
+/* THE STILL IS ASKED FOR AT THE SIZE THE CARD IS DRAWN AT. `STILL_RENDITION` (w500) is what the
+ * TV deck fetches, and it was all the web deck fetched too — a 500px picture stretched over a
+ * card that is 560 CSS px wide on a desktop at dpr 2 (1120 device px) and 390 at dpr 3 on a
+ * phone (1170): every deck still was being upscaled 2.2x and looked it. `srcset` offers w500
+ * and w780 and lets the browser pick by its own device-pixel ratio against `sizes`, which is
+ * the card's width (the column, capped at CARD_MAX_W); w780 is 50KB against w500's 24KB, and
+ * six of them is what a season costs to show sharply. Deliberately no w1280: at 125KB apiece
+ * it is 2.5x the bytes for detail a 16:9 still under a scrim does not have. Only a TMDB url
+ * has renditions to offer — an add-on's own still passes through `imgW` unchanged, and gets no
+ * srcset rather than one that names the same file twice. */
+const STILL_SIZES = `min(100vw, ${CARD_MAX_W}px)`;
+function stillSources(still: string): { src: string; srcSet?: string } {
+  const w500 = imgW(still, STILL_RENDITION), w780 = imgW(still, 'w780');
+  return w780 === w500 ? { src: w500 } : { src: w500, srcSet: `${w500} 500w, ${w780} 780w` };
+}
+
 interface CardProps {
   ep: Episode;
   /** the card's index in the season — what the drag loop reads back off the DOM (`data-idx`) */
   idx: number;
   /** distance from the focused card; fractional while a finger is dragging */
   offset: number;
+  /** mounted for its picture but outside the fan — see `parked` at the render */
+  parked: boolean;
   on: boolean;
   lifted: boolean;
   picked: boolean;
@@ -150,19 +198,22 @@ interface CardProps {
   onPick: () => void;
 }
 
-function EpisodeCard({ ep, idx, offset, on, lifted, picked, pct, leftSec, intro, onPick }: CardProps) {
+function EpisodeCard({ ep, idx, offset, parked, on, lifted, picked, pct, leftSec, intro, onPick }: CardProps) {
   const t = useT();
   const [broken, setBroken] = useState(false);
-  /* The still fades up when it arrives — see the note on `.ep-art img` in app.css. `complete` is
-   * checked as well as `load` because a cached still can finish before React attaches the
-   * handler, and a card whose `load` never fires would sit invisible. */
-  const [shown, setShown] = useState(false);
+  const sources = ep.still ? stillSources(ep.still) : null;
+  /* The still fades up when it FIRST arrives — see the note on `.ep-art img` in app.css — and
+   * only then: a still this deck has shown before is drawn ready (see `shownStills`).
+   * `complete` is checked as well as `load` because a cached still can finish before React
+   * attaches the handler, and a card whose `load` never fires would sit invisible. */
+  const [shown, setShown] = useState(() => !!sources && shownStills.has(sources.src));
   /* Checked once, on mount, rather than from an inline `ref={(el) => ...}`: an inline callback
    * ref has a new identity every render, so React detached and re-attached it — and re-read
    * `complete` — on all six cards on every frame of a drag. A card is keyed by its episode, so
    * mount is exactly when there is a new <img> to ask. */
   const imgRef = useRef<HTMLImageElement>(null);
-  useLayoutEffect(() => { if (imgRef.current?.complete) setShown(true); }, []);
+  useLayoutEffect(() => { if (imgRef.current?.complete && imgRef.current.naturalWidth > 0) setShown(true); }, []);
+  const onShown = () => { if (sources) shownStills.add(sources.src); setShown(true); };
   /* The deal's stagger, frozen at mount — see TvEpisodeDeck for why it must not follow `offset`. */
   const introStep = useRef(Math.min(Math.abs(Math.round(offset)), INTRO_STEP_CAP));
   const name = ep.name || t('modal.episode_n', { n: ep.episode });
@@ -170,9 +221,16 @@ function EpisodeCard({ ep, idx, offset, on, lifted, picked, pct, leftSec, intro,
   const watched = pct >= WATCHED * 100;
 
   const rising = intro === 'pre';
+  /* THE CARD IS OPAQUE AND WEARS ITS DEPTH AS A DIM, NOT AS TRANSPARENCY. `place` still hands
+   * back the TV's opacity ramp (.85 per step), but here it drives `.ep-dim` — a black sheet over
+   * the card at 1 − that value — and the card itself stays at 1. Translucent cards let the card
+   * behind show THROUGH: a tucked card's black scrim laid over the next card's picture, which on
+   * a stack of six read as dark bands between every pair the moment the fan stopped moving.
+   * Opaque, each visible strip is one picture with one scrim, and the depth reads from size and
+   * shade alone. The card's own opacity is kept for the deal, where it rises from nothing. */
   const style: CSSProperties = {
     transform: rising ? `translateY(${INTRO_RISE}) ${transform}` : transform,
-    opacity: rising ? 0 : opacity,
+    opacity: rising ? 0 : 1,
     zIndex,
     transitionDelay: intro ? `${introStep.current * INTRO_STEP_MS}ms` : undefined,
   };
@@ -186,7 +244,7 @@ function EpisodeCard({ ep, idx, offset, on, lifted, picked, pct, leftSec, intro,
   return (
     <button
       type="button"
-      className={`ep-card${on ? ' on' : ''}${on && lifted ? ' is-lifted' : ''}${picked ? ' picked' : ''}${watched ? ' watched' : ''}`}
+      className={`ep-card${on ? ' on' : ''}${on && lifted ? ' is-lifted' : ''}${picked ? ' picked' : ''}${watched ? ' watched' : ''}${parked ? ' ep-parked' : ''}`}
       style={style}
       data-idx={idx}
       tabIndex={on ? 0 : -1}
@@ -196,17 +254,22 @@ function EpisodeCard({ ep, idx, offset, on, lifted, picked, pct, leftSec, intro,
       onClick={onPick}
     >
       <span className="ep-art" aria-hidden="true">
-        {ep.still && !broken
+        {sources && !broken
           ? (
+            /* NOT `loading="lazy"`. The mounted range IS the still budget (see DECK_ABOVE), and
+               lazy loading deferred the ones below the fold until the modal was scrolled to
+               them — which is exactly when they were wanted, so they arrived black and faded
+               in under the viewer's thumb. Mounted means fetch. */
             <img
               className={shown ? 'rdy' : undefined}
-              src={imgW(ep.still, STILL_RENDITION)}
+              src={sources.src}
+              srcSet={sources.srcSet}
+              sizes={sources.srcSet ? STILL_SIZES : undefined}
               alt=""
               draggable={false}
               decoding="async"
-              loading="lazy"
               ref={imgRef}
-              onLoad={() => setShown(true)}
+              onLoad={onShown}
               onError={() => setBroken(true)}
             />
           )
@@ -226,6 +289,8 @@ function EpisodeCard({ ep, idx, offset, on, lifted, picked, pct, leftSec, intro,
       {pct > 0 && !watched && (
         <span className="ep-progress" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
       )}
+      {/* Last child, so the drag loop can reach it as `lastElementChild` without a query. */}
+      <span className="ep-dim" aria-hidden="true" style={{ opacity: 1 - opacity }} />
     </button>
   );
 }
@@ -453,7 +518,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
       el.querySelectorAll<HTMLElement>('.ep-card[data-idx]').forEach((c) => {
         const p = place(Number(c.dataset.idx) - centre, liftedRef.current);
         c.style.transform = p.transform;
-        c.style.opacity = String(p.opacity);
+        (c.lastElementChild as HTMLElement).style.opacity = String(1 - p.opacity);   // .ep-dim
         c.style.zIndex = String(p.zIndex);
       });
     };
@@ -518,24 +583,31 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
       setActive(target);
       setDrag(null);
     };
-    /** Carry the deck on at the speed it was released at, shedding that speed every frame. */
+    /** Carry the deck from where it was let go to the whole card the release speed points at,
+     *  on one curve that leaves at that speed — see "THE GLIDE" at the top of the file. */
     const glide = (v0: number) => {
-      let v = clamp(v0, -GLIDE_MAX_V, GLIDE_MAX_V);
-      let frac = dragRef.current ?? 0;
-      let last = performance.now();
+      const v = clamp(v0, -GLIDE_MAX_V, GLIDE_MAX_V);
+      const from = dragRef.current ?? 0;
       const lo = -activeRef.current;
       const hi = lastRef.current - activeRef.current;
+      // Where a free glide would come to rest, then the whole card nearest that — but never one
+      // BEHIND the finger: a flick means "on", and rounding back to the card just left is the
+      // reversal this curve exists to remove. The ends stop it dead; nothing past them to show.
+      let target = Math.round(from + v * GLIDE_TAU);
+      if ((target - from) * v < 0) target = v > 0 ? Math.ceil(from) : Math.floor(from);
+      target = clamp(target, lo, hi);
+      const dist = target - from;
+      if (Math.abs(dist) < 1e-4) { settle(from); return; }
+      // A cubic ease-out leaves at 3 x dist / D, so D = 3 x dist / v is the length that makes
+      // the curve continuous with the finger. Bounded, not exact, at the extremes.
+      const D = clamp((3 * Math.abs(dist)) / Math.max(Math.abs(v), 1e-6), GLIDE_MIN_MS, GLIDE_MAX_MS);
+      const t0 = performance.now();
       const step = (now: number) => {
-        // a tab backgrounded mid-glide must not teleport the deck on its first frame back
-        const dt = Math.min(64, now - last);
-        last = now;
-        frac += v * dt;
-        v *= Math.exp(-dt / GLIDE_TAU);
-        // the ends stop it dead rather than rubber-banding: there is nothing past them to show
-        if (frac <= lo) { frac = lo; v = 0; } else if (frac >= hi) { frac = hi; v = 0; }
-        if (Math.abs(v) < GLIDE_MIN_V) { raf = 0; settle(frac); return; }
+        const t = Math.min(1, (now - t0) / D);
+        if (t >= 1) { raf = 0; settle(target); return; }     // exactly on the card: nothing left to ease
+        const e = 1 - (1 - t) ** 3;
         // already inside a frame callback: paint now rather than queueing a second rAF a frame late
-        show(frac);
+        show(from + dist * e);
         if (frameRaf) cancelAnimationFrame(frameRaf);
         paint();
         raf = requestAnimationFrame(step);
@@ -660,8 +732,8 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
   liftedRef.current = lifted;    // the frame loop reads it off the ref
   const centre = active + (drag ?? 0);
   const mid = clamp(Math.round(centre), 0, Math.max(0, episodes.length - 1));
-  const base = Math.max(0, mid - DECK_ABOVE);
-  const win = episodes.slice(base, mid + DECK_BELOW + 1);
+  const base = Math.max(0, mid - DECK_ABOVE - DECK_PARK);
+  const win = episodes.slice(base, mid + DECK_BELOW + DECK_PARK + 1);
   const deckStyle = { '--ep-above': ABOVE_EXTENT, '--ep-below': BELOW_EXTENT } as CSSProperties;
 
   return (
@@ -704,6 +776,7 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
                 ep={e}
                 idx={idx}
                 offset={idx - centre}
+                parked={idx < mid - DECK_ABOVE || idx > mid + DECK_BELOW}
                 on={idx === active}
                 lifted={lifted}
                 picked={!!picked && picked.season === season && picked.ep === e.episode}

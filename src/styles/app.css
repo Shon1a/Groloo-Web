@@ -1626,7 +1626,16 @@
     will-change:transform,opacity}
   /* under a finger or a held mouse the fan tracks the pointer; the snap on release gets the
      transition back. The hand closes while it is held; the stills never start a native drag. */
-  .ep-deck.is-dragging .ep-card,.ep-deck.is-dragging .ep-card.on::after{transition:none}
+  .ep-deck.is-dragging .ep-card,.ep-deck.is-dragging .ep-card.on::after,.ep-deck.is-dragging .ep-dim{transition:none}
+  /* THE DEPTH IS A DIM SHEET, NOT TRANSPARENCY — see the card's note in EpisodeChooser.tsx. Its
+     opacity is the one thing that changes per card (and per frame under a finger), so it gets its
+     own layer; a solid black rectangle is the cheapest layer there is. Above the copy, because it
+     dims the whole card the way the old opacity did — a tucked card's title is meant to recede. */
+  .ep-dim{position:absolute;inset:0;z-index:3;border-radius:12px;background:#000;opacity:0;pointer-events:none;
+    will-change:opacity;transition:opacity .34s ease}
+  /* Mounted for its picture, not yet in the fan — see DECK_PARK. Hidden rather than off-screen so
+     it rasters nothing and takes no tap. */
+  .ep-card.ep-parked{visibility:hidden}
   .ep-deck.is-dragging .ep-card{cursor:grabbing}
   .ep-art img{-webkit-user-drag:none}
   /* these three carry between them the `overflow:hidden` the card gave up */
@@ -1638,10 +1647,17 @@
   .ep-nostill{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(135deg,#1a1a1a,#0d0d0d)}
   .ep-nostill::after{content:attr(data-n);font-family:var(--font-mono);font-size:clamp(22px,3vw,34px);color:rgba(255,255,255,.22)}
   /* bottom-up only: the copy sits in the bottom third and the picture above it does the work */
-  .ep-scrim{position:absolute;inset:0;border-radius:12px;background:linear-gradient(0deg,rgba(0,0,0,.92) 0%,rgba(0,0,0,.55) 34%,rgba(0,0,0,0) 68%)}
+  /* TIGHTER THAN IT WAS: it reached 68% of the way up the card at 55% black by a third, and on a
+     TUCKED card — of which only the lower 56% shows from under the card in front — that put
+     nearly the whole visible strip under the gradient, so the fan below the forward card read as
+     black bands with titles on them. Held to the bottom 52%, the strip is picture first and the
+     copy still sits on enough black to read on a bright frame. */
+  .ep-scrim{position:absolute;inset:0;border-radius:12px;background:linear-gradient(0deg,rgba(0,0,0,.88) 0%,rgba(0,0,0,.5) 24%,rgba(0,0,0,0) 52%)}
   .ep-copy{position:absolute;left:clamp(14px,1.4vw,22px);right:clamp(14px,1.4vw,22px);bottom:clamp(12px,1.3vw,18px);display:block}
   .ep-title{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-    font-size:clamp(16px,1.5vw,22px);font-weight:600;line-height:1.22;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.4)}
+    font-size:clamp(16px,1.5vw,22px);font-weight:600;line-height:1.22;color:#fff;
+    /* a little heavier since the scrim tightened: the title now sits on picture more often */
+    text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 14px rgba(0,0,0,.4)}
   /* the number is the fastest thing to find on a card — heavier than the name it introduces */
   .ep-title b{font-weight:800}
   .ep-sub{display:block;margin-top:5px;font-family:var(--font-mono);font-size:clamp(12px,.95vw,14px);letter-spacing:.04em;color:rgba(255,255,255,.68)}
@@ -1762,7 +1778,7 @@
   @media(prefers-reduced-motion:reduce){
     .m-hero-bg{animation:none}
     .m-hero-inner>*{animation:none}
-    .ep-card,.ep-card.on::after{transition:none}
+    .ep-card,.ep-card.on::after,.ep-dim{transition:none}
     .m-hero-trailer-slot iframe,.m-hero-trailer-slot video{transition:none}
     .modal{transition:none}
   }
