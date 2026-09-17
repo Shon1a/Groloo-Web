@@ -757,7 +757,11 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
         onKeyDown={onKey}
         onPointerEnter={(e) => onPointer(e, true)}
         onPointerLeave={(e) => onPointer(e, false)}
-        onFocus={() => setFocusIn(true)}
+        /* KEYBOARD focus only. A tap focuses the card too (it is a button), and lifting on that
+           put the deep shadow and the 1.06 scale on the front card after every touch — and then,
+           because focus follows the selection while it is in the deck, after every glide as well.
+           `:focus-visible` is the browser's own answer to "did a keyboard do this". */
+        onFocus={(e) => setFocusIn((e.target as HTMLElement).matches(':focus-visible'))}
         onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setFocusIn(false); }}
       >
         {isLoading && !fromAddon ? (
