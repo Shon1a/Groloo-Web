@@ -1668,16 +1668,16 @@
   .ep-picked{position:absolute;top:10px;right:10px;z-index:2;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;
     background:var(--accent);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.5)}
   .ep-picked svg{display:block}
-  /* NO LINE AROUND THE FORWARD CARD — IT LIFTS INSTEAD: biggest, only fully opaque, only one with
-     a shadow, and the shadow deepens while the pointer or the keyboard is in the deck. */
-  /* The RESTING shadow snaps on and off with the selection, and that is the right trade: the
-     card wearing it is mid-glide and mid-rescale at the time, and nobody has ever seen a shadow
-     fade under a moving card. THE LIFT IS THE ONE PEOPLE LOOK AT — it happens to a card sitting
-     still, when the pointer or the keyboard arrives — so the lift keeps its cross-fade, on a
-     second shadow drawn in its own layer and faded with `opacity`, which composites.
-     It is on `.on` alone (never on all six) because two pseudo-elements per card cost the walk
-     ~8ms/step of extra style recalc — measured, and that variant lost. */
-  .ep-card.on{box-shadow:0 16px 34px rgba(0,0,0,.5)}
+  /* NO LINE AROUND THE FORWARD CARD, AND NO RESTING SHADOW EITHER. It used to carry
+     `0 16px 34px rgba(0,0,0,.5)` the moment it became `.on`, which snapped on at the end of every
+     glide: the cards came to rest and a dark halo appeared around the one in front a frame
+     later — read from a phone as an outline being drawn on the picture. It was there to lift the
+     forward card off translucent neighbours; the cards are opaque now and the front one is the
+     biggest and the only undimmed one, which is all the lift it needs at rest.
+     THE LIFT IS THE ONE PEOPLE LOOK AT — it happens to a card sitting still, when the pointer or
+     the keyboard arrives — so it keeps its shadow, drawn in its own layer and cross-faded with
+     `opacity`, which composites. It is on `.on` alone (never on all six) because two
+     pseudo-elements per card cost the walk ~8ms/step of extra style recalc — measured, lost. */
   .ep-card.on::after{content:"";position:absolute;inset:0;border-radius:12px;pointer-events:none;
     box-shadow:0 26px 56px rgba(0,0,0,.66);opacity:0;transition:opacity .34s ease}
   .ep-card.on.is-lifted::after{opacity:1}
