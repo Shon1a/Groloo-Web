@@ -219,7 +219,7 @@ function isAnimated(it: MediaItem | null | undefined): boolean {
  * press restarts it is discarded from wherever it happened to be; one that has FINISHED is sitting
  * at zero offset, and restarting from zero is the same thing a deliberate press does. So the fix is
  * not to remove the movement, it is to size it so it completes inside one press — which is now
- * possible only because HELD_STEP_MIN_MS paces a hold at 400ms rather than 120ms.
+ * possible only because HELD_STEP_MIN_MS paces a hold at 300ms rather than 120ms.
  *
  * TWO NUMBERS, BOTH FALLING OUT OF THAT PACE:
  *
@@ -257,7 +257,7 @@ const SLIDE_MS = 267;
  * `.tv-spot-layer` in tv.css.
  *
  * A HELD KEY GETS NEITHER — it gets a symmetric 90ms, for the reason ART_FADE_MS_CHAINED exists:
- * neither duration fits inside the 400ms of a held press, and a trough repeated four times a
+ * neither duration fits inside the 300ms of a held press, and a trough repeated four times a
  * second is a flicker rather than a beat. Written to `--sp-layer-out` and `--sp-layer-fade`. */
 /* ---- THE SPRING ARM'S TWO CONSTANTS ----------------------------------------------------------
  * Critically damped: c = 2*sqrt(k), so the strip settles without ever crossing its target. A row
@@ -297,7 +297,7 @@ const LAYER_FADE_MS_CHAINED = 150;
  *
  * The window is still here and still right; it is just no longer sufficient on its own. A press
  * now has to be recent AND arrive while the button is still down — see `heldKey` below. */
-const SLIDE_CHAIN_WINDOW = 500;
+const SLIDE_CHAIN_WINDOW = 400;
 
 /* ---- HOW FAST A HELD KEY IS ALLOWED TO WALK -------------------------------------------------
  * The television repeats a held key about every 120ms (the figure this file already records at
@@ -314,7 +314,7 @@ const SLIDE_CHAIN_WINDOW = 500;
  * thing that feels broken on a remote. `lastStepAt` is only moved by an ACCEPTED step, so the
  * limiter measures from the last thing the viewer actually saw.
  *
- * Deliberately below SLIDE_CHAIN_WINDOW (500ms), so an accepted held step still counts as chained
+ * Deliberately below SLIDE_CHAIN_WINDOW (400ms), so an accepted held step still counts as chained
  * and keeps the fast slide, the suppressed decoration and the `is-fast` class. */
 
 /* ---- MEASURED ON THE 65UT8100, 2026-08-19 ---------------------------------------------------
@@ -337,7 +337,17 @@ const SLIDE_CHAIN_WINDOW = 500;
  * slide and chain window, where a 300ms gap left a 260ms slide finishing early and stalling — the
  * stepping this file's own note warns about — and sat only 20ms under the chain window, so jitter
  * would drop a held press into the deliberate path mid-walk. Both are corrected below. */
-const HELD_STEP_MIN_MS = 400;
+/* BACK TO THE MEASURED 300. This was 400 "by preference over the measured 300" — a taste call
+ * made against the round above, and the taste turned out to be wrong on the set: a hold at 400ms
+ * is two and a half posters a second, and it reads as the row dragging its feet. 300 is a third
+ * faster, it is what the four rounds above actually chose, and it is where this sat one commit
+ * before the preference was applied.
+ *
+ * 300 IS ALSO THE FLOOR, and that is the half worth keeping in view. The round below it was
+ * measured, not guessed: 240ms cost 8 points of on-time horizontally and 22 vertically, and
+ * tripled the frames over 67ms on the horizontal axis. So if a hold still reads as slow, the next
+ * step down is not free and should be measured on the panel rather than tuned by feel. */
+const HELD_STEP_MIN_MS = 300;
 
 /* ---- AND WHY A HELD KEY GLIDES RATHER THAN STEPS --------------------------------------------
  * Pacing alone did not fix the feel. Each press eases with `cubic-bezier(.25,.46,.45,.94)`, which
@@ -351,7 +361,7 @@ const HELD_STEP_MIN_MS = 400;
  * re-targeted while still in flight and never completes and stalls. Constant velocity, no arrival,
  * no relaunch: one glide for as long as the button is down. Let go and the last step lands on the
  * deliberate curve, so the row still settles rather than stopping dead. */
-const HELD_SLIDE_MS = 440;   // a little LONGER than the 400ms pace, per the note above
+const HELD_SLIDE_MS = 340;   // a little LONGER than the 300ms pace, per the note above
 
 /* How long the focus state waits before committing — see `setOpenNow`.
  *
@@ -683,7 +693,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * THE DEFECT: holding a direction made the up-next posters glide while the peek stepped, since
      * this effect used to bail on `is-fast` entirely. It is the same rail; it has to move like one.
      *
-     * WHY IT CANNOT SIMPLY REPLAY. A held press arrives every 400ms (HELD_STEP_MIN_MS) into a
+     * WHY IT CANNOT SIMPLY REPLAY. A held press arrives every 300ms (HELD_STEP_MIN_MS) into a
      * 260ms glide, so the previous run is ~85% done when the next begins. Restarting from the
      * nominal start would throw the content backwards by the missing 15% — the stutter this row
      * spent a whole pass removing from the strip itself.
