@@ -1,6 +1,6 @@
 # GROLOO on webOS (LG TV)
 
-A **shell app**: an icon on the TV's home row that opens `https://web.groloo.com`.
+A **shell app**: an icon on the TV's home row that opens `https://tv.groloo.com`.
 It contains no application code — see the note at the top of `index.html` for why
 it navigates rather than bundling or framing the app.
 
@@ -143,18 +143,87 @@ looks like a broken build rather than a missing proxy.
   webOS walk history itself. `lib/tvKeys.ts` answers keyCode 461 and steps one layer
   per press; without this, the platform would also navigate and one press would close
   two things.
-- **The icons are the app's existing PNGs**, not the 80×80 / 130×130 webOS asks for —
-  the launcher scales them. Swap in exact sizes if they look soft on the home row.
+- **The icons are exact** (80x80 and 130x130) — see the appinfo.json section at the end.
 
-## If you want a fully packaged app instead
+## The packaged app — the whole application inside the IPK
 
-Copy `dist-tv/*` in beside `appinfo.json` and drop `index.html`. Two things then need
-solving, and they are the reason this is a shell:
+There are two packages now, with the same app id, so installing one replaces the other on the
+launcher tile:
 
-1. **CORS.** A packaged app's origin is `file://` or `null`, which is not on the API's
-   `CORS_ORIGINS` allowlist, so every catalog call fails preflight. The allowlist would
-   have to accept it.
-2. **The service worker will not run** from packaged files, so the offline cache — the
-   thing that keeps the home screen up while a free-tier backend wakes — is off.
+| | shell (this folder) | packaged (`webos-pack/`, generated) |
+|---|---|---|
+| what the IPK holds | an icon and a redirect to `tv.groloo.com` | index.html, the TV JS/CSS, fonts, the WASM core, icons — 2.5 MB, ~0.8 MB IPK |
+| needs the network to start | yes, every launch | no: the shell paints locally and only the catalogue is remote |
+| first launch after install | downloads the app | instant |
+| service worker | yes (offline cache, autoUpdate) | none (Chromium refuses one from a packaged document); `/api/home` keeps a 3s network-first fallback in `lib/homeCache.ts` |
+| updates | on deploy, invisibly | a new IPK |
+| origin sent to the API | `https://tv.groloo.com` | `file://` (or `null`) — see below |
 
-What you gain is an app that starts without the network.
+Build and package it from the repository root:
+
+```
+npm run build:tv:pack       # dist-tv-pack/ + webos-pack/app/  (vite build --mode tv with VITE_TV_PACKAGED=1)
+npm run tv:package:pack     # … and webos-pack/out/com.groloo.web_1.0.0_all.ipk (ares-package --no-minify)
+npm run tv:install:pack     # ares-install --device tv webos-pack/out/…ipk
+npm run tv:launch
+```
+
+What the packaged build changes, and nothing else (`packagedTv` in vite.config.ts): `base: './'`
+so every URL is relative to index.html, no PWA plugin, `dist-tv-pack/` as the output folder, and
+one runtime difference inlined at compile time — `lib/api.ts` sends `credentials: 'omit'` and
+relies on the Bearer token alone, because an opaque origin has no cookie jar. `lib/packaged.ts`
+is the only place that knows any of this. The web build is unaffected: `IS_PACKAGED` folds to
+`false` and every branch on it is dropped (verified by grepping the `auth` chunk: the web and
+streamed bundles say `include`, the packaged one says `omit`).
+
+**Verified locally, from a `file://` document in Chrome with `--allow-file-access-from-files`:**
+7 rows, Poppins loaded from the package, the WASM core loaded (no fallback badge), no service
+worker, no console errors, no failed requests, the row walks. WITHOUT that flag a stock Chromium
+loads nothing at all — the stylesheet, every module chunk and every font are CORS-blocked from a
+`null` origin — and that is by spec, not something the bundle can work around.
+
+**TWO THINGS THE TELEVISION HAS TO ANSWER before this package can ship, in order:**
+
+1. **Does WAM grant packaged apps file access from file URLs?** Everything above depends on it.
+   LG's own local-resource conventions (apps XHR their own JSON) say yes; nothing here has proved
+   it on a set. Install, launch, `ares-inspect --device tv --app com.groloo.web`, and look at the
+   console: a wall of `Access to font at 'file:///…' from origin 'null' has been blocked by CORS
+   policy` means no, and the answer is to stay on the shell.
+
+2. **The API's CORS allowlist.** `Groloo-server/server/server.js` echoes only origins listed in
+   `CORS_ORIGINS`, and always with `Access-Control-Allow-Credentials: true`. A packaged document
+   sends `Origin: file://` (measured in Chrome with file access on; `null` without it). It must
+   be answered WITHOUT credentials — the null origin is shared by every sandboxed frame on the
+   web, and a credentialed `null` is the textbook CORS mistake. The app never asks for cookies
+   from the package, so nothing is lost. The server change is one branch in the CORS middleware:
+
+   ```js
+   } else if (origin === 'file://' || origin === 'null') {
+     // The packaged webOS app: an opaque origin, answered WITHOUT credentials.
+     // Its session is the Authorization: Bearer header, which auth.js accepts.
+     res.set('Access-Control-Allow-Origin', origin);
+     res.set('Vary', 'Origin');
+     res.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+     res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+     res.set('Access-Control-Max-Age', '86400');
+   }
+   ```
+
+   Until that lands the packaged app comes up with no rows ("Could not reach /api/home") — which
+   is why the shell in this folder remains the shipping package.
+
+**What the package deliberately leaves out:** the 32 MB Dolby decoder (`/ffmpeg`, AC-3/DTS audio
+only) — `lib/wasmAudio.ts` fetches it from `tv.groloo.com` on demand, and vercel.json now sends
+`Access-Control-Allow-Origin: *` for that path so an opaque origin may — and the demo clip.
+Everything on the launch path is inside.
+
+## appinfo.json
+
+- **Icons are exact now**: `icon.png` 80x80 and `largeIcon.png` 130x130, rendered from the app's
+  512px source, which is what the store asks for (the launcher used to scale a 180 and a 512).
+- **`requiredACG: []`** is in the manifest as the brief asked, to state that the app calls no
+  Luna services. It was not verifiable against LG's published appinfo.json reference at the time
+  of writing — webOS OSE spells the same thing `requiredPermissions` — and `ares-package` accepts
+  it. If the store's submission checker rejects the key, delete it; nothing in the app reads it.
+- `appDescription` is the store listing's short text.
+- `resolution` stays `1920x1080` — see the note above.
