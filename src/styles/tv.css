@@ -1005,10 +1005,19 @@
   initial-value: 0;
 }
 
-/* strip track — translated so [0..active] hide left/behind the billboard, [active+1..] peek */
+/* strip track — translated so [0..active] hide left/behind the billboard, [active+1..] peek.
+ *
+ * ---- NO LONGER A FLEX ROW, AND THAT IS WHAT BOUNDS THE LAYER ------------------------------
+ * The tiles used to be flex items, which made the strip's box — and therefore the compositor
+ * layer the transform promotes — as wide as every tile it held: 21 tiles at ten titles, 81 at
+ * forty, a single 13,143px layer measured for one 40-title row before its duplicate had even
+ * latched. TvSpotlight now mounts only the dozen tiles around the walk and gives each one its
+ * own `left` at `p * pitch` (see TILES_AHEAD there), so the strip's box is empty, the layer is
+ * the union of the tiles actually present, and its width is the window's — the same ~12 tiles
+ * for a row of any length. The transform, the pitch and every visible dimension are unchanged:
+ * a tile at physical position p sits exactly where flex used to put the p-th child. */
 .tv-spot-strip {
   position: absolute; left: 0; top: 0; height: 100%;
-  display: flex; gap: var(--sp-gap);
   transform: translateX(calc(var(--sp-wl) + var(--sp-gap) - (var(--active) + 1) * (var(--sp-wp) + var(--sp-gap))));
   /* ---- 267ms ON cubic-bezier(.33, 1, .68, 1), RE-MEASURED FROM A CLEAN CAPTURE ---------------
      THREE PRESSES, IDENTICAL TO THE FRAME, off a 1080p30 recording of the reference — the row at
@@ -1076,8 +1085,9 @@
  * and the info panel. */
 .tv-spot.is-settled .tv-spot-strip { will-change: transform; }
 .tv-spot-thumb {
-  position: relative;
-  flex: 0 0 auto;
+  /* Absolute, at the `left` TvSpotlight writes inline for its physical position — see the note
+     on `.tv-spot-strip`. Still the containing block for the picture, scrim, mark and bar inside. */
+  position: absolute; top: 0;
   height: 100%;
   width: var(--sp-wp);
   padding: 0; border: 0; margin: 0;
