@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useHome } from '../lib/queries';
 import { useT } from '../i18n/i18n';
@@ -43,9 +43,13 @@ export default function Home() {
   const nav = useNavigate();
   const toggleList = useLibrary((s) => s.toggle);
   const config = useHomeConfig((s) => s.config);
-  const onSelect = (item: MediaItem) => openModal(openItem(item));
-  const onAdd = (item: MediaItem) => toggleList({ id: item.id, type: item.type, title: item.title, year: item.year, rating: item.rating, poster: item.poster });
-  const onSeeAll = (cat: string) => nav(`/browse/${cat}`);
+  /* STABLE, because every row on the page receives these. A fresh closure per render used to
+   * reach every TV row as a new `onSelect` prop, which sat in the strip's memo dependencies — so
+   * any render of Home (a refetch, a config change) rebuilt every poster tile on the screen for a
+   * callback that does the same thing it did before. The store actions they wrap are stable. */
+  const onSelect = useCallback((item: MediaItem) => openModal(openItem(item)), [openModal]);
+  const onAdd = useCallback((item: MediaItem) => toggleList({ id: item.id, type: item.type, title: item.title, year: item.year, rating: item.rating, poster: item.poster }), [toggleList]);
+  const onSeeAll = useCallback((cat: string) => nav(`/browse/${cat}`), [nav]);
   // Stabilise across renders: the inline .filter() used to hand Hero a brand-new
   // array every render, which forced Hero to rebuild its whole track and re-download
   // every backdrop. React Query's structural sharing keeps `hero.results` identity
@@ -55,6 +59,27 @@ export default function Home() {
     () => (data?.hero?.results ?? []).filter((m) => m.backdrop || m.poster),
     [data?.hero?.results],
   );
+  /* THE SAME STABILITY FOR THE ROWS. `rows[cat].results` keeps its identity across refetches
+   * (structural sharing again), but the `.filter().slice()` below built a new array per row per
+   * render — and a TV row's whole strip memo hangs off `items`. Sliced once per payload here, so a
+   * row's list only changes identity when its titles do. */
+  const rowsData = data?.rows;
+  const rowLists = useMemo(() => {
+    const out: Record<string, MediaItem[]> = {};
+    for (const row of HOME_ROWS) {
+      const list = (rowsData?.[row.cat]?.results ?? []).filter((m) => m.poster).slice(0, HOME_RAIL_CAP);
+      if (list.length) out[row.cat] = list;
+    }
+    return out;
+  }, [rowsData]);
+  const upMovies = data?.upcoming?.movie;
+  const upSeries = data?.upcoming?.series;
+  const upcomingTvRail = useMemo(() => (IS_TV
+    ? Array.from({ length: Math.max(upMovies?.length ?? 0, upSeries?.length ?? 0) }, (_, i) => [upMovies?.[i], upSeries?.[i]])
+      .flat()
+      .filter((m): m is MediaItem => !!m && !!m.poster)
+      .slice(0, HOME_RAIL_CAP)
+    : []), [upMovies, upSeries]);
 
   // Same gooey metaball the drill-down / Explore grids use (CatalogGrid), so arriving on Home
   // and arriving on TV/Movies look like the same app. .grid-loader centres it in a 52vh box;
@@ -90,10 +115,6 @@ export default function Home() {
         : true);
   const studiosVisible = heartVisible ? heartVisible.includes('studios') : config.studios;
 
-  const rows = data?.rows ?? {};
-  const upMovies = data?.upcoming?.movie ?? [];
-  const upSeries = data?.upcoming?.series ?? [];
-
   /* UPCOMING ON TV IS AN ORDINARY RAIL, not the marquee.
    *
    * The web build renders this add-on as two strips of landscape cards that scroll themselves
@@ -107,13 +128,7 @@ export default function Home() {
    * makes that matter — HOME_RAIL_CAP now clears the whole feed on TV. It is the WALK: the API
    * returns ~10 of each, and concatenating would put every series past the tenth card, which on a
    * row nobody walks to the end of is a row labelled "Movies & Series" that only ever shows
-   * movies. */
-  const upcomingTvRail = IS_TV
-    ? Array.from({ length: Math.max(upMovies.length, upSeries.length) }, (_, i) => [upMovies[i], upSeries[i]])
-      .flat()
-      .filter((m): m is MediaItem => !!m && !!m.poster)
-      .slice(0, HOME_RAIL_CAP)
-    : [];
+   * movies. Built in the memo above, beside the row lists, for the same identity reason. */
 
   return (
     <section className="page active" id="browse" aria-label="Browse catalog">
@@ -133,7 +148,7 @@ export default function Home() {
               onSeeAll={onSeeAll}
             />
           ))
-          : <UpcomingMarquee movies={upMovies} series={upSeries} onSelect={onSelect} onSeeAll={onSeeAll} />)}
+          : <UpcomingMarquee movies={upMovies ?? []} series={upSeries ?? []} onSelect={onSelect} onSeeAll={onSeeAll} />)}
         <ContinueRow onSelect={onSelect} />
         <div id="strips">
           {HOME_ROWS.map((row) => {
@@ -146,8 +161,8 @@ export default function Home() {
             // full browse grid, and on TV the card at the end of the row lengthens it in place
             // from the same catalogue (TvHomeRow). Invisible on screen — the first ~9 cards are
             // unchanged, which is all a rest-state view or a screenshot ever shows.
-            const list = (rows[row.cat]?.results ?? []).filter((m) => m.poster).slice(0, HOME_RAIL_CAP);
-            if (!list.length) return null;
+            const list = rowLists[row.cat];
+            if (!list) return null;
             return (
               <Row
                 key={row.cat}
