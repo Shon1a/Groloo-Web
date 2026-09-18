@@ -68,6 +68,9 @@ public/ffmpeg/
 
 # webOS packaging output
 webos/out/
+# The packaged TV app, staged and built by scripts/build-tv-pack.mjs: dist-tv-pack/ (above) plus
+# appinfo and icons, and the IPK ares-package makes of it. All generated.
+webos-pack/
 
 # Measurement runs from scripts/tv-measure.mjs. Regenerable, and each one is specific to a session
 # on one television — the numbers worth keeping belong in a commit message or a plan document, not
