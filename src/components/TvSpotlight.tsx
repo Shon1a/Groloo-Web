@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW, artW, artPosition } from '../lib/img';
@@ -56,23 +56,82 @@ import { FadeBg, FadeImg } from './FadeArt';
  * cards of it, so a 40-title row decodes exactly as many posters as a 10-title one — the twelve
  * around wherever you are standing. Lengthening the row costs nothing in decoded pictures.
  *
- * WHAT IT DOES STILL COST, STATED HONESTLY, because it is the same lever the note on DUP_TILES
- * points at from the other direction:
+ * WHAT IT USED TO COST, AND NO LONGER DOES, because the strip is a WINDOW now (see TILES_AHEAD):
  *
  *   · THE STRIP LAYER. The settled row's strip is promoted (`will-change` in tv.css, scoped to
  *     `.is-settled`) and a promoted layer is sized by its content, not by the box that clips it.
- *     Measured on the reference set: `[10][end][10]` = 21 tiles = one 6892x509 layer, 13.4MB. The
- *     same arithmetic at 40 is `[40][end][40]` = 81 tiles, on the order of 26,000px wide and ~50MB.
- *     Only ever one row at a time — but it is the biggest single texture on the screen, and if the
- *     horizontal frame numbers move, THIS is what moved them. The cheap mitigation is the cap on
- *     the SECOND copy (see DUP_TILES): the duplicate only has to reach the right edge of the rail,
- *     which is ~10 tiles at 1080p however long the first copy is.
+ *     Measured on the reference set: `[10][end][10]` = 21 tiles = one 6892x509 layer, 13.4MB. At
+ *     40 titles the strip was `[40][end][40]` = 81 tiles — measured in the desktop harness as a
+ *     single 13,143px-wide layer for a 40-title row before the duplicate even latched. The row now
+ *     mounts only the dozen tiles around the walk, whatever SPOT_MAX is, so the layer is ~12 tiles
+ *     wide at any row length and this constant no longer sizes it.
  *   · THE content-visibility ACTIVATION. Every row carries `content-visibility: auto`, and a row's
- *     activation cost tracks how much is inside it — 81 tiles instead of 21 makes revealing a row
- *     dearer, which is the VERTICAL axis, already the expensive one.
- *
- * Neither has been measured at 40 on the television. */
+ *     activation cost tracks how much is inside it. That, too, is now a dozen tiles per row rather
+ *     than one or two copies of the whole list. */
 export const SPOT_MAX = tvRowCards();
+
+/* ---- THE STRIP IS A WINDOW ONTO AN ENDLESS ROW, NOT A LIST RENDERED TWICE --------------------
+ *
+ * WHAT IT WAS. The strip rendered every title, then the end card, then every title AGAIN — the
+ * duplicate copy is what let a walk run off the end of the row and keep gliding onto the first
+ * title without the up-next area ever emptying. It worked, and it cost exactly what the two notes
+ * above say: a promoted compositor layer as wide as 81 tiles, a `content-visibility` activation as
+ * dear as 81 tiles, and 81 <button>s per row for React to hold. It also needed a "rebase" — an
+ * un-animated hop back into the first copy when the duplicate ran out — which on the reference set
+ * meant one press in every sixteen did not slide at all.
+ *
+ * WHAT IT IS. The strip renders a bounded window of tiles around the walk, and the row is treated
+ * as endless: a tile sits at a PHYSICAL position `p` (an integer that only ever moves by one per
+ * press and never wraps), positioned absolutely at `p * pitch`, and shows the title
+ * `(active + (p - pos)) mod stops` — the walk index one gets by counting from the card under the
+ * billboard. Position `stops` shows title 0, `stops + 1` shows title 1, and so on for ever: the
+ * duplicate copy is implied by the arithmetic instead of being built. Walking right mounts one
+ * tile at the leading edge and unmounts one at the trailing edge; nothing else in the strip is
+ * touched, so the compositor layer is the window's width whatever the row's length, and there is
+ * nothing to rebase because the strip cannot run out.
+ *
+ * THE INVARIANT EVERYTHING BELOW RESTS ON: `(pos, active)` is an anchor — the physical position
+ * the strip is standing on and the walk index it shows — and both move together on every press.
+ * Because titles are counted FROM that anchor, a row growing under the walk ("load more") changes
+ * nothing in the window: the card under the billboard keeps its title and the cards ahead of it
+ * simply become the titles that just arrived, which is what the old code needed a layout-effect
+ * re-seat to achieve.
+ *
+ * WHAT IS NOT DIFFERENT, because the brief is that nothing visible changes: the tile geometry
+ * (`--sp-wp`, `--sp-gap`, `--active` and the strip's transform in tv.css are untouched), the slide
+ * and its curve, which tiles carry a bitmap (the window IS the old THUMB_BEHIND/THUMB_AHEAD
+ * promotion window, so the same dozen posters are decoded at any moment), the idle-frame promotion
+ * that keeps decodes off the keypress frame, and the peek at the screen edge. The one visible
+ * change is an improvement the old notes asked for: a press off the end card glides forward onto
+ * title 0 instead of hopping.
+ *
+ * THE WINDOW'S SHAPE. Two behind, because walking back must not fetch: the tile the walk is about
+ * to return to has to be decoded before it slides out from behind the billboard, and two presses
+ * of runway is enough at any pace a remote can produce. Nine ahead, the same runway the bitmap
+ * window always had — at ~300ms a press that is about three seconds of walking, and a poster is
+ * ~30 KB from a CDN that answers in 90ms. Tiles further behind than two are clipped by the rail's
+ * `clip-path` and never seen, so dropping them costs nothing visible; when the walk comes back for
+ * one it is mounted three presses before it can appear, and a cached picture decodes in far less.
+ *
+ * KEYS AND POSITIONS ARE BOUNDED SEPARATELY. React keys are `p mod TILE_KEYS` joined to the
+ * title's id, so a node keeps its identity for as long as its position shows the same title and
+ * remounts (plate, then fade-in — the old behaviour for a new picture) the moment it does not.
+ * The physical position itself is left to grow, because rebasing it is what made the old strip
+ * hop; but it is not left to grow FOR EVER. The compositor stores a layer's offset in single
+ * precision, and at a few million pixels that is a quarter-pixel of quantisation. So once the
+ * walk has taken REBASE_AT presses without leaving the row, and only while the row is at rest,
+ * the position is brought back by a whole multiple of TILE_KEYS. Every key survives (the modulus
+ * is the same multiple), every title survives (the anchor moves with it), and `--active` is
+ * rewritten with the transition suppressed — the same silent hop the old wrap used, now once per
+ * ~2000 presses instead of once per lap. */
+const TILES_BEHIND = 2;
+const TILES_AHEAD = 9;
+const TILE_KEYS = 1024;
+const REBASE_AT = 2 * TILE_KEYS;
+/** Always-positive modulo, so a physical position left of the origin still maps to a title. */
+const mod = (a: number, m: number): number => ((a % m) + m) % m;
+/** Where a tile at physical position `p` sits in the strip, as CSS — the strip's own pitch. */
+const tileLeft = (p: number): string => `calc(${p} * (var(--sp-wp) + var(--sp-gap)))`;
 
 /* ms the remote must sit still on a title before its trailer is even asked for.
  *
@@ -469,6 +528,179 @@ const IcSoundOff = (
   </svg>
 );
 
+/* ---- ONE POSTER TILE, MEMOISED SO A PRESS TOUCHES ONE OF THEM ----------------------------------
+ * The strip used to be one `useMemo` holding every tile, built so a focus change could not rebuild
+ * it. The window rebuilds on every press by design — that is how a tile enters at one edge and
+ * leaves at the other — so the cost has to be bounded per TILE instead: `memo`, and props that are
+ * primitives or stable references, so the ten tiles that merely stayed in the window bail out of
+ * rendering entirely and React's work per press is one mount, one unmount, and eleven identity
+ * checks. `onOpen` is a stable function the row keeps in a ref, never the caller's own callback,
+ * because Home hands every row a fresh closure per render and that would re-render every tile.
+ *
+ * Everything written to the NODES here — `src` promotion, the `rdy` class, the plate being cleared
+ * under a loaded picture — is deliberately outside React's knowledge (see the notes on `data-src`
+ * below), which is safe precisely because a tile is never re-rendered with different props: a node
+ * is created for one title at one position and destroyed with it. */
+interface TileProps {
+  item: MediaItem;
+  /** The tile's `left`, as CSS — see `tileLeft`. Fixed for the life of the node. */
+  left: string;
+  /** Watch progress, 0..1, or 0 when the row does not show one. A primitive, so memo can compare it. */
+  pct: number;
+  onOpen: (it: MediaItem) => void;
+}
+
+const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
+  /* ONE PICTURE, SHOWN TWICE. The tile crops the same backdrop the billboard
+   * above it displays, so the two are one entry in the browser cache and one
+   * decoded bitmap in memory — which on a screen holding ~147 tiles is the cost
+   * that actually matters.
+   *
+   * The crop is `object-fit: cover` plus an object-position derived from the
+   * face detector's focal point; the wordmark and its scrim are elements over
+   * the top. Nothing is composited on a server any more, so correcting a poster
+   * changes a NUMBER in this payload rather than a cached picture — which is
+   * why an edit takes effect on the next load instead of outliving three caches.
+   *
+   * `poster` stays as the onError fallback: a title with no backdrop at all
+   * still renders what this row rendered before any of this existed. */
+  /* PRE-CUT IF WE HAVE ONE, otherwise crop the shared backdrop here.
+   *
+   * `posterArt` is the slice already cut to the tile's shape — exactly the pixels
+   * shown, so it is both sharper and smaller than fetching the whole frame to
+   * discard two thirds of it. Its url contains the crop, so a correction is a new
+   * url and nothing needs invalidating.
+   *
+   * Falling back to the shared backdrop is not a degradation to paper over: it is
+   * how a title with no focal point yet, or one whose crop we declined, renders —
+   * the same picture, cropped by object-fit, at lower detail. */
+  const cut = artW(it.posterArt);
+  const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
+  const src = cut || shared || imgW(it.poster || '', THUMB_RENDITION);
+  const fallbackSrc = cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : '');
+  // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
+  const objectPosition = cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
+  const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
+  /* What names this tile: its wordmark, its title in type, or nothing at all when it
+   * has fallen back to a plain poster that already carries its own. */
+  const name: 'mark' | 'text' | null = mark ? 'mark' : ((cut || shared) ? 'text' : null);
+  return (
+    <button
+      type="button"
+      role="listitem"
+      tabIndex={-1}
+      className="tv-spot-thumb"
+      style={{ left, background: heroFallbackGradient(it) }}
+      aria-label={it.title}
+      onClick={() => onOpen(it)}
+    >
+      {/* `data-src`, NOT `src` — the promotion effect in the row decides when a tile is worth a
+          bitmap, and it does so on an idle frame rather than on the press that mounted the tile.
+          See the note there; `loading="lazy"` cannot do this job.
+
+          THE GRADIENT IS DROPPED THE MOMENT THE POSTER COVERS IT. It is the plate a tile shows
+          while it has no picture, and it was staying underneath one forever: measured on a
+          settled home screen, 106 of 147 tiles were painting a gradient beneath a fully opaque
+          poster, so every repaint of a row filled each of those rects twice. Cleared straight
+          on the node rather than through state — a setState per poster load would re-render a
+          tile for a change no one can see. */}
+      {src && (
+        <img
+          className="tv-spot-thumbimg"
+          data-src={src}
+          decoding="async"
+          style={{ objectPosition }}
+          alt=""
+          /* NOT `useImageReady` HERE, and that is deliberate rather than an oversight. These
+             carry `data-src` because a home screen holds ~150 of them and they are fetched
+             lazily; a hook would preload every one on mount and undo the memory work the
+             comment above describes. `load` is the weaker guarantee (bytes, not bitmap) but a
+             228px portrait has no visible band to hide — the fade is here so a tile arrives
+             rather than pops, which is all this size of picture needs.
+             Both writes go straight to the nodes for the same reason the background clear
+             does: a tile must not re-render for a poster load. */
+          onLoad={(e) => {
+            const img = e.currentTarget;
+            const t = img.parentElement;
+            if (t) t.style.background = 'none';
+            img.classList.add('rdy');
+          }}
+          /* One retry, onto the ordinary poster, and then never again — `dataset.fell`
+             latches so a poster that is ALSO broken cannot ping-pong the two URLs. The
+             art service is a separate deploy from this app: if it is down, or was never
+             stood up, every tile quietly renders what it renders today. */
+          onError={(e) => {
+            const img = e.currentTarget;
+            if (!fallbackSrc || img.dataset.fell) return;
+            img.dataset.fell = '1';
+            img.src = fallbackSrc;
+          }}
+        />
+      )}
+      {/* The wordmark and the darkening that keeps it readable, drawn only when a
+          mark exists — and when it does not, the title is SET IN TYPE in the same
+          place rather than left off, so no tile is ever nameless. That covers three
+          cases at once: a title TMDB has no wordmark for at all, one whose wordmark
+          the page's budget has not resolved yet (it arrives on a later load), and an
+          add-on card that never had one.
+
+          NOT text-first-then-logo. The billboard settled that already — swapping type
+          for a wordmark a beat later is the same flicker the backdrop had — so a tile
+          shows one or the other and never both in turn.
+
+          AND ONLY OVER OUR OWN ARTWORK. When a tile has fallen all the way back to the
+          plain TMDB poster, that poster already has the title printed on it, so setting
+          it again in type would print it twice. `data-src` for the same reason the picture
+          uses it: the promotion effect promotes these, so a row never fetches a dozen at once. */}
+      {/* The scrim exists to make a NAME legible, so it paints only when there is one.
+          Rendering it unconditionally put a gradient over every tile that shows neither
+          — a plain TMDB poster carries its own title and needs no help. */}
+      {!!name && <span className="tv-spot-thumbscrim" aria-hidden="true" />}
+      {name === 'text' && (
+        <span className="tv-spot-thumbtitle" aria-hidden="true">{it.title}</span>
+      )}
+      {!!mark && (
+        <img
+          className="tv-spot-thumbmark"
+          data-src={mark}
+          decoding="async"
+          alt=""
+          onLoad={(e) => e.currentTarget.classList.add('rdy')}
+          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+        />
+      )}
+      {pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(pct, 1) * 100).toFixed(1)}%` }} /></span>}
+    </button>
+  );
+});
+
+/* The row's last stop: "see all" or "+ load more". Same window, same absolute position; its
+ * label changes while a batch is in flight, which is the one prop that legitimately re-renders it. */
+interface EndTileProps {
+  left: string;
+  label: string;
+  icon: string;
+  heading: string;
+  onGo: () => void;
+}
+
+const EndTile = memo(function EndTile({ left, label, icon, heading, onGo }: EndTileProps) {
+  return (
+    <button
+      type="button"
+      role="listitem"
+      tabIndex={-1}
+      className="tv-spot-thumb is-seeall"
+      style={{ left }}
+      aria-label={`${heading} — ${label}`}
+      onClick={onGo}
+    >
+      <span className="tv-spot-blank-ic" aria-hidden="true">{icon}</span>
+      <span className="tv-spot-blank-label">{label}</span>
+    </button>
+  );
+});
+
 export interface TvSpotlightProps {
   items: MediaItem[];
   /** Row heading. Defaults to "Featured". */
@@ -563,6 +795,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const goEnd = () => { if (canSeeAll && cat) onSeeAll?.(cat); else if (canMore && !moreBusy) onMore?.(); };
 
   const [active, setActive] = useState(0);
+  /* The strip's PHYSICAL position — which tile is behind the billboard, counted from wherever the
+   * strip started. Unbounded and monotonic under a walk (see TILES_AHEAD): it is `active` without
+   * the wrap. React state, because the window of mounted tiles is rendered from it. */
+  const [pos, setPos] = useState(0);
   const [open, setOpen] = useState(false);
   /* Sticky: set once the row first comes near the viewport, never cleared — scrolling past a row
    * must not throw its bitmaps away and re-fetch them on the way back. */
@@ -741,17 +977,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const dwellId = useRef(0);
   /** One in-flight tile promotion at a time — see `promoteSoon`. */
   const promoteId = useRef(0);
-  /* ---- THE STRIP'S POSITION IS NOT ALWAYS THE WALK'S POSITION -----------------------------
-   * They agree everywhere except one press: stepping RIGHT off the end card. The walk wraps to 0,
-   * but the strip glides FORWARD onto `stops` — the first tile of the duplicate copy, which is the
-   * same picture — and is then re-seated on 0 with the transition suppressed. Identical pixels
-   * either side of that swap, so the re-seat cannot be seen and the lurch is gone.
-   * `stripPos` drives the node; `liveActive` stays the truth about where the walk is. */
+  /* ---- THE STRIP'S POSITION IS NOT THE WALK'S POSITION ------------------------------------
+   * `liveActive` is the walk index and wraps at `stops`; `stripPos` is the physical position and
+   * never wraps — stepping RIGHT off the end card takes the walk to 0 and the strip forward by one,
+   * onto the position that SHOWS title 0 (see TILES_AHEAD). The two are an anchor: what is under
+   * the billboard, and where the strip is standing to show it. `stripPos` drives the node and is
+   * the imperative twin of the `pos` state above, exactly as `liveActive` is of `active`. */
   const stripPos = useRef(0);
-  /* Where the strip was standing when a hold ended, or -1. Consumed by the layout effect that owns
-   * `--active`, which uses it to hop invisibly before animating the press itself. */
-  const silentFrom = useRef(-1);
-  const reseatId = useRef(0);
+  /* Set when the NEXT write of `--active` must not be seen: a catalogue cut, or the rare rebase
+   * that brings a long walk's position back toward the origin. Consumed by the layout effect that
+   * owns `--active`, which suppresses the transition around that one write. */
+  const silentHop = useRef(false);
   /* ---- THE ACTIVE-ROW HIGHLIGHT IS A CLASS, NOT A RENDER ------------------------------------
    * `open` drives two quite different things: the LOOK of the focused row (a class, and every
    * `.tv-spot.is-open` rule hanging off it) and the BEHAVIOUR of being focused — arming the
@@ -774,36 +1010,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** Clears `is-fast` once the remote stops chaining — see the note in `step`. */
   const fastOff = useRef(0);
   const railRef = useRef<HTMLDivElement>(null);
-  const prevActiveRef = useRef(0);
-
-  /* ---- WHEN THE STRIP'S DUPLICATE COPY IS ALLOWED TO EXIST -----------------------------------
-   * See the note in `thumbs`. The copy is the row's endless up-next preview and it is only ever
-   * LOOKED at near the end of a walk, so a row nobody has touched should not be paying for it.
-   * Two things can expose it, and both are latched rather than tracked — once built it stays, so
-   * walking back and forth never re-decodes a poster:
-   *
-   *   THE ROW WAS FOCUSED. A walk cannot begin any other way, and mounting on the focus itself is
-   *   a whole press earlier than the first Left/Right that could need it. Deliberately not a
-   *   threshold on `active`: how many posters fit beside the billboard depends on the panel, so
-   *   any fixed number is wrong somewhere.
-   *
-   *   THE STRIP DOES NOT FILL THE RAIL. On a very wide set (a 4K panel holds ~12 posters beside
-   *   the billboard) the last title of the first copy can sit short of the right edge with the
-   *   row at rest, which would leave visible empty track. Measured rather than derived: one pair
-   *   of rects, once, against the real layout — no CSS-variable arithmetic to keep in step. */
-  const [dup, setDup] = useState(false);
-  useEffect(() => {
-    if (dup) return;
-    if (open) { setDup(true); return; }
-    if (!artOn) return;
-    const rail = railRef.current, track = trackRef.current;
-    if (!rail || !track) return;
-    // A frame late, so the measurement is of a settled strip rather than of one mid-transition.
-    const id = requestAnimationFrame(() => {
-      if (track.getBoundingClientRect().right < rail.getBoundingClientRect().right - 1) setDup(true);
-    });
-    return () => cancelAnimationFrame(id);
-  }, [dup, open, artOn, n]);
+  /* THE CALLER'S CALLBACKS, BEHIND STABLE ONES. Home builds a new `onSelect` every render and
+   * TvHomeRow a new `onMore`; a tile that took either as a prop would re-render whenever its row's
+   * parent did. The tiles get these two functions instead, created once, reading the latest
+   * callback through a ref — so a tile's props are stable for as long as its title and position
+   * are, which is what lets `memo` bail it out of every press. */
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const goEndRef = useRef(goEnd);
+  goEndRef.current = goEnd;
+  const openTile = useRef((it: MediaItem) => { onSelectRef.current?.(it); }).current;
+  const goEndStable = useRef(() => { goEndRef.current(); }).current;
 
   const reduceMotion = typeof window !== 'undefined'
     && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -1182,279 +1399,92 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     return artOn ? imgW(source || '', BILLBOARD_RENDITION) : '';
   };
 
-  /* THE STRIP IS MEMOISED, AND THAT IS A SCROLL FIX, NOT A MICRO-OPTIMISATION.
+  /* ---- THE WINDOW, BUILT FRESH ON EVERY PRESS AND CHEAP BECAUSE OF IT -------------------------
+   * The strip used to be one memo holding every tile, guarded against rebuilding on a focus change
+   * because 24 (then 81) <button>s were too many to diff on the keypress frame. The window is a
+   * dozen elements whose children are `memo` components with stable props, so rebuilding the list
+   * costs a dozen identity checks and React's real work per press is one mount and one unmount —
+   * both off-screen, at the window's two ends. Still memoised, so a render that changes none of
+   * these (a query settling, the focus commit, a dwell firing) hands React the identical array.
    *
-   * Every arrow press flips `open` on two rows. Without this, React would rebuild 24 <button>
-   * elements per row and diff them — on the exact frame the scroll animation starts, which is
-   * where a dropped frame is most visible. The strip depends on nothing that a focus change
-   * touches, so it is built once per data change and the open/close toggle becomes what it
-   * should be: one class name on the section. */
+   * WHAT SITS AT EACH POSITION is `slotAt(itemAt(p))`: the walk index counted from the anchor,
+   * wrapped at `stops`, and the end card wherever that wrap lands on `n`. The key carries the
+   * title's id next to the bounded position so that a position whose title changes — the cards
+   * past a "+" once more have been loaded — gets a fresh node with a plate and a fade-in, exactly
+   * as those tiles arrived before, while every other node in the window is untouched. */
   const thumbs = useMemo(() => {
-    const tile = (it: MediaItem, key: string) => {
-      /* ONE PICTURE, SHOWN TWICE. The tile crops the same backdrop the billboard
-       * above it displays, so the two are one entry in the browser cache and one
-       * decoded bitmap in memory — which on a screen holding ~147 tiles is the cost
-       * that actually matters.
-       *
-       * The crop is `object-fit: cover` plus an object-position derived from the
-       * face detector's focal point; the wordmark and its scrim are elements over
-       * the top. Nothing is composited on a server any more, so correcting a poster
-       * changes a NUMBER in this payload rather than a cached picture — which is
-       * why an edit takes effect on the next load instead of outliving three caches.
-       *
-       * `poster` stays as the onError fallback: a title with no backdrop at all
-       * still renders what this row rendered before any of this existed. */
-      /* PRE-CUT IF WE HAVE ONE, otherwise crop the shared backdrop here.
-       *
-       * `posterArt` is the slice already cut to the tile's shape — exactly the pixels
-       * shown, so it is both sharper and smaller than fetching the whole frame to
-       * discard two thirds of it. Its url contains the crop, so a correction is a new
-       * url and nothing needs invalidating.
-       *
-       * Falling back to the shared backdrop is not a degradation to paper over: it is
-       * how a title with no focal point yet, or one whose crop we declined, renders —
-       * the same picture, cropped by object-fit, at lower detail. */
-      const cut = artW(it.posterArt);
-      const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
-      const src = cut || shared || imgW(it.poster || '', THUMB_RENDITION);
-      const fallbackSrc = cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : '');
-      // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
-      const objectPosition = cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
-      const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
-      /* What names this tile: its wordmark, its title in type, or nothing at all when it
-       * has fallen back to a plain poster that already carries its own. */
-      const name: 'mark' | 'text' | null = mark ? 'mark' : ((cut || shared) ? 'text' : null);
-      const res = resumeOf?.(it);
-      return (
-        <button
-          key={key}
-          type="button"
-          role="listitem"
-          tabIndex={-1}
-          className="tv-spot-thumb"
-          style={{ background: heroFallbackGradient(it) }}
-          aria-label={it.title}
-          onClick={() => onSelect?.(it)}
-        >
-          {/* `data-src`, NOT `src` — the effect below decides which tiles are close enough to the
-              walk to be worth a bitmap. See the note there; `loading="lazy"` cannot do this job.
-
-              THE GRADIENT IS DROPPED THE MOMENT THE POSTER COVERS IT. It is the plate a tile shows
-              while it has no picture, and it was staying underneath one forever: measured on a
-              settled home screen, 106 of 147 tiles were painting a gradient beneath a fully opaque
-              poster, so every repaint of a row filled each of those rects twice. Cleared straight
-              on the node rather than through state — this lives inside a useMemo whose entire
-              purpose is to not rebuild on a focus change, and a setState per poster load would
-              undo that for a change no one can see. */}
-          {src && (
-            <img
-              className="tv-spot-thumbimg"
-              data-src={src}
-              decoding="async"
-              style={{ objectPosition }}
-              alt=""
-              /* NOT `useImageReady` HERE, and that is deliberate rather than an oversight. These
-                 carry `data-src` because a home screen holds ~147 of them and they are fetched
-                 lazily; a hook would preload every one on mount and undo the memory work the
-                 comment above describes. `load` is the weaker guarantee (bytes, not bitmap) but a
-                 228px portrait has no visible band to hide — the fade is here so a tile arrives
-                 rather than pops, which is all this size of picture needs.
-                 Both writes go straight to the nodes for the same reason the background clear
-                 does: this lives inside a useMemo that must not rebuild on a poster load. */
-              onLoad={(e) => {
-                const img = e.currentTarget;
-                const t = img.parentElement;
-                if (t) t.style.background = 'none';
-                img.classList.add('rdy');
-              }}
-              /* One retry, onto the ordinary poster, and then never again — `dataset.fell`
-                 latches so a poster that is ALSO broken cannot ping-pong the two URLs. The
-                 art service is a separate deploy from this app: if it is down, or was never
-                 stood up, every tile quietly renders what it renders today. */
-              onError={(e) => {
-                const img = e.currentTarget;
-                if (!fallbackSrc || img.dataset.fell) return;
-                img.dataset.fell = '1';
-                img.src = fallbackSrc;
-              }}
-            />
-          )}
-          {/* The wordmark and the darkening that keeps it readable, drawn only when a
-              mark exists — and when it does not, the title is SET IN TYPE in the same
-              place rather than left off, so no tile is ever nameless. That covers three
-              cases at once: a title TMDB has no wordmark for at all, one whose wordmark
-              the page's budget has not resolved yet (it arrives on a later load), and an
-              add-on card that never had one.
-
-              NOT text-first-then-logo. The billboard settled that already — swapping type
-              for a wordmark a beat later is the same flicker the backdrop had — so a tile
-              shows one or the other and never both in turn.
-
-              AND ONLY OVER OUR OWN ARTWORK. When a tile has fallen all the way back to the
-              plain TMDB poster, that poster already has the title printed on it, so setting
-              it again in type would print it twice. `data-src` for the same reason the picture uses it: the
-              windowing effect below promotes these, so a row never fetches 21 at once. */}
-          {/* The scrim exists to make a NAME legible, so it paints only when there is one.
-              Rendering it unconditionally put a gradient over every tile that shows neither
-              — a plain TMDB poster carries its own title and needs no help. */}
-          {!!name && <span className="tv-spot-thumbscrim" aria-hidden="true" />}
-          {name === 'text' && (
-            <span className="tv-spot-thumbtitle" aria-hidden="true">{it.title}</span>
-          )}
-          {!!mark && (
-            <img
-              className="tv-spot-thumbmark"
-              data-src={mark}
-              decoding="async"
-              alt=""
-              onLoad={(e) => e.currentTarget.classList.add('rdy')}
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
-          )}
-          {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}
-        </button>
-      );
-    };
-    const endCard = (
-      <button
-        key="end"
-        type="button"
-        role="listitem"
-        tabIndex={-1}
-        className="tv-spot-thumb is-seeall"
-        aria-label={`${heading} — ${endLabel}`}
-        onClick={goEnd}
-      >
-        <span className="tv-spot-blank-ic" aria-hidden="true">{endIcon}</span>
-        <span className="tv-spot-blank-label">{endLabel}</span>
-      </button>
-    );
-    /* ---- THE WRAP DUPLICATE IS CAPPED, AND THE REASON IS THE COMPOSITOR ----------------------
-     *
-     * The strip animates `transform`, so it is a promoted layer, and a promoted layer's texture is
-     * sized by its CONTENT — not by the box that clips it. Measured on the reference set with a
-     * layer census: the full `[10 titles][end card][10 titles]` strip is a single
-     * **6892 x 509 layer, 13.4MB**, of which about six tiles are ever on screen. Cutting the strip
-     * to eight tiles took that same layer to **2616 x 509, 5.1MB**, and the frame numbers moved with
-     * it — horizontal held 85.8% -> 93.0% on time, worst frame 70ms -> 63.4ms.
-     *
-     * It is NOT about painting. Tiles past the right edge of an `overflow: hidden` rail never paint
-     * either way; they cost because they make the layer bigger, and the GPU is what this device runs
-     * out of first. That also rules out the tidy-looking alternative: `content-visibility: auto` on
-     * each tile was measured and LOST on every block (horizontal deliberate 83.9% -> 79.8%, vertical
-     * held 76.8% -> 70.4%), because ~190 extra elements in Blink's intersection machinery cost more
-     * than the skipped paint saves.
-     *
-     * AND YET THE CAP IS OFF, because the illusion needs more of the duplicate than it looks like.
-     * Capping it at six was built, measured and REVERTED:
-     *
-     *   · the frame gain was +0.1 to +1.2 points across four blocks — inside the run-to-run noise
-     *     band, because a 19% smaller layer buys about a seventh of what the 62% ablation did;
-     *   · and it broke the thing the duplicate is for. Walking 26 steps along an open row with a
-     *     six-tile duplicate, the strip's right edge fell short of the rail's on FIVE of them —
-     *     which on screen is the up-next area emptying itself mid-walk, exactly the defect the full
-     *     copy prevents. Verified in desktop Chrome against `vite preview --mode tv`; the strip
-     *     geometry does not depend on the panel.
-     *
-     * A visible gap is not worth a gain that cannot be distinguished from noise. If the strip layer
-     * is attacked again, the lever is the number of TITLES a row carries (SPOT_MAX), which shortens
-     * both copies together and keeps the wrap whole — not trimming the copy that makes it work. */
-    const DUP_TILES = undefined;
-    const copy = (pass: number, limit?: number) =>
-      (limit ? list.slice(0, limit) : list).map((it, i) => tile(it, `p${pass}-${i}`));
-    /* THE SECOND COPY IS NOT BUILT UNTIL SOMETHING COULD SEE IT — the single biggest cut in the
-     * TV build's passive load. The duplicate exists only so the up-next area is never empty near
-     * the END of a walk; a row nobody has touched is parked at index 0 with the copy sitting
-     * entirely off the right of a strip that is `overflow: hidden`. Home shows ~13 of these rows
-     * and 12 of them are never focused, so the browser was rastering a second full set of posters
-     * per row purely to keep them clipped.
-     *
-     * `dup` latches on the first thing that can expose it (see the `wrap` effect) and never
-     * clears — unmounting a copy the walk might come back to would throw away decoded bitmaps and
-     * pop them back in, which is the artefact this whole component is arranged to avoid. */
-    if (!dup) return hasEnd ? [...copy(0), endCard] : copy(0);
-    if (!hasEnd) return [...copy(0), ...copy(1, DUP_TILES)];
-    /* POSITION IS THE WHOLE TRICK. The strip is translated so the tile at index `active` hides
-     * behind the billboard and its successors peek to the right, so putting the card at index n —
-     * straight after the last title of the FIRST copy — makes it both the thing you see appear at
-     * the end of the posters and the thing the billboard becomes when you reach it. The second
-     * copy still follows it, so the row's endless up-next preview is unbroken. */
-    return [...copy(0), endCard, ...copy(1, DUP_TILES)];
+    /** Which walk index a tile at physical position `p` shows, counted from the anchor. */
+    const itemAt = (p: number): number => mod(active + (p - pos), stops);
+    const out: ReactElement[] = [];
+    if (!stops) return out;
+    /* Nothing left of the origin. Left off the first title leaves the row for the nav bar (see
+     * `onHeroKey`), so in the first lap a tile at a negative position could never be walked back
+     * onto — it would be two clipped, decoded posters per row that the old strip never held. Once
+     * the walk has wrapped, or been rebased, the two behind are at positive positions anyway. */
+    for (let p = Math.max(0, pos - TILES_BEHIND); p <= pos + TILES_AHEAD; p++) {
+      const slot = slotAt(itemAt(p));
+      const k = mod(p, TILE_KEYS);
+      if (slot === 'end') {
+        out.push(<EndTile key={`${k}:end`} left={tileLeft(p)} label={endLabel} icon={endIcon} heading={heading} onGo={goEndStable} />);
+      } else if (slot) {
+        const res = resumeOf?.(slot);
+        out.push(<Tile key={`${k}:${slot.id}`} item={slot} left={tileLeft(p)} pct={res?.pct ?? 0} onOpen={openTile} />);
+      }
+    }
+    return out;
+    // `slotAt` is rebuilt every render and closes over `list` and `n`, which are in the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [list, onSelect, hasEnd, dup, canSeeAll, cat, onSeeAll, onMore, moreBusy, endLabel, endIcon, heading, t, resumeOf]);
+  }, [list, n, stops, pos, active, hasEnd, endLabel, endIcon, heading, resumeOf]);
 
   /* ---- ONLY THE TILES THE WALK CAN REACH GET A BITMAP -------------------------------------
-   * A row holds 21 tiles and shows six. The other fifteen sit past the right edge of a strip
-   * that is `overflow: hidden` — and they were being downloaded and decoded anyway. Measured on
-   * a settled home screen: 56 posters fully decoded entirely off the right edge, 37.5 MB of
-   * bitmap for pictures nobody could see.
+   * The strip used to hold 21 tiles and show six, with the other fifteen downloaded and decoded
+   * anyway: measured on a settled home screen, 56 posters fully decoded entirely off the right
+   * edge, 37.5 MB of bitmap for pictures nobody could see. A `data-src` window fixed that, and the
+   * DOM window (TILES_BEHIND / TILES_AHEAD) is now the SAME window — a tile exists exactly while
+   * it is close enough to the walk to deserve a picture — so promotion is simply "every tile
+   * mounted in this strip": whichever tiles the window holds when the callback fires.
    *
    * `loading="lazy"` DOES NOT COVER THIS, which is the whole reason this exists. Lazy loading is
    * about the VIEWPORT, and these tiles are inside it — they are only clipped horizontally by an
-   * ancestor's overflow, which the browser does not treat as off-screen.
+   * ancestor's overflow, which the browser does not treat as off-screen. And a tile only ever
+   * receives a `src` from here, gated on `visible` (the IntersectionObserver latch) through
+   * `artOn`, so a row below the fold has no `src` on any tile and `content-visibility: auto` on
+   * the rail covers those rows besides.
    *
-   * AND THE ATTRIBUTE IS NOW GONE, WHICH REVERSES WHAT THIS NOTE USED TO SAY. It said lazy stayed
-   * on because it "still earns its keep for rows below the fold". It does not, and cannot: a tile
-   * only ever receives a `src` from the effect below, the effect returns early unless `visible`,
-   * and `visible` is an IntersectionObserver latch. A row below the fold therefore has no `src` on
-   * any tile, and `loading` on an image with no source is inert — there was nothing left for it to
-   * defer. `content-visibility: auto` on the rail covers those rows besides.
+   * ONE PROMOTION IN FLIGHT, IDEMPOTENT, AND IT READS THE STRIP WHEN IT FIRES. This used to be an
+   * effect that cancelled and re-armed its idle callback on every press, so at a held key's
+   * cadence the callback was rebuilt before it could ever run — thirty presses of scheduling for
+   * zero promotions, then one at the end. Now every path (a press, a commit that changed the
+   * window, the row coming near the viewport) calls the same scheduler, which does nothing if a
+   * callback is already pending, and the one that eventually runs promotes what is mounted THEN —
+   * where the walk actually ended up, which is what the viewer is looking at.
    *
-   * What it DID still cost is registration: every promoted tile joined Blink's internal lazy-load
-   * observer, on a screen carrying ~121 images, and a trace of an eight-press walk put
-   * `IntersectionObserverController::computeIntersections` at 36.5ms per press — during a
-   * HORIZONTAL walk, where nothing scrolls and no intersection can have changed. Removing a
-   * redundant observer registration per tile is the cheapest thing on that line. Unmeasured as
-   * yet; it wants the same four-arm treatment as the rest.
+   * ON THE IDLE FRAME, NEVER ON THE KEYPRESS FRAME, and this is the correction that makes the
+   * window worth having at all. Promoting inline looked right and measured WORSE than loading
+   * everything up front — 1.69s of task time across ten presses became 2.20s, with four janky
+   * frames where there had been none. The window had not removed the decodes, it had moved them
+   * out of the quiet moment after load and into the one frame that is animating a cross-fade.
+   * Deferred, the work lands between presses, where the row is doing nothing anyway. The 600ms
+   * timeout is the floor under that promise: an idle callback with no deadline can be starved
+   * indefinitely, and a tile that never gets a bitmap is a hole on the shelf. `decoding="async"`
+   * keeps the decode itself off the main thread once the bytes are in.
    *
-   * DONE ON THE NODES, NOT THROUGH RENDER, and that is the constraint that shaped it. The strip
-   * is memoised precisely so a keypress does not rebuild 24 buttons (see the note on `thumbs`),
-   * so making the tile list depend on `active` would trade one cost for the one it was built to
-   * avoid. Instead every tile renders with `data-src` and this effect promotes the few in range
-   * — a handful of attribute writes per press, no reconciliation at all.
-   *
-   * ONCE SET, NEVER UNSET. Walking back over a tile must not re-download it, and an `img` whose
-   * src is removed drops its decoded frame; the window only ever grows. The ceiling is the row,
-   * and a row is 21 tiles.
-   *
-   * The forward margin is runway: at ~300ms a press, nine tiles is about three seconds of
-   * walking, and a poster is ~30 KB from a CDN that answers in 90ms. A tile that does outrun it
-   * shows its gradient plate for a beat rather than a hole. */
-  const THUMB_AHEAD = 9;
-  const THUMB_BEHIND = 2;
-  /* ---- ONE PROMOTION IN FLIGHT, AND IT READS THE WALK WHEN IT FIRES -------------------------
-   * This used to be an effect keyed on `active`: every press cancelled the pending idle callback
-   * and armed a new one, so at a held key's ~120ms cadence the callback was cancelled and rebuilt
-   * before it could ever run — thirty presses of scheduling for zero promotions, then one at the
-   * end. Pure churn on the frame that can least afford it.
-   *
-   * Now `step` calls this directly and it is idempotent: if one is already scheduled, nothing
-   * happens. The window is computed from `liveActive` INSIDE the callback rather than captured
-   * when it was scheduled, so the one that eventually runs promotes where the walk actually
-   * ENDED UP rather than where it was thirty presses ago — which is the tile the viewer is
-   * looking at. */
+   * A tile keeps its `src` for as long as it is mounted — walking back over it never re-downloads
+   * — and a tile that leaves the window takes its <img> with it. The next time the walk reaches
+   * that title a fresh tile is mounted two positions behind the billboard, where nothing is ever
+   * visible, and its picture comes back out of the HTTP cache three presses before it could
+   * appear. Both the picture and the wordmark are promoted together: a tile holds TWO deferred
+   * images, and promoting only the first is why lettering used to arrive a beat after the art. */
   const promoteSoon = () => {
     if (promoteId.current) return;
     const track = trackRef.current;
     if (!track || !artOn) return;
     const run = () => {
       promoteId.current = 0;
-      const tiles = track.children;
-      const at = liveActive.current;
-      const from = Math.max(0, at - THUMB_BEHIND);
-      const to = Math.min(tiles.length - 1, at + THUMB_AHEAD);
-      for (let i = from; i <= to; i++) {
-        /* ALL of them, not the first. A tile holds TWO deferred images — the picture and
-         * the wordmark laid over it — and `querySelector` returns only the picture, so the
-         * mark was left for whichever later pass happened to run once the picture had
-         * given up its `data-src`. That is why the lettering always arrived a beat after
-         * the art it sits on: not a slower image, a promotion cycle behind. */
-        const imgs = tiles[i]?.querySelectorAll<HTMLImageElement>('img[data-src]');
-        if (!imgs || !imgs.length) continue;    // the see-all card, or a tile already promoted
-        for (const img of imgs) {
-          img.src = img.dataset.src || '';
-          delete img.dataset.src;
-        }
+      const imgs = track.querySelectorAll<HTMLImageElement>('img[data-src]');
+      for (const img of imgs) {
+        img.src = img.dataset.src || '';
+        delete img.dataset.src;
       }
     };
     const ric = window.requestIdleCallback;
@@ -1462,49 +1492,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       ? ric(run, { timeout: 600 })
       : window.setTimeout(run, 120);
   };
-
-  useEffect(() => {
-    if (!visible) return;
-    const track = trackRef.current;
-    if (!track) return;
-    const promote = () => {
-      const tiles = track.children;
-      const from = Math.max(0, active - THUMB_BEHIND);
-      const to = Math.min(tiles.length - 1, active + THUMB_AHEAD);
-      for (let i = from; i <= to; i++) {
-        /* ALL of them, not the first. A tile holds TWO deferred images — the picture and
-         * the wordmark laid over it — and `querySelector` returns only the picture, so the
-         * mark was left for whichever later pass happened to run once the picture had
-         * given up its `data-src`. That is why the lettering always arrived a beat after
-         * the art it sits on: not a slower image, a promotion cycle behind. */
-        const imgs = tiles[i]?.querySelectorAll<HTMLImageElement>('img[data-src]');
-        if (!imgs || !imgs.length) continue;    // the see-all card, or a tile already promoted
-        for (const img of imgs) {
-          img.src = img.dataset.src || '';
-          delete img.dataset.src;
-        }
-      }
-    };
-    /* ON THE IDLE FRAME, NEVER ON THE KEYPRESS FRAME, and this is the correction that makes the
-     * window worth having at all. Promoting inline looked right and measured WORSE than loading
-     * everything up front — 1.69s of task time across ten presses became 2.20s, with four janky
-     * frames where there had been none. The window had not removed the decodes, it had moved them
-     * out of the quiet moment after load and into the one frame that is animating a cross-fade.
-     *
-     * Deferred, the work lands between presses, where the row is doing nothing anyway. The 600ms
-     * timeout is the floor under that promise: an idle callback with no deadline can be starved
-     * indefinitely, and a tile that never gets a bitmap is a hole on the shelf. `decoding="async"`
-     * keeps the decode itself off the main thread once the bytes are in. */
-    const ric = window.requestIdleCallback;
-    if (typeof ric === 'function') {
-      const id = ric(promote, { timeout: 600 });
-      return () => window.cancelIdleCallback?.(id);
-    }
-    const id = window.setTimeout(promote, 120);
-    return () => window.clearTimeout(id);
-    // `thumbs` is in here because a row whose data changed has brand-new nodes to promote.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [artOn, active, thumbs]);
+  /* After every commit that could have mounted a tile: the window moving, the data changing, the
+   * row coming near the viewport. `promoteSoon` coalesces them into one callback. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { promoteSoon(); }, [artOn, thumbs]);
 
   /* Arm the artwork a screenful before the row arrives, so it is decoded by the time it is
    * scrolled to and nothing pops in. Disconnects on the first hit — this is a one-way latch. */
@@ -1558,19 +1549,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /* The committed state is the source of truth whenever React DOES commit; `liveActive` only runs
    * ahead of it during a hold. Re-syncing here keeps a deliberate press, a catalogue change and the
    * load-more reset from leaving the two disagreeing. */
-  if (!chaining.current) liveActive.current = active;
-  /* Not while a wrap re-seat is pending: the strip is parked on the duplicate for the length of
-   * that glide, and a render landing mid-way must not drag it back.
-   *
-   * WHEN A HOLD ENDS THE STRIP MAY BE DEEP IN THE DUPLICATE, and this line hauls it back to the
-   * walk's own index in one go. Left to the layout effect that writes `--active`, that is an
-   * ANIMATED slide across fifteen posters — measured at 4935px over 483ms, the row visibly
-   * rewinding after the button is released. The distance is recorded here so the write can be split
-   * into an invisible hop and the ordinary one-tile glide. */
-  if (!chaining.current && !reseatId.current) {
-    if (stripPos.current !== liveActive.current) silentFrom.current = stripPos.current;
-    stripPos.current = liveActive.current;
-  }
+  /* Both halves of the anchor, together: `pos` is committed beside `active` on every press, so
+   * the two refs can never disagree with the two states here. There is no longer anything to haul
+   * back when a hold ends — the strip's position IS where the walk is, in a coordinate that does
+   * not wrap — so the silent hop this used to arm exists only for the two cases that genuinely
+   * teleport the strip (a catalogue cut, the rare rebase), and they set `silentHop` themselves. */
+  if (!chaining.current) { liveActive.current = active; stripPos.current = pos; }
 
   const activeSlot = slotAt(active);
   const activeKey = activeSlot === 'end' ? 'end' : String(activeSlot?.id ?? '');
@@ -1619,7 +1603,15 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       cutId.current = 0;
       cutEl?.classList.remove('is-cut');
     }, SWAP_WAIT_CAP + 60);
+    /* The strip goes back to its origin with the walk, and it must not be seen travelling there:
+     * `is-cut` silences the billboard's transitions but the strip's own is a separate rule, so the
+     * hop is flagged for the layout effect that writes `--active`. The refs move now, because the
+     * render this commit triggers re-syncs them from state and the two must already agree. */
+    liveActive.current = 0;
+    stripPos.current = 0;
+    silentHop.current = true;
     setActive(0);
+    setPos(0);
     /* ---- THE CUT KEEPS WHICHEVER LAYER IS ALREADY IN FRONT ----------------------------------
      * This wrote `{ a: list[0], b: null, front: 'a' }`, which is a cut in every respect except
      * one: it MOVES `front`. If the row had been walked an odd number of times, front was 'b', so
@@ -1813,38 +1805,60 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artOn, active, stops, artById]);
 
-  /* Suppress the strip's scroll animation on a wrap / multi-step jump, so it resets instead of
-   * rewinding through every card.
-   *
-   * TWO COORDINATE SYSTEMS SHARED ONE REF, AND THAT IS WHAT KILLED THE GLIDE. `prevActiveRef` is
-   * written by `step()` as a STRIP index, which is deliberately allowed to run on into the
-   * duplicate copy (17…33 on an extended row); `active` is the WALK index and stays inside
-   * 0…stops-1. Comparing one against the other made `Math.abs` large on nearly every press, so this
-   * effect turned the transition off constantly and every step became a hard cut.
-   *
-   * It only began firing when the billboard was made to track a hold: before that `active` stood
-   * still for the whole hold and this effect never ran. And it bites hardest right after "load
-   * more", because from then on the walk spends almost all its time in the duplicate — which is
-   * exactly where the row was reported as jumping instead of sliding. Measured on the television:
-   * 55% of steps completed in a single frame, against 10-28 frames for a real slide.
-   *
-   * So: a ref of its own for the commit-to-commit comparison, and no interference at all while a
-   * hold is running, when `step()` owns the node and the strip is not React's to animate. */
-  const prevCommitRef = useRef(active);
+  /* ---- A JUMP IS NOT SLID, AND ONLY TWO THINGS JUMP -------------------------------------------
+   * Compared in the strip's OWN coordinate. This used to compare the walk index, which wraps — so
+   * stepping off the end card read as a jump of `stops` and the transition was killed on the very
+   * press that is now the point of the endless strip. `pos` moves by exactly one per press, so a
+   * difference of more than one is a genuine teleport: a catalogue cut or a rebase, both of which
+   * also raise `silentHop` for the layout effect that writes `--active`. This is the belt to that
+   * effect's braces — it holds the transition off for two frames after the write so nothing that
+   * lands late can pick the hop up and animate it. No interference while a hold is running, when
+   * `step()` owns the node. */
+  const prevCommitRef = useRef(pos);
   useEffect(() => {
     const prev = prevCommitRef.current;
-    prevCommitRef.current = active;
+    prevCommitRef.current = pos;
     if (chaining.current) return;
     const track = trackRef.current;
-    const jumped = Math.abs(active - prev) > 1;
-    /* Re-sync the strip's own ref on the way past: a deliberate press never enters the duplicate,
-     * so the two systems agree here and the next held press starts from a truthful value. */
-    prevActiveRef.current = active;
-    if (track && jumped) {
+    if (track && Math.abs(pos - prev) > 1) {
       track.style.transition = 'none';
       requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
     }
-  }, [active]);
+  }, [pos]);
+
+  /* ---- THE ROW GOT SHORTER UNDER THE WALK ------------------------------------------------------
+   * `active` can outlive the number of stops it indexes: the walk is parked on the "+" card at
+   * position n, the batch it asked for turns out to be empty, and the card is withdrawn — so
+   * `stops` falls to n while `active` still says n. The tile under the billboard already shows
+   * title 0 (positions are counted modulo `stops`); this brings the billboard into agreement with
+   * it. Reducing modulo `stops` rather than clamping keeps every position's title where it is —
+   * the window is counted from `active` and only its value mod `stops` matters — so no tile
+   * remounts. A catalogue change is not this case; it resets both halves itself above. */
+  useEffect(() => {
+    if (stops > 0 && active >= stops) {
+      liveActive.current = mod(active, stops);
+      setActive(liveActive.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stops]);
+
+  /* ---- THE REBASE: ONCE PER ~2000 PRESSES, AT REST, AND NEVER SEEN ----------------------------
+   * See TILE_KEYS. Armed after the slide has had time to finish and cancelled by the next press
+   * (the effect re-runs on `pos`); it only fires on a strip that has genuinely stopped, and it
+   * moves the position by a multiple of TILE_KEYS so every key and every title survives. The
+   * layout effect suppresses the transition around the write, and the jump effect above keeps it
+   * suppressed for two frames after. */
+  useEffect(() => {
+    if (pos < REBASE_AT || chaining.current) return;
+    const id = window.setTimeout(() => {
+      if (chaining.current || stripPos.current !== pos) return;   // pressed again since; try later
+      const laps = Math.floor(pos / TILE_KEYS) - 1;
+      stripPos.current = pos - laps * TILE_KEYS;
+      silentHop.current = true;
+      setPos(stripPos.current);
+    }, SLIDE_MS + SLIDE_CHAIN_WINDOW);
+    return () => window.clearTimeout(id);
+  }, [pos]);
 
   /* ---- THE SPRING ARM: ONE WRITER FOR THE STRIP'S POSITION ---------------------------------
    * Every `--active` write in this component goes through `putActive` so the two arms cannot both
@@ -1924,25 +1938,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   useLayoutEffect(() => {
     const t = trackRef.current;
     if (t) {
-      /* THE HOP IS SILENT, THE PRESS IS NOT. Tile i and tile i+stops are the same picture, so
-       * bringing the strip back inside the real range is invisible as long as it does not animate —
-       * and the press that triggered this commit still gets its own one-tile slide, because the hop
-       * is flushed first and the real value written after. Writing only the final value made the
-       * row rewind across the whole duplicate in plain sight. */
-      const from = silentFrom.current;
-      silentFrom.current = -1;
-      if (from >= 0 && stops > 0) {
-        const same = ((from % stops) + stops) % stops;   // same artwork, inside the real range
-        /* Compared against where the strip PHYSICALLY is, not against where it is going. Comparing
-         * it to the destination skipped the hop whenever the press happened to land on the parked
-         * position's own equivalent — and then the write animated the entire rewind, 4606px over
-         * 900ms of the row running backwards. */
-        if (same !== from) {
-          t.style.transition = 'none';
-          putActive(t, same, true);
-          void t.offsetWidth;
-          t.style.transition = '';
-        }
+      /* THE HOP IS SILENT. A catalogue cut or a rebase moves the strip by many tiles in one commit
+       * and the tiles at the destination carry the same pictures (a cut re-keys them, a rebase
+       * keeps them), so the write must not animate: the transition is taken off, the value written
+       * and flushed, and the transition handed back — the same two-write shape the old wrap used,
+       * now for a case that happens once per page change or once per two thousand presses. */
+      if (silentHop.current) {
+        silentHop.current = false;
+        t.style.transition = 'none';
+        putActive(t, stripPos.current, true);
+        void t.offsetWidth;
+        t.style.transition = '';
       }
       putActive(t, stripPos.current);
     }
@@ -1965,7 +1971,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     openRef.current = v;
     sectionRef.current?.classList.toggle('is-open', v);
     if (openCommit.current) window.clearTimeout(openCommit.current);
-    if (reseatId.current) window.clearTimeout(reseatId.current);
     openCommit.current = window.setTimeout(() => {
       openCommit.current = 0;
       setOpen(v);
@@ -1994,46 +1999,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   onOpenRef.current = onOpen;
   useEffect(() => { if (open) onOpenRef.current?.(); }, [open]);
 
-  /* ---- LOADING MORE REBUILDS THE STRIP UNDER THE WALK --------------------------------------
-   * Pressing OK on the end card appends a batch, so the strip goes from `[titles][+][titles]` to
-   * the same shape with MORE titles in each copy — and every index past the first copy now means a
-   * different tile than it did. If the walk is parked in the duplicate, which is exactly where the
-   * seamless wrap leaves it, the strip is suddenly pointing at the wrong card and the next press
-   * jumps.
+  /* ---- LOADING MORE NO LONGER MOVES THE STRIP AT ALL ------------------------------------------
+   * There used to be a layout-effect re-seat here: with the strip rendered as two copies, every
+   * index past the first copy meant a different tile once the row lengthened, so the strip had to
+   * be hauled back onto the real index the moment the count changed — before paint, or one frame
+   * showed the wrong card (measured mid-hold at 22.6 px/ms against ~1.3 for a legal step).
    *
-   * So the strip is re-seated onto the real index the moment the count changes. Invisible: titles
-   * are APPENDED and keep their positions (see the note on `all`), so the card at `liveActive` is
-   * the same picture it was a frame ago — only its index in the rebuilt strip has moved.
-   *
-   * `useLayoutEffect`, AND THAT IS THE WHOLE FIX RATHER THAN A DETAIL. As a passive effect this ran
-   * after the browser had already painted, and the layout effect above had by then written the OLD
-   * `stripPos` to a strip that no longer means the same thing at that index — so one frame showed
-   * the wrong card and the correction that followed was a teleport. Measured on the television with
-   * the row lengthening MID-HOLD: 22.6 px/ms, against ~1.3 for a legal step. Running before paint
-   * means the two writes land in the same frame and the viewer sees only the settled one.
-   *
-   * DECLARED BELOW THE HOOK THAT WRITES `--active` ON EVERY COMMIT, deliberately: layout effects run
-   * in declaration order, so this one has the last word in the commit that rebuilt the strip.
-   *
-   * The earlier version of this test loaded more while PARKED and reported clean, which is why the
-   * fault survived a round. Loading more mid-hold is the case that matters — a parked walk has
-   * `stripPos === liveActive` and takes the early return below without doing anything at all. */
-  const prevN = useRef(n);
-  useLayoutEffect(() => {
-    if (prevN.current === n) return;
-    prevN.current = n;
-    if (stripPos.current === liveActive.current) return;
-    stripPos.current = liveActive.current;
-    const t = trackRef.current;
-    if (!t) return;
-    t.style.transition = 'none';
-    putActive(t, stripPos.current, true);
-    prevActiveRef.current = stripPos.current;
-    requestAnimationFrame(() => requestAnimationFrame(() => { t.style.transition = ''; }));
-    // `putActive` is rebuilt every render and reads only refs, so it is deliberately not a dep —
-    // listing it would re-run this re-seat on every commit instead of only when the count changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [n]);
+   * The window counts titles FROM the anchor (see TILES_AHEAD), so a batch appended past the walk
+   * changes the titles at positions AHEAD of the card under the billboard and nothing else: those
+   * tiles get fresh nodes because their keys carry the title id, the card under the billboard and
+   * everything behind it keep theirs, and `--active` does not move. Loading more mid-hold is the
+   * case the old fix was for, and it is now the case that needs no fix. */
 
   /* Chained presses leave a commit owed; if the row unmounts mid-hold the timer must not fire. */
   useEffect(() => () => {
@@ -2187,113 +2163,40 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     }
 
     const raw = liveActive.current + delta;
-    const next = (raw + stops) % stops;
+    const next = mod(raw, stops);
     liveActive.current = next;
 
     /* ---- WALKING OFF THE END KEEPS GOING, IT DOES NOT SNAP BACK ---------------------------
-     * Measured: `--active` ran 8, 9, 10 (the end card) and then 0 — ten cards backwards in one
-     * press, suppressed to be instant so it did not rewind the whole strip. Instant or rewound,
-     * both read as the row lurching.
+     * Measured, on the strip that rendered its titles twice: `--active` ran 8, 9, 10 (the end
+     * card) and then 0 — ten cards backwards in one press, suppressed to be instant so it did not
+     * rewind the whole strip. Instant or rewound, both read as the row lurching. That strip fixed
+     * it for a HELD key by letting the position run on into the duplicate copy and rebasing when
+     * the copy ran out, which still left one press in sixteen un-animated, and a deliberate press
+     * off the end card still snapped.
      *
-     * The strip renders `[titles][end card][titles again]` — 21 tiles for ten titles — so every
-     * tile past the end card is the SAME PICTURE as one near the start. The walk therefore wraps
-     * (the billboard is title 0 again) while the STRIP simply carries on: 10, 11, 12 … through the
-     * duplicate. Consecutive single steps, so the glide is unbroken for the whole of the copy.
-     *
-     * A FIRST ATTEMPT RE-SEATED AFTER ONE TILE and was wrong in exactly the way this is right. It
-     * glided to 11 and scheduled a hop back to 0 once the slide finished — but a held key arrives
-     * every ~240ms and the slide takes 260ms, so the NEXT press cancelled that timer, asked for
-     * tile 1, and snapped back ten. Glide, jump, stop, resume: the reported symptom, caused by the
-     * fix for it.
-     *
-     * The re-seat still has to happen — the duplicate is finite — but it now waits until the strip
-     * has genuinely run out of tiles, which is a full lap rather than a single step, and until then
-     * `stripPos` is simply allowed to exceed the walk. `stripPos` drives the node; `liveActive`
-     * stays the truth about which title is showing. */
-    const track0 = trackRef.current;
-    const tiles = track0 ? track0.children.length : stops;
-    /* ---- WRAP WHILE THE UP-NEXT AREA IS STILL FULL, NOT AT THE LAST TILE --------------------
-     * Letting `stripPos` run all the way to `tiles - 1` puts the walk on the FINAL tile of the
-     * strip, where there is nothing to its right at all. The previews therefore thin out — six
-     * ahead, then four, then one, then none — and only afterwards does the wrap snap them back.
-     *
-     * That is what "the glide breaks after see more" is. Loading more makes it far worse for a
-     * reason that is not obvious: the end card DISAPPEARS once the row has been extended, so the
-     * strip goes from [10 titles][+][10 titles] to [17 titles][17 titles] — measured on the
-     * television — and the duplicate the walk may run into grows from ten tiles to seventeen. The
-     * empty stretch goes from a flicker to something like a second and a half of watching the row
-     * empty itself.
-     *
-     * Rebasing is a VISUAL NO-OP: tile i and tile i+stops are the same picture. That was checked
-     * against the DOM rather than assumed — all 34 pairs identical, none different — because the
-     * whole trick collapses if it is ever false.
-     *
-     * HELD PRESSES ONLY. A deliberate press re-syncs `stripPos` from `liveActive` further up, so it
-     * is never in the duplicate to begin with, and the early return below would leave a rebase to
-     * be written by the layout effect WITH its transition on — a full-width slide across the row. */
-    const AHEAD = 8;
-    let base = stripPos.current;
-    let rebased = false;
-    if (chained && base >= stops && base + AHEAD > tiles - 1) { base -= stops; rebased = true; }
-    let sp = base + delta;
-    let ranOut = false;
-    if (sp > tiles - 1) { sp -= stops; ranOut = true; }   // past the last duplicate tile
-    if (sp < 0) { sp += stops; ranOut = true; }           // off the front, where there is no copy
+     * The window has no copy to run out of. The walk wraps (the billboard is title 0 again) and
+     * the strip simply moves one more tile, onto the position that shows title 0 — see
+     * TILES_AHEAD — so every press in either direction is one ordinary tile with its transition
+     * on. Nothing here is ever rebased; the once-per-two-thousand-presses rebase lives in its own
+     * effect and only ever runs on a strip at rest. */
+    const sp = stripPos.current + delta;
     stripPos.current = sp;
-    /* Bring the strip back into the real range once the walk settles, so it never drifts far into
-     * the duplicate and the next lap has room. Invisible: the tile it lands on is the same picture.
-     * Rescheduled by each press, so it only fires when the remote has actually stopped. */
-    if (reseatId.current) { window.clearTimeout(reseatId.current); reseatId.current = 0; }
-    if (sp >= stops) {
-      reseatId.current = window.setTimeout(() => {
-        reseatId.current = 0;
-        const t = trackRef.current;
-        if (!t) return;
-        stripPos.current = ((stripPos.current % stops) + stops) % stops;
-        t.style.transition = 'none';
-        putActive(t, stripPos.current, true);
-        prevActiveRef.current = stripPos.current;
-        requestAnimationFrame(() => requestAnimationFrame(() => { t.style.transition = ''; }));
-      }, (chained ? HELD_SLIDE_MS : SLIDE_MS) + 120);
-    }
 
-    /* A DELIBERATE PRESS IS UNCHANGED — same single setActive it always did, so everything that
-     * hangs off it (the cross-dissolve, the wordmark, the synopsis, the warm-ahead) behaves
-     * exactly as measured. Only a HELD key takes the path below. */
-    if (!chained) { setActive(next); return; }
+    /* A DELIBERATE PRESS IS UNCHANGED — the same single commit it always made, so everything that
+     * hangs off `active` (the cross-dissolve, the wordmark, the synopsis, the warm-ahead) behaves
+     * exactly as measured; `pos` rides in the same batch so the window moves with it. Only a HELD
+     * key takes the path below. */
+    if (!chained) { setActive(next); setPos(sp); return; }
 
-    /* ---- A HELD PRESS DOES NOT RENDER ------------------------------------------------------
-     * The row moves by writing the property the transform reads, and that is the whole press:
-     * no setState, no reconcile, no commit, and none of the effects keyed on `active` — the swap
-     * gate, the warm-ahead, the prefetches — which at this cadence all produce work that is
-     * replaced before it can be seen. `endChain` commits once, on release.
-     *
-     * The wrap suppression is done inline here rather than left to the effect above, because that
-     * effect is keyed on `active` and `active` is deliberately standing still. `prevActiveRef` is
-     * moved with it so the commit at the end sees a delta of zero and does not kill the transition
-     * a second time for a jump that already happened. */
+    /* ---- A HELD PRESS MOVES THE NODE FIRST ---------------------------------------------------
+     * The row moves by writing the property the transform reads, on the press frame, before React
+     * is involved. The commit follows (see below) but the strip is already travelling by then.
+     * The dwell is cancelled by hand because during a hold the effect that owns it is keyed on a
+     * title that is deliberately changing under it every press. */
     chaining.current = true;
     if (dwellId.current) { window.clearTimeout(dwellId.current); dwellId.current = 0; }
     const track = trackRef.current;
-    if (track) {
-      /* Judged on the STRIP's own movement. A wrap into the duplicate is one ordinary tile and
-       * must keep its transition; only a genuine hop (running out of copy, or a multi-card jump)
-       * gets suppressed. */
-      /* THE REBASE IS INSTANT, NOT ANIMATED. Writing it with the transition off and flushing before
-       * the real write was meant to keep the press's own slide, but measured on the television the
-       * flush did not reliably take: the strip animated the whole way back instead — 5264px in
-       * 217ms, the row rewinding sixteen posters in front of the viewer. An instant hop cannot be
-       * seen at all, because tile i and tile i+stops are the same picture; the only cost is that
-       * this ONE press does not slide, and it happens about once every sixteen. A press that does
-       * not animate is a far smaller thing than the row running backwards. */
-      const jump = rebased || ranOut || Math.abs(stripPos.current - prevActiveRef.current) > 1;
-      if (jump) {
-        track.style.transition = 'none';
-        requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
-      }
-      putActive(track, stripPos.current, jump);
-    }
-    prevActiveRef.current = stripPos.current;
+    if (track) putActive(track, sp);
     promoteSoon();
 
     /* ---- AND THE BILLBOARD KEEPS UP -------------------------------------------------------
@@ -2311,9 +2214,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * 30-press hold went 6-7 -> 10 of 10, while frames on time were 88.3/83.4% frozen against
      * 91.0/82.5% tracking and p95 was identical. The picture keeps up and nothing pays for it.
      *
-     * The strip is still moved by the node write above, so it starts travelling on the press frame
-     * rather than waiting for React — that half of the decouple is what still earns its keep. */
+     * The window rides on the same commit: one tile mounts at the leading edge, one unmounts at
+     * the trailing edge, and the ten between them are `memo` bail-outs. The strip is still moved
+     * by the node write above, so it starts travelling on the press frame rather than waiting for
+     * React — that half of the decouple is what still earns its keep. */
     setActive(next);
+    setPos(sp);
   };
 
   /* ---- PAYING THE COMMIT THE HOLD RAN UP ---------------------------------------------------
@@ -2341,9 +2247,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     }
     if (!chaining.current) return;
     chaining.current = false;
-    const at = liveActive.current % stops;
+    const at = mod(liveActive.current, stops);
     liveActive.current = at;
-    if (at === active) {
+    if (at === active && stripPos.current === pos) {
       const rest = at < n ? list[at] : undefined;
       /* `openRef`, not `open` — a hold can end before the focus commit has landed, and the state
        * would still say the row is not focused when it plainly is. */
@@ -2353,6 +2259,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       return;
     }
     setActive(at);
+    setPos(stripPos.current);
   }
 
   /* Until the row is near the viewport the layer keeps the branded gradient and requests no
@@ -2458,13 +2365,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         {/* The strip's window — it carries the clip the stage used to, so the billboard on top is
             free to grow past the row when the remote reaches it. See tv.css. */}
         <div className="tv-spot-rail" ref={railRef}>
-          {/* STRIP TRACK — all titles, portrait; translated so the focused one hides behind the
-              billboard and its successors peek to the right. `--active` drives the transform. */}
+          {/* STRIP TRACK — a window of tiles, portrait, each positioned at its own physical
+              position; translated so the tile under the walk hides behind the billboard and its
+              successors peek to the right. `--active` drives the transform. */}
           <div className="tv-spot-strip" ref={trackRef} role="list">
-            {/* The list is rendered TWICE so the up-next area is never empty near the end: when
-                `active` reaches the last real title, the successors come from the second copy,
-                giving the reference's endless loop. tabindex -1 → the strip is a preview, not a
-                D-pad stop (the billboard is the focus target); hover maps back to the real index. */}
+            {/* A dozen tiles around the walk and no more — the row is endless by arithmetic, so
+                the up-next area is never empty near the end and no second copy is ever built
+                (see TILES_AHEAD). tabindex -1 → the strip is a preview, not a D-pad stop (the
+                billboard is the focus target); a click still opens the title. */}
             {thumbs}
           </div>
         </div>

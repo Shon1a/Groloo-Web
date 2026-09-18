@@ -1,23 +1,19 @@
 /* HOW MANY TITLES A ROW CARRIES — the `groloo.tvcards` experiment.
  *
- * WHY THIS AND NOT A TILE WINDOW. The strip is the largest layer on the screen: measured on the
- * reference set at rest, one row is a single 26301 x 509 texture, 51MB, against a 1920-wide panel.
- * That is about thirteen screens of row held to show one.
+ * WHAT THIS USED TO BE THE LEVER FOR, AND NO LONGER IS. The strip was the largest layer on the
+ * screen: measured on the reference set at rest, one row was a single 26301 x 509 texture, 51MB,
+ * against a 1920-wide panel — a row carried SPOT_MAX titles and the strip rendered them TWICE, so
+ * 40 titles at a ~329px pitch was 80 tiles and ~26300px. Trimming the duplicate copy was tried and
+ * lost (it emptied the up-next area mid-walk), which left the number of TITLES as the only thing
+ * that shortened the layer, and that is what this flag was for.
  *
- * The arithmetic says where it comes from. A row carries SPOT_MAX titles and the strip renders them
- * TWICE — the duplicate is what keeps the up-next area from emptying near the end of a walk — so
- * 40 titles at a ~329px pitch is 80 tiles and ~26300px, which is the measured number.
+ * THE STRIP IS A WINDOW NOW (see TILES_AHEAD in TvSpotlight): a dozen tiles around the walk, at any
+ * row length, with the endless wrap done by arithmetic rather than by a second copy. The layer no
+ * longer scales with this number at all, and neither does a row's `content-visibility` activation.
  *
- * TRIMMING THE DUPLICATE WAS TRIED AND LOST, and the note on `DUP_TILES` in TvSpotlight records it:
- * a 19% smaller layer bought about a seventh of what a 62% ablation did, and it broke what the
- * duplicate is for — walking 26 steps along an open row, the strip's right edge fell short of the
- * rail's on five of them, which on screen is the up-next area emptying mid-walk. That note names
- * the lever instead: the number of TITLES, which shortens both copies together and keeps the wrap
- * whole.
- *
- * WHAT IT COSTS THE VIEWER. Fewer titles before the row's "load more" card, and nothing else — the
- * row still reaches every title, it just fetches them in smaller bites. That is the trade being
- * measured; if the frames do not move, it is not worth taking.
+ * WHAT IT STILL COSTS THE VIEWER, so the flag keeps its meaning: how many titles a row holds before
+ * its "load more" card — nothing else. The row still reaches every title; a smaller number just
+ * fetches them in smaller bites. Kept as a measurement switch for exactly that question.
  *
  * A FLAG RATHER THAN A NEW DEFAULT, for the same reason `groloo.tvrows` and `groloo.tvscroll` are:
  * both arms then run against one binary, and the driver can A/B them on the television without a
