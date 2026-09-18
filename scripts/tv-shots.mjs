@@ -50,7 +50,9 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
-const SHOTS = join(ROOT, 'screenshots');
+/* SHOT_DIR points baseline/current/diff somewhere else — an A/B of two local builds must not
+ * overwrite the committed baseline. The recorded fixtures are always read from the repo. */
+const SHOTS = process.env.SHOT_DIR || join(ROOT, 'screenshots');
 const BASE_URL = process.env.SHOT_URL || 'http://localhost:5173';
 
 const mode = process.argv.includes('--baseline') ? 'baseline'
@@ -60,7 +62,7 @@ if (!mode) {
   console.error('Usage: node scripts/tv-shots.mjs --record | --baseline | --check');
   process.exit(1);
 }
-const FIXTURES = join(SHOTS, 'fixtures.json');
+const FIXTURES = join(ROOT, 'screenshots', 'fixtures.json');
 
 /* A pixel must differ by more than this (0-1, perceptual) to count. 0.1 is pixelmatch's
  * usual starting point and tolerates antialiasing without hiding a real colour shift. */
@@ -105,6 +107,19 @@ const SCREENS = [
   { name: 'detail-modal', path: '#/movies', click: '.poster', settle: 1500, waitFor: '.overlay.open' },
   // AuthModal is eager (not lazy), so its own openAuth wait below is enough — no waitFor.
   { name: 'auth-modal', path: '#/', evaluate: 'openAuth' },
+  /* ---- THE ROWS, WHICH NONE OF THE ABOVE EVER SHOWS ------------------------------------------
+   * `home` at rest is the featured hero and a heading; the poster strip, the billboard, the peek
+   * and the info panel only exist once the remote is IN a row, so a suite without these screens
+   * cannot see the largest surface on the television at all. Each one drives the remote after
+   * the page settles: Down into a row, then along it. `hold` repeats a key without releasing it,
+   * which is what a held remote key looks like to the app (a chained, linear glide). Transitions
+   * are frozen by setup(), so every press lands instantly and the capture is deterministic. */
+  { name: 'home-row1', path: '#/', keys: ['ArrowDown'] },
+  { name: 'home-row1-walk3', path: '#/', keys: ['ArrowDown', 'ArrowRight', 'ArrowRight', 'ArrowRight'] },
+  { name: 'home-row2-walk1', path: '#/', keys: ['ArrowDown', 'ArrowDown', 'ArrowRight'] },
+  { name: 'home-row2-held', path: '#/', keys: ['ArrowDown', 'ArrowDown'], hold: { key: 'ArrowRight', n: 14 } },
+  { name: 'home-row3-held-back', path: '#/', keys: ['ArrowDown', 'ArrowDown', 'ArrowDown'], hold: { key: 'ArrowRight', n: 8 }, keysAfter: ['ArrowLeft', 'ArrowLeft'] },
+  { name: 'movies-walk2', path: '#/movies', keys: ['ArrowDown', 'ArrowRight', 'ArrowRight'] },
 ];
 
 /* Recorded API responses, keyed by pathname+search. Populated by --record, replayed by
@@ -152,7 +167,11 @@ async function route(context) {
       } catch { return r.abort(); }
     }
 
-    const hit = fixtures[key];
+    /* A recorded key can go stale when a query gains a flag (browse grew `&logos=1` after these
+     * were recorded). Fall back to the same path without the newer flags rather than answering
+     * empty: the bytes are the same catalogue, and an empty answer makes every row screen below
+     * capture "No titles found" — a pass that never looked at a row. */
+    const hit = fixtures[key] ?? fixtures[key.replace(/&logos=1/, '')];
     if (hit !== undefined) {
       return r.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: hit });
     }
@@ -175,6 +194,11 @@ async function route(context) {
 
 async function capture(page, screen, vp, dir) {
   await page.setViewportSize({ width: vp.width, height: vp.height });
+  /* A COLD LOAD PER SCREEN. Every path here differs only by hash, and a hash-only `goto` is a
+   * same-document navigation: nothing remounts, so whatever the previous screen left open — the
+   * auth modal, a walked row — was still there and captured under the next screen's name. Both
+   * arms of an A/B carried the same leak, which is how it passed unnoticed. */
+  await page.goto('about:blank');
   await page.goto(BASE_URL + '/' + screen.path, { waitUntil: 'domcontentloaded' });
   await setup(page);
   await page.waitForTimeout(screen.settle ?? 900);
@@ -185,6 +209,14 @@ async function capture(page, screen, vp, dir) {
     }).catch(() => {});
     await page.waitForTimeout(600);
   }
+  const tap = async (key) => { await page.keyboard.press(key); await page.waitForTimeout(700); };
+  for (const k of screen.keys ?? []) await tap(k);
+  if (screen.hold) {
+    for (let i = 0; i < screen.hold.n; i++) { await page.keyboard.down(screen.hold.key); await page.waitForTimeout(330); }
+    await page.keyboard.up(screen.hold.key);
+    await page.waitForTimeout(1200);
+  }
+  for (const k of screen.keysAfter ?? []) await tap(k);
   if (screen.click) {
     await page.locator(screen.click).first().click({ timeout: 5000 }).catch(() => {});
   }
