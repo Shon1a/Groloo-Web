@@ -151,7 +151,30 @@ function buildStamp(mode: string) {
   };
 }
 
+/* ---- THE PACKAGED TV APP — `node scripts/build-tv-pack.mjs` -------------------------------------
+ *
+ * The same `--mode tv` build, with three differences, all of them about where the bytes live:
+ *
+ *   · `base: './'`. A webOS package is loaded from the set's own storage, so every URL in the
+ *     built index, stylesheet and chunks has to be relative to index.html rather than to an
+ *     origin root. Hash routing never changes the document path, so `./build/…` and `./assets/…`
+ *     resolve from any route. The web build keeps `/`; nothing about it changes.
+ *   · NO SERVICE WORKER. Chromium refuses to register one from a packaged document (the origin is
+ *     opaque), and the app shell it existed to cache is now the package itself. The runtime API
+ *     caches it also provided (a sleeping backend served from cache) are the one thing the
+ *     packaged app gives up, and that is recorded in webos/README.md rather than papered over.
+ *   · `dist-tv-pack/`, so the streamed TV build and the packaged one can exist side by side.
+ *
+ * SWITCHED BY AN ENVIRONMENT VARIABLE, NOT A MODE. `import.meta.env.MODE === 'tv'` is the
+ * compile-time constant the whole TV build hangs off — a `tv-pack` mode would flip every one of
+ * those branches to the website. `VITE_TV_PACKAGED` is a `VITE_`-prefixed variable, so it is
+ * also statically inlined into the bundle where the one runtime difference lives (lib/api.ts,
+ * which must not ask for cookies from an origin that cannot hold them). The script sets it;
+ * setting it by hand on a plain `vite build --mode tv` has the same effect. */
+const packagedTv = (mode: string) => mode === 'tv' && process.env.VITE_TV_PACKAGED === '1';
+
 export default defineConfig(({ mode }) => ({
+  ...(packagedTv(mode) ? { base: './' } : {}),
   /* Injected as literals; see buildStamp above for why this exists at all. */
   define: {
     __GROLOO_BUILD__: JSON.stringify(buildStamp(mode)),
@@ -160,7 +183,7 @@ export default defineConfig(({ mode }) => ({
     react(),
     /* TV ONLY, so the website's stylesheet is provably untouched. See tvCssDiet above. */
     ...(mode === 'tv' ? [tvCssDiet()] : []),
-    VitePWA({
+    ...(packagedTv(mode) ? [] : [VitePWA({
       // A new build's service worker takes over on the next load rather than waiting for
       // every tab to close. That also means a bad deploy can be undone by shipping a good
       // one — with 'prompt', users who dismiss the toast stay stuck on the broken version.
@@ -398,7 +421,7 @@ export default defineConfig(({ mode }) => ({
           { src: '/assets/groloo-icon-maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
         ],
       },
-    }),
+    })]),
   ],
   resolve: {
     // Mirrors the "paths" entry in tsconfig.app.json — keep the two in step.
@@ -467,7 +490,7 @@ export default defineConfig(({ mode }) => ({
     ...(mode === 'tv' ? { target: TV_TARGET, cssTarget: TV_TARGET } : {}),
     // A separate folder so a TV build can never overwrite the web build that is about to
     // be deployed to Vercel, and so both can exist at once during a comparison.
-    ...(mode === 'tv' ? { outDir: 'dist-tv' } : {}),
+    ...(mode === 'tv' ? { outDir: packagedTv(mode) ? 'dist-tv-pack' : 'dist-tv' } : {}),
   },
   server: {
     // Dev proxy: /api/* → the live backend, server-side, so the browser makes a

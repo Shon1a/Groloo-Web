@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
+import { homeNetworkFirst } from './homeCache';
 import { collectAddonMeta } from './addonClient';
 import type { HomePayload, MediaItem, MetaDetail, SeasonEpisodes } from './types';
 import { useLang } from '../i18n/i18n';
@@ -63,7 +64,8 @@ export function useHome() {
   const { lang } = useLang();
   return useQuery({
     queryKey: ['home', lang],
-    queryFn: () => api<HomePayload>(`/api/home?lang=${encodeURIComponent(lang)}${HOME_QUERY}`),
+    /* Wrapped for the packaged TV build only — see lib/homeCache.ts; elsewhere a pass-through. */
+    queryFn: () => homeNetworkFirst(lang, () => api<HomePayload>(`/api/home?lang=${encodeURIComponent(lang)}${HOME_QUERY}`)),
     // admin-editable content (covers, titles, Featured Hero) — mirror the API's
     // max-age=60 and refresh on tab focus so admin edits appear within ~a minute
     staleTime: 60 * 1000,

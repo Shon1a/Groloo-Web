@@ -14,6 +14,8 @@
  *  Override via <meta name="api-base" content="…"> or VITE_API_BASE.
  * ------------------------------------------------------------------ */
 
+import { IS_PACKAGED } from './packaged';
+
 const TOKEN_KEY = 'groloo_session';
 
 function resolveApiBase(): string {
@@ -86,8 +88,12 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   return fetch(url, {
     ...init,
     headers,
-    // browsers only attach the cross-site auth cookie when asked to
-    credentials: init.credentials ?? 'include',
+    /* Browsers only attach the cross-site auth cookie when asked to. THE PACKAGED TV APP NEVER
+     * ASKS: its document has an opaque origin (`Origin: null`), which no cookie jar is keyed to and
+     * which the API must not answer with `Allow-Credentials` — the null origin is shared by every
+     * sandboxed frame on the web. The Bearer token above is the whole of its session, exactly as
+     * on a phone whose browser drops cross-site cookies, and auth.js accepts either. */
+    credentials: init.credentials ?? (IS_PACKAGED ? 'omit' : 'include'),
   });
 }
 

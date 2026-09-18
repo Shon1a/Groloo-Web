@@ -38,6 +38,13 @@ import {
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL } from '@ffmpeg/util';
 import { readThrough } from './streamingServer';
+import { IS_PACKAGED, WEB_ORIGIN, asset } from './packaged';
+
+/* THE DECODER IS NOT IN THE webOS PACKAGE. It is 32 MB for AC-3/DTS files most sets never open, so
+ * scripts/build-tv-pack.mjs leaves it out and the packaged app fetches it from the web origin the
+ * first time it is needed — the same bytes the streamed build serves itself. */
+const decoderUrl = (file: string): string =>
+  IS_PACKAGED ? `${WEB_ORIGIN}/ffmpeg/${file}` : asset(`/ffmpeg/${file}`);
 
 /** Codecs no browser decodes — the ones worth loading 32 MB to handle. */
 const NEEDS_WASM = ['ac3', 'eac3', 'dts', 'truehd'];
@@ -65,8 +72,8 @@ export function loadDecoder(): Promise<FFmpeg> {
        * served from /public. The app's CSP already allows this — `worker-src 'self' blob:`
        * and `script-src … 'wasm-unsafe-eval'` are both set in vercel.json. */
       await ff.load({
-        coreURL: await toBlobURL('/ffmpeg/ffmpeg-core.js', 'text/javascript'),
-        wasmURL: await toBlobURL('/ffmpeg/ffmpeg-core.wasm', 'application/wasm'),
+        coreURL: await toBlobURL(decoderUrl('ffmpeg-core.js'), 'text/javascript'),
+        wasmURL: await toBlobURL(decoderUrl('ffmpeg-core.wasm'), 'application/wasm'),
       });
       return ff;
     })().catch((e) => { ffmpegPromise = null; throw e; }); // let a failed load be retried
