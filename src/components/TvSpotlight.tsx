@@ -991,7 +991,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /* ---- THE ACTIVE-ROW HIGHLIGHT IS A CLASS, NOT A RENDER ------------------------------------
    * `open` drives two quite different things: the LOOK of the focused row (a class, and every
    * `.tv-spot.is-open` rule hanging off it) and the BEHAVIOUR of being focused — arming the
-   * trailer dwell, the neighbour prefetches, the red-button listener, the duplicate-strip latch.
+   * trailer dwell, the neighbour prefetches, the red-button listener.
    * The look has to be instant. The behaviour does not: all of it is work that happens half a
    * second later anyway.
    *
@@ -1960,8 +1960,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
 
   /* ---- FOCUS PAINTS IMMEDIATELY, COMMITS LATER ----------------------------------------------
    * The class is the whole visible effect of gaining or losing focus, and it costs one classList
-   * write. The state commit behind it re-runs the effects that arm the preview, the prefetches and
-   * the duplicate strip — none of which anyone can perceive inside half a second — so it is held
+   * write. The state commit behind it re-runs the effects that arm the preview and the prefetches
+   * — none of which anyone can perceive inside half a second — so it is held
    * until the scroll ease has finished rather than landing in the middle of it.
    *
    * OPEN_COMMIT_MS tracks TvSpatialNav's SCROLL_MS. Holding a direction keeps re-scheduling it, so

@@ -976,8 +976,9 @@
 
 /* ---- `--active` IS DECLARED SO IT STOPS INHERITING -----------------------------------------
  * An UNREGISTERED custom property inherits, so writing one dirties style for the element's whole
- * subtree — and this one is written on `.tv-spot-strip`, whose subtree is the 21-24 poster tiles
- * and their images. Every press therefore invalidated ~113 elements to move ONE transform.
+ * subtree — and this one is written on `.tv-spot-strip`, whose subtree was the 21-24 poster tiles
+ * and their images (a dozen now, see TILES_AHEAD in TvSpotlight). Every press therefore
+ * invalidated ~113 elements to move ONE transform.
  *
  * Nothing below the strip reads it. Grepped: `--active` appears exactly twice, on the inline write
  * in TvSpotlight and in the transform on this rule — so the inheritance was never wanted, only
