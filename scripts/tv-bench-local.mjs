@@ -4,6 +4,7 @@
  *   node scripts/tv-bench-local.mjs --dist=../dist-tv-BEFORE --label=before --throttle=4 --rounds=2
  *   node scripts/tv-bench-local.mjs --dist=dist-tv --label=after --snap        (structural walk)
  *   node scripts/tv-bench-local.mjs --compare=a.json,b.json                     (diff two --snap files)
+ *   node scripts/tv-bench-local.mjs --dist=dist-tv --label=after --soak=30     (a 30-minute session, sampled per minute)
  *
  * WHAT IT IS AND IS NOT. The real numbers come from `scripts/tv-measure.mjs` on the LG set, and
  * nothing here replaces them — a desktop GPU and a 4-core ARM panel do not drop the same frames.
@@ -47,6 +48,7 @@ const HEADLESS = flag('headless');
 const SNAP = flag('snap');
 const COMPARE = arg('compare', '');
 const DPR = Number(arg('dpr', '2'));
+const SOAK = Number(arg('soak', '0'));   // minutes of continuous navigation, sampled once a minute
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ---- --compare: diff two --snap files and exit ------------------------------------------------ */
@@ -122,6 +124,13 @@ async function routeAll(context) {
   await context.route(() => true, async (r) => {
     const u = new URL(r.request().url());
     if (isAppApi(u)) {
+      /* The row preview: the recorded fixtures carry no trailer endpoint, so every rest would find
+       * nothing to play and the media pipeline — the most expensive thing on the set — would never
+       * be exercised. The demo clip shipped in the build stands in as every title's trailer. */
+      if (u.pathname.startsWith("/api/imdb-trailer/")) {
+        const url = `${BASE}/assets/demo.mp4`;
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ url, urls: { '720p': url }, runtime: 30 }) });
+      }
       const key = u.pathname + u.search;
       const hit = fixtures[key] ?? (u.pathname === '/api/home' ? fixtures['/api/home?lang=en&logos=1'] : undefined);
       return r.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: hit ?? '{}' });
@@ -320,11 +329,98 @@ async function snapRun(browser) {
   return { label: LABEL, dist: DIST, tilesPerRow: shape.tiles, tilesPerRowEnd: shapeEnd.tiles, stripWidthEnd: shapeEnd.stripContentWidth, steps };
 }
 
+
+/* ---- --soak: does the page stay the same size after half an hour of use? ------------------------
+ * The television is left open for hours, and the notes record dropped frames drifting from 28% to
+ * ~50% over an hour of testing. What can be counted from here: live DOM nodes (the engine's own
+ * count, which includes detached nodes still in memory, against the document's element count),
+ * images and decoded images, videos, running animations, event listeners, the JS heap after a
+ * forced GC, and the idle frame distribution. Each loop is vertical walking, a held horizontal
+ * walk, deliberate presses, and the detail screen opened and closed with OK / Back. */
+async function soakRun(browser) {
+  const { context, page, cdp, layers } = await openPage(browser);
+  await cdp.send('HeapProfiler.enable').catch(() => {});
+  await intoRow(page);
+  const samples = [];
+  const sample = async (minute) => {
+    await sleep(1500);
+    await cdp.send('HeapProfiler.collectGarbage').catch(() => {});
+    await sleep(300);
+    const dom = await cdp.send('Memory.getDOMCounters').catch(() => ({}));
+    const m = await metrics(cdp);
+    await page.evaluate(() => { window.__gperf.reset(); });
+    await sleep(3000);
+    const idle = await page.evaluate(() => window.__gperf.idleStats());
+    const s = await page.evaluate(SAMPLE);
+    const inPage = await page.evaluate(() => ({
+      elements: document.getElementsByTagName('*').length,
+      animations: document.getAnimations().length,
+      tiles: document.querySelectorAll('.tv-spot-thumb').length,
+      overlays: document.querySelectorAll('.overlay.open').length,
+      focus: document.activeElement ? document.activeElement.className.slice(0, 30) : '',
+    }));
+    const row = { minute, liveNodes: dom.nodes, documents: dom.documents, listeners: dom.jsEventListeners, elements: inPage.elements, detachedApprox: (dom.nodes ?? 0) - inPage.elements,
+      tiles: inPage.tiles, animations: inPage.animations, images: s.images, decoded: s.imagesDecoded, bitmapMb: s.bitmapMb, videos: s.videos, preview: s.previewMounted,
+      heapMb: +(m.JSHeapUsedSize / 1048576).toFixed(1), longTasks: s.longTasks, longWorst: s.longTaskWorst, idleP95: idle.p95, idleWorst: idle.worstFrame, idleOnTime: idle.onTimePct,
+      layers: layerCensus(layers()).drawing, overlays: inPage.overlays, focus: inPage.focus };
+    samples.push(row);
+    console.log(`  min ${String(minute).padStart(2)}  nodes ${row.liveNodes} (doc ${row.elements}, ~detached ${row.detachedApprox})  listeners ${row.listeners}  tiles ${row.tiles}  anim ${row.animations}  img ${row.decoded}/${row.images} ~${row.bitmapMb}MB  video ${row.videos}  heap ${row.heapMb}MB  longtask ${row.longTasks}/${row.longWorst}ms  idle p95 ${row.idleP95} worst ${row.idleWorst}  layers ${row.layers}  focus ${row.focus}`);
+  };
+  await sample(0);
+  const t0 = Date.now();
+  let minute = 1;
+  /* Focus can leave the rows — Up off the first row reaches the hero and the nav bar, where a
+   * Right changes the route. Every phase starts by making sure the remote is on a home row,
+   * without reloading (a reload would reset the very session being measured). */
+  const ensureRow = async () => {
+    if (await page.evaluate(() => location.hash !== '#/' && location.hash !== '')) {
+      await page.evaluate(() => { location.hash = '#/'; });
+      await sleep(1200);
+    }
+    if (!(await page.evaluate(IN_ROW))) await intoRow(page);
+  };
+  while (Date.now() - t0 < SOAK * 60000) {
+    const loopStart = Date.now();
+    await ensureRow();
+    await press(page, 'ArrowDown', 4, 700);
+    await hold(page, 'ArrowRight', 20, 330); await sleep(900);
+    await press(page, 'ArrowLeft', 4, 700);
+    /* OK opens the title, Back closes it — one overlay per press, asserted. */
+    await page.keyboard.press('Enter');
+    const opened = await page.waitForSelector('.overlay.open', { timeout: 6000 }).then(() => true).catch(() => false);
+    if (opened) {
+      await sleep(1500);
+      const open = await page.evaluate(() => document.querySelectorAll('.overlay.open').length);
+      if (open > 1) throw new Error(`${open} overlays open`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.overlay.open', { state: 'detached', timeout: 6000 }).catch(() => {});
+      await sleep(600);
+    }
+    await ensureRow();
+    await press(page, 'ArrowUp', 3, 700);
+    await ensureRow();
+    await hold(page, 'ArrowDown', 5, 450); await sleep(700);
+    await hold(page, 'ArrowUp', 4, 450); await sleep(700);
+    await ensureRow();
+    await press(page, 'ArrowRight', 5, 600);
+    if (Date.now() - t0 >= minute * 60000) { await sample(minute); minute++; }
+    if (Date.now() - loopStart < 500) await sleep(500);
+  }
+  await sample(minute);
+  await context.close();
+  return samples;
+}
+
 /* ---- main ---------------------------------------------------------------------------------------- */
 const browser = await chromium.launch({ channel: 'chrome', headless: HEADLESS });
 await mkdir(join(ROOT, OUT), { recursive: true });
 try {
-  if (SNAP) {
+  if (SOAK) {
+    const samples = await soakRun(browser);
+    const file = join(ROOT, OUT, `soak-${LABEL}.json`);
+    await writeFile(file, JSON.stringify({ label: LABEL, dist: DIST, minutes: SOAK, samples }, null, 1));
+    console.log(`→ ${file}`);
+  } else if (SNAP) {
     const r = await snapRun(browser);
     const file = join(ROOT, OUT, `snap-${LABEL}.json`);
     await writeFile(file, JSON.stringify(r, null, 1));
