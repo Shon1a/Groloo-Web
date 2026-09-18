@@ -171,7 +171,7 @@ async function route(context) {
      * were recorded). Fall back to the same path without the newer flags rather than answering
      * empty: the bytes are the same catalogue, and an empty answer makes every row screen below
      * capture "No titles found" — a pass that never looked at a row. */
-    const hit = fixtures[key] ?? fixtures[key.replace(/&logos=1/, '')];
+    const hit = fixtures[key] ?? fixtures[key.replace(/&logos=1(?=&|$)/, '')];
     if (hit !== undefined) {
       return r.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: hit });
     }
@@ -262,8 +262,11 @@ const context = await browser.newContext({ deviceScaleFactor: 1, reducedMotion: 
 await route(context);
 const page = await context.newPage();
 
+/* SHOT_ONLY=home,movies-walk2 runs a subset — for iterating on one screen, or bisecting which
+ * earlier screen leaks state into a later one. */
+const only = (process.env.SHOT_ONLY || '').split(',').filter(Boolean);
 let captured = 0;
-for (const screen of SCREENS) {
+for (const screen of SCREENS.filter((sc) => !only.length || only.includes(sc.name))) {
   for (const vp of VIEWPORTS) {
     try { await capture(page, screen, vp, outDir); captured++; }
     catch (e) { console.error(`  ! ${screen.name}-${vp.name}: ${e.message}`); }
