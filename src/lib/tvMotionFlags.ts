@@ -32,6 +32,41 @@ export function parallaxEnabled(): boolean {
   return parallax;
 }
 
+let tileFade: boolean | null = null;
+/* ---- THE TILE ARRIVAL FADE, ON TILES NOBODY CAN SEE -----------------------------------------
+ *
+ *   localStorage['groloo.tvtilefade'] = 'always'   fade every tile that loads (the old behaviour)
+ *
+ * A poster tile fades in over 350ms when its picture loads (`.rdy` in tv.css), so a tile ARRIVES
+ * rather than pops. That is right for the tiles a row shows when it first gets artwork, and it is
+ * wasted on every tile that loads afterwards — because after the first pass the only tiles being
+ * promoted are the ones the walk has just mounted at the edges of the window, and those are
+ * nowhere near the screen.
+ *
+ * MEASURED, 90ms into a deliberate RIGHT press on the 7-row fixture home at 1920x1080, reading the
+ * running animations and their boxes together:
+ *
+ *   img.tv-spot-thumbimg  opacity 0 -> 1  350ms   x = 3693..4006
+ *   img.tv-spot-thumbmark opacity 0 -> 1  350ms   x = 3718..3981
+ *   the rail's visible band                        x =  970..1855
+ *
+ * Eighteen hundred pixels off the right-hand edge of a nineteen-hundred-pixel screen, two
+ * compositor animations per press, for ever. That is two of the THIRTEEN animations a deliberate
+ * press runs — and simultaneous animation count is the lever this row's measurements keep landing
+ * on (see the note on `is-fast` in TvSpotlight: turning all eleven off was the only arm of six to
+ * escape the noise band).
+ *
+ * WHAT IS PRESERVED, exactly: the first promotion pass for a row still fades, so a row coming into
+ * view assembles as it always did. Nothing else can be seen either way — a tile mounted nine
+ * positions ahead is behind the rail's clip, and one mounted two behind is under the billboard —
+ * so suppressing those is not a visual change, it is the same picture with the animation removed.
+ *
+ * DEFAULT IS THE CHEAP PATH; the flag restores the old one for an A/B on the set. */
+export function tileFadeAlways(): boolean {
+  if (tileFade === null) tileFade = read('groloo.tvtilefade') === 'always';
+  return tileFade;
+}
+
 let spring: boolean | null = null;
 /* ---- THE STRIP DRIVEN BY A SPRING INSTEAD OF A TRANSITION ------------------------------------
  *
