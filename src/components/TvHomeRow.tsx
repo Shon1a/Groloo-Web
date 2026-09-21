@@ -110,7 +110,10 @@ export default function TvHomeRow({ cat, title, items, onSelect }: TvHomeRowProp
     void q.fetchNextPage();
   }, [started, short, q.isFetching, q.hasNextPage, q.fetchNextPage, q]);
 
-  const list = all.slice(0, shown);
+  /* Memoised, because this array IS the row's identity downstream: TvSpotlight keys its strip
+   * memo on `items`, and a fresh slice per render — every time `q.isFetching` flipped, every time
+   * `moreBusy` changed — handed it a new list of the same titles and rebuilt the strip for nothing. */
+  const list = useMemo(() => all.slice(0, shown), [all, shown]);
   /* Offered until the catalogue is demonstrably out of titles: anything already fetched and
    * outside the window, a page still to ask for, or a request in flight all mean there is more
    * coming. Tested as "not exhausted" rather than as "has more" so the card cannot BLINK OUT for

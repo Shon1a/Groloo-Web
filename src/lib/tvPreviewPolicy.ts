@@ -142,12 +142,14 @@ function classify(): TvDeviceClass {
  * you settle is late enough that most viewers never learn the feature exists, and a feature nobody
  * sees is worth less than some frames on a cadence nobody has measured.
  *
- * WHAT WOULD LET THIS GO LOWER, and it is built and sitting switched off: the shared preview element
+ * WHAT WAS SUPPOSED TO LET THIS GO LOWER, AND PROBABLY CANNOT: the shared preview element
  * (lib/tvPreviewElement.ts, `localStorage['groloo.tvpreview'] = 'shared'`). The whole ladder above
- * is a mount cost, and that file exists to make a mount stop being one — one element for the
- * session, re-parented and re-sourced instead of rebuilt. If it holds up on the set, the dwell is
- * free to drop well under a second. Measure that before pushing this number down again; going below
- * 1200 on the current per-mount path is walking into the 500ms result deliberately.
+ * is a mount cost, and that file was written to make a mount stop being one — one element for the
+ * session, re-parented and re-sourced instead of rebuilt. Its header now records why that does not
+ * hold on Chromium: a `src` swap runs the load algorithm and rebuilds the media player, so the
+ * pipeline is acquired per preview either way. It stays an arm for the set to adjudicate; do not
+ * push this number down on the strength of it. Going below 1200 on the current path is walking
+ * into the 500ms result deliberately.
  *
  * AND MEASURE THE DWELL ITSELF AT SOME POINT: every "previews on" run in perf-results/ was taken
  * while the device gate was silently disabling previews (see the heap note in the header), so all

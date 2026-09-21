@@ -63,7 +63,10 @@
           var l = document.createElement('link');
           l.rel = 'preload'; l.as = 'font'; l.type = 'font/woff2';
           l.crossOrigin = 'anonymous';
-          l.href = '/assets/fonts/bpg-nino-mtavruli.woff2';
+          /* Relative, not root-absolute: this line is JavaScript, so Vite cannot rewrite it for the
+             packaged TV build the way it rewrites the <link>s above. From the site root the two spell
+             the same URL. */
+          l.href = 'assets/fonts/bpg-nino-mtavruli.woff2';
           document.head.appendChild(l);
         }
       } catch (e) { /* storage denied — English default, no preload, unicode-range still covers it */ }
