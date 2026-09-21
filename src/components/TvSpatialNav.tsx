@@ -175,7 +175,59 @@ const SCROLL_MS = 280;        // a settled, deliberate move — see the 60fps no
  *
  * MUST TRACK TvSpotlight's HELD_STEP_MIN_MS. Two files, one feel; if one moves, move both.
  * Both moved together on 2026-08-19 — 220 -> 300, then 300 -> 400 by preference — on the measurement recorded there. */
-const HELD_ROW_MIN_MS = 400;
+/* ---- BACK TO 300, BECAUSE THE OTHER HALF OF THE PAIR WENT BACK AND THIS ONE DID NOT ----------
+ * The rule directly above is the one that was broken. 629130a put TvSpotlight's HELD_STEP_MIN_MS
+ * back to the measured 300 — "a taste call the commit message admits was made AGAINST the panel
+ * rounds" — and left this at the preference value, so the two axes of one interface had been
+ * walking at different speeds ever since: a held row stepped every 300ms sideways and every 400ms
+ * downwards.
+ *
+ * WHAT IS AND IS NOT MEASURED HERE, stated plainly because it matters. The 2026-08-19 round on the
+ * 65UT8100 compared 240 against 300 on BOTH axes and 300 won both (vertical 57.5% -> 79.6% on-time,
+ * frames over 67ms 14.8 -> 5.3). 400 has never been measured against 300 on either axis — it was
+ * only ever a preference. So this restores the measured value and the documented invariant at once;
+ * it is not a new claim about 400.
+ *
+ * 300 IS THE FLOOR on this axis too: the same round put 240ms at 22 points of vertical on-time
+ * below 300. Anything under 300 needs the panel, not a preference.
+ *
+ * HELD_SCROLL_MS (440) still comfortably outlasts this, which is the constraint that keeps a hold
+ * one continuous glide rather than a series of arrivals, and CHAIN_WINDOW_MS (500) still clears it,
+ * which is what stops jitter dropping a held press onto the deliberate path. */
+const HELD_ROW_MIN_MS = 300;
+
+/* ---- THE TWO VERTICAL ARMS, SO THE SET CAN SETTLE THEM ON ONE BINARY -------------------------
+ *
+ *   localStorage['groloo.tvheld'] = 'timing'   infer a hold from timing alone (the old behaviour)
+ *   localStorage['groloo.tvpace'] = '400'      the old held pace
+ *
+ * DEFAULT IS THE FIXED BEHAVIOUR in both cases; a flag only ever turns something back for the
+ * length of a measurement. They are separate because they are separate claims — the first is a
+ * correctness fix with a deterministic result already (taps at 300ms: 4/6 before, 6/6 after) and
+ * the second is a pacing call that has never been measured head to head on this axis.
+ *
+ * ONE BINARY, ARMS INTERLEAVED, ORDER REVERSED BETWEEN ROUNDS — the same discipline tvPageScroll
+ * and tvRowWindow already use, and for the same reason: two builds compared across two sessions is
+ * not a comparison, because the set warms up and the difference lands on whichever went second.
+ * Driven from the harness with `node scripts/tv-measure.mjs measure --ls='groloo.tvheld=timing'`.
+ *
+ * Read ONCE. These decide an input mode, and re-reading localStorage on the keypress path to
+ * answer a question that cannot change is exactly the kind of cost this file exists to remove. */
+let vertArm: { timingOnly: boolean; pace: number } | null = null;
+function vertArms(): { timingOnly: boolean; pace: number } {
+  if (vertArm) return vertArm;
+  let timingOnly = false;
+  let pace = HELD_ROW_MIN_MS;
+  try {
+    timingOnly = localStorage.getItem('groloo.tvheld') === 'timing';
+    const p = Number(localStorage.getItem('groloo.tvpace'));
+    /* Bounded rather than trusted: a typo in an arm must not be able to stall the page for a
+     * second per row, or disable the limiter and let a hold cross the home screen in two. */
+    if (Number.isFinite(p) && p >= 120 && p <= 1000) pace = p;
+  } catch { /* no storage; the defaults stand */ }
+  vertArm = { timingOnly, pace };
+  return vertArm;
+}
 /** Beyond this gap the remote was tapped, not held. Mirrors SLIDE_CHAIN_WINDOW in TvSpotlight. */
 const CHAIN_WINDOW_MS = 500;
 /* ---- HELD STAYS AT 260, AND THE 140ms TARGET IS DECLINED ON PURPOSE -------------------------
@@ -820,19 +872,58 @@ export default function TvSpatialNav() {
     /* When the last vertical move was accepted. Only ACCEPTED moves advance it, so the limiter
      * paces from what the viewer last saw rather than from what the platform last sent. */
     let lastVert = 0;
+    /* ---- WHICH ARROW IS PHYSICALLY DOWN — THE OTHER HALF OF "IS THIS A HOLD" ------------------
+     * TIMING ALONE CANNOT ANSWER IT, and reading it from timing alone is a defect this file
+     * carried for the whole of the vertical axis while TvSpotlight had already been fixed for the
+     * horizontal one (`heldKey` there, commit 652def1). `held` was `since < CHAIN_WINDOW_MS`, so
+     * two DELIBERATE presses of Down inside half a second were read as a held key — which meant
+     * the second one got the linear hold glide instead of the settling curve and, if it landed
+     * inside HELD_ROW_MIN_MS, was DROPPED OUTRIGHT.
+     *
+     * MEASURED on the built TV bundle before the fix, real down+up tap pairs, six per gap:
+     *
+     *     gap between taps   250ms   300ms   350ms   400ms   600ms   900ms
+     *     vertical, moved      4/6     4/6     4/6     6/6     6/6     6/6
+     *     horizontal, moved    6/6     6/6     6/6     6/6     6/6     6/6
+     *
+     * One press in three thrown away for anyone who taps Down at a normal browsing pace, on the
+     * axis that is already the expensive one. Horizontal lost none, because it had this.
+     *
+     * A hold sends keydown after keydown with no keyup between them; separate presses each send a
+     * keyup. `e.repeat` is the direct answer where the platform sets it and this ref is the
+     * fallback for the sets that do not.
+     *
+     * THE WHEEL IS DELIBERATELY STILL PACED. A remote's scroll wheel dispatches synthetic arrow
+     * keydowns (see THE REMOTE'S WHEEL) every WHEEL_COOLDOWN — 110ms, far faster than a row may
+     * travel — and those never arrive with a keyup, so they can neither set nor clear `heldKey`.
+     * `fromWheel` marks them as the continuous gesture they are, so a spin is paced by the
+     * limiter exactly as it was before this change, while a TAP is not. */
+    let heldKey: string | null = null;
+    let fromWheel = false;
+    /* On the window, and a backstop for a set that swallows a keyup: the worst case is one press
+     * misread as held rather than every press after it. */
+    const onKeyUp = (e: KeyboardEvent) => { if (heldKey === e.key) heldKey = null; };
     const onKey = (e: KeyboardEvent) => {
       const dir = DIRS[e.key];
       if (!dir || e.altKey || e.ctrlKey || e.metaKey) return;
       if (standDown()) return;
       const vertical = dir === 'up' || dir === 'down';
+      /* Worked out BEFORE the pace test below, and recorded for every arrow the bar and the
+       * panels use, so a hold that starts sideways and turns is still a hold. */
+      const down = e.repeat || heldKey === e.key || fromWheel;
+      if (!fromWheel) heldKey = e.key;
       let held = false;
       if (vertical) {
+        const arm = vertArms();
         const now = performance.now();
         const since = now - lastVert;
-        held = since < CHAIN_WINDOW_MS;
+        /* BOTH HALVES ARE REQUIRED — recent enough to be one gesture, AND the button still down.
+         * The `timingOnly` arm drops the second half, which is exactly the old behaviour. */
+        held = (arm.timingOnly || down) && since < CHAIN_WINDOW_MS;
         /* A repeat arriving faster than the page is allowed to travel. Swallowed, not queued —
-         * queued repeats would keep the page moving after the button is released. */
-        if (held && since < HELD_ROW_MIN_MS) { e.preventDefault(); return; }
+         * queued repeats would keep the page moving after the button is released. A deliberate
+         * tap is never in here, which is the whole of the fix above. */
+        if (held && since < arm.pace) { e.preventDefault(); return; }
         lastVert = now;
       }
       if (move(dir, held)) e.preventDefault();
@@ -905,9 +996,13 @@ export default function TvSpatialNav() {
       const target = (document.activeElement as HTMLElement | null) || document.body;
       const key = dir === 'up' ? 'ArrowUp' : dir === 'down' ? 'ArrowDown'
         : dir === 'left' ? 'ArrowLeft' : 'ArrowRight';
+      /* Marked for the length of the dispatch, which is synchronous — see `fromWheel` at onKey.
+       * A notch carries no keyup, so it must not be allowed to latch the held-key state. */
+      fromWheel = true;
       const handled = !target.dispatchEvent(new KeyboardEvent('keydown', {
         key, code: key, bubbles: true, cancelable: true,
       }));
+      fromWheel = false;
       /* Only a notch that something acted on starts the cooldown — dispatchEvent reports that as a
        * cancelled event, since every handler here preventDefaults what it consumes. At the end of a
        * list every notch is refused, and charging those would leave the wheel feeling sticky for a
@@ -916,6 +1011,7 @@ export default function TvSpatialNav() {
     };
 
     window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
     // passive:false — preventDefault on wheel is the whole point, and Chrome ignores it otherwise.
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => {
@@ -923,6 +1019,7 @@ export default function TvSpatialNav() {
       if (pending) cancelAnimationFrame(pending);
       mo.disconnect();
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('touchstart', onUserScroll);
       scroller.stop();

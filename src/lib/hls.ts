@@ -2,6 +2,8 @@
  * script-src 'self'). Resolves window.Hls, or null when HLS isn't needed / the
  * browser plays HLS natively (Safari). Mirrors the vanilla loadHls(). */
 
+import { asset } from './packaged';
+
 interface HlsCtor {
   new (config?: unknown): HlsInstance;
   isSupported(): boolean;
@@ -33,7 +35,7 @@ export function loadHls(): Promise<HlsCtor | null> {
   if (loading) return loading;
   loading = new Promise((resolve) => {
     const s = document.createElement('script');
-    s.src = '/assets/hls.min.js';
+    s.src = asset('/assets/hls.min.js');
     s.async = true;
     s.onload = () => resolve(window.Hls ?? null);
     s.onerror = () => resolve(null);

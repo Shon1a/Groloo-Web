@@ -27,6 +27,26 @@
  *
  * WEB IS UNTOUCHED: `IS_TV` is a compile-time constant, so the whole module is dropped from the
  * website's bundle and the detail sheet keeps the element lifecycle it always had.
+ *
+ * ---- WHY THIS IS STILL NOT THE DEFAULT, AND WHAT RULE 3 GETS WRONG (2026-09-18) --------------
+ *
+ * RULE 3 IS NOT TRUE OF CHROMIUM, and every webOS this build targets is Chromium. Assigning
+ * `src` on a live media element invokes the media element load algorithm; when the element is
+ * not already NETWORK_EMPTY that algorithm tears the existing WebMediaPlayer down and a new one
+ * is built for the new resource (`HTMLMediaElement::InvokeLoadAlgorithm` -> `ClearMediaPlayer`,
+ * then `StartPlayerLoad`). On a set that means the platform pipeline is released and acquired
+ * again on every swap — exactly what building a fresh element does. So the one thing this file
+ * promised to remove, the per-preview pipeline acquisition, it cannot remove. What is left is a
+ * DOM element created once instead of per preview, and a teardown deferred by QUIET_MS instead
+ * of to the next idle callback — and "deferring the teardown" was built on the per-mount path,
+ * measured on the television, and came back flat (see TvSpotlight's dwell note).
+ *
+ * Against no expected gain sits a real unknown: re-parenting a media element that is presenting
+ * on the platform's video plane, which nothing here has ever done on a set. That is why the
+ * shipping path stays per-mount, why the dwell (lib/tvPreviewPolicy.ts) remains the lever that
+ * actually measured, and why the arm stays switchable rather than deleted: the claim is one
+ * A/B on the television from being settled either way, and `tv-measure.mjs --ls=groloo.tvpreview=shared`
+ * is the run that settles it. Check `previewMounted: true` in the result before believing it.
  */
 
 const IS_TV = import.meta.env.MODE === 'tv';

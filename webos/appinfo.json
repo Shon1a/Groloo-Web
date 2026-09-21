@@ -5,11 +5,13 @@
   "type": "web",
   "main": "index.html",
   "title": "GROLOO",
+  "appDescription": "Discover, organise and play your media library.",
   "icon": "icon.png",
   "largeIcon": "largeIcon.png",
   "bgColor": "#000000",
   "iconColor": "#000000",
   "resolution": "1920x1080",
   "disableBackHistoryAPI": true,
-  "handlesRelaunch": true
+  "handlesRelaunch": true,
+  "requiredACG": []
 }

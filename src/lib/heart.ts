@@ -55,17 +55,19 @@
  * runtime by the manifest fallback below on an origin with no SubtleCrypto.
  *
  * All four lines are printed together by the build script; bump them together. */
+import { asset } from './packaged';
+
 const CORE_BUILD = '0.2.0-7cdf240dab134b89';
 const CORE_VERSION = '0.2.0';
 const CORE_WASM_SHA256 = '7cdf240dab134b8922b8db17c2fa55cfb384d6181a2c92db64e41fc314346051';
-const CORE_JS = `/assets/groloo-core/${CORE_BUILD}/groloo_core.js`;
+const CORE_JS = asset(`/assets/groloo-core/${CORE_BUILD}/groloo_core.js`);
 /* The glue derives these two itself (`new URL('groloo_core_bg.wasm', import.meta.url)`),
  * so naming them again here is a second copy — but the verifier has to fetch the bytes
  * without going through the glue, and the CI guard already asserts that the glue's own
  * text names every .wasm the manifest lists. A rename that broke this would be caught on
  * disk before it could 404 in a browser. */
-const CORE_WASM = `/assets/groloo-core/${CORE_BUILD}/groloo_core_bg.wasm`;
-const CORE_MANIFEST = `/assets/groloo-core/${CORE_BUILD}/manifest.json`;
+const CORE_WASM = asset(`/assets/groloo-core/${CORE_BUILD}/groloo_core_bg.wasm`);
+const CORE_MANIFEST = asset(`/assets/groloo-core/${CORE_BUILD}/manifest.json`);
 
 /* ── the boundary ────────────────────────────────────────────────────────────── */
 
