@@ -10,7 +10,7 @@ import { retainImage, isDecoded } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { registerTvRow, rowIndexOf } from '../lib/tvRowRegistry';
-import { parallaxEnabled, springEnabled } from '../lib/tvMotionFlags';
+import { parallaxEnabled, springEnabled, tileFadeAlways } from '../lib/tvMotionFlags';
 import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '../lib/tvRowWindow';
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
@@ -977,6 +977,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const dwellId = useRef(0);
   /** One in-flight tile promotion at a time — see `promoteSoon`. */
   const promoteId = useRef(0);
+  /** Whether this row has ever promoted tiles. The first pass is the one a viewer can see fade —
+   *  see the note in `promoteSoon`. Per ROW, because each row gets its artwork on its own clock. */
+  const firstPromote = useRef(true);
   /* ---- THE STRIP'S POSITION IS NOT THE WALK'S POSITION ------------------------------------
    * `liveActive` is the walk index and wraps at `stops`; `stripPos` is the physical position and
    * never wraps — stepping RIGHT off the end card takes the walk to 0 and the strip forward by one,
@@ -1482,7 +1485,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const run = () => {
       promoteId.current = 0;
       const imgs = track.querySelectorAll<HTMLImageElement>('img[data-src]');
+      /* ---- ONLY THE FIRST PASS FADES, BECAUSE ONLY THE FIRST PASS IS VISIBLE ----------------
+       * The arrival fade belongs to a row getting its artwork: a dozen tiles promote together,
+       * in place, where they can be seen. Every pass AFTER that promotes exactly the tiles the
+       * walk has just mounted at the two edges of the window — nine ahead, behind the rail's
+       * clip, or two behind, under the billboard — so their 350ms fade is a compositor
+       * animation on something ~1800px off the side of the screen. Measured, with the boxes,
+       * at lib/tvMotionFlags.ts; two of the thirteen animations a press runs.
+       *
+       * Written to the node rather than through a class, for the reason every other write in
+       * this function is: a tile must not re-render to load a picture. The node is created for
+       * one title at one position and destroyed with it, so it has no later fade to lose. */
+      const fade = tileFadeAlways() || firstPromote.current;
+      firstPromote.current = false;
       for (const img of imgs) {
+        if (!fade) img.style.transition = 'none';
         img.src = img.dataset.src || '';
         delete img.dataset.src;
       }
