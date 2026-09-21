@@ -103,8 +103,16 @@ jobs:
           /* ── 1. where the artifact lives, according to the code that loads it ────────── */
 
           const src = readFileSync('src/lib/heart.ts', 'utf8');
+          /* An optional `asset(` wrapper is tolerated, and that is not a loosening.
+           * 082d268 made these `asset(`/assets/…`)` so the packaged webOS build can rebase them
+           * to relative URLs (lib/packaged.ts); the PATH inside is unchanged, and the path is
+           * the only thing this guard derives. Refusing the wrapper made the check fail with
+           * "no longer declares … as plain string literals" on a repository whose artifact was
+           * perfectly intact — a guard failing for a reason unrelated to what it guards, which
+           * is the one way to get it deleted. The `/assets/` and `.js` assertions below still
+           * decide whether the resolved path is acceptable. */
           const literal = (name) => {
-            const m = new RegExp(`const\\s+${name}\\s*=\\s*(?:'([^']*)'|\`([^\`]*)\`)`).exec(src);
+            const m = new RegExp(`const\\s+${name}\\s*=\\s*(?:asset\\(\\s*)?(?:'([^']*)'|\`([^\`]*)\`)`).exec(src);
             if (!m) return null;
             return m[1] !== undefined ? m[1] : m[2];
           };
