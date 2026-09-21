@@ -350,8 +350,40 @@ async function assertLive(cdp, key, backKey) {
  *
  * Reversing at `span` keeps every press doing work. `span` is set below the stop count on each axis
  * so the walk never reaches the end at all. */
+/* ---- HOW MANY OF THE PRESSES ACTUALLY MOVED ANYTHING ------------------------------------------
+ * `__gperf.presses` counts KEYDOWNS, which is what the driver sent and not what the app did. The
+ * difference is not academic: the row and the page both refuse repeats that arrive faster than
+ * their pace and DROP them, so at the fast cadences an arm can be handed twenty presses, act on
+ * twelve, and score beautifully for doing less work. That is the same failure as the run that
+ * measured a home screen with six fewer rows in it and called it an improvement.
+ *
+ * So a block reports MOVES beside presses, and a comparison is only honest when both arms moved
+ * the same number of times. Counted in the page from rAF — the strip's `--active` is an integer
+ * that steps once per accepted horizontal press, and the focused row's index steps once per
+ * accepted vertical one — so it costs the driver nothing per press and cannot distort the gap the
+ * cadence is defined by. */
+const MOVE_COUNTER = `(() => {
+  if (!window.__mv) {
+    window.__mv = { n: 0, last: null };
+    const tick = () => {
+      const a = document.activeElement;
+      const row = a && a.closest ? a.closest('.tv-spot') : null;
+      const idx = row ? [].indexOf.call(document.querySelectorAll('.tv-spot'), row) : -1;
+      const strip = row ? row.querySelector('.tv-spot-strip') : null;
+      const act = strip ? Math.round(Number(strip.style.getPropertyValue('--active')) || 0) : 0;
+      const k = idx + ':' + act;
+      if (window.__mv.last !== null && k !== window.__mv.last) window.__mv.n++;
+      window.__mv.last = k;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+  window.__mv.n = 0; window.__mv.last = null;
+})()`;
+
 async function runBlock(cdp, label, { key, backKey, gap, presses, span }) {
   await cdp.eval(`window.__gperf.reset(); window.__gperf.tag(${JSON.stringify(label)})`);
+  await cdp.eval(MOVE_COUNTER);
   const before = await cdp.eval(FINGERPRINT);
   let dir = key, sinceTurn = 0;
   for (let i = 0; i < presses; i++) {
@@ -363,9 +395,10 @@ async function runBlock(cdp, label, { key, backKey, gap, presses, span }) {
   /* Let the last press's animation finish inside its own attribution window before scoring. */
   await sleep(600);
   const after = await cdp.eval(FINGERPRINT);
+  const moves = Number(await cdp.eval('window.__mv ? window.__mv.n : -1'));
   const [block] = JSON.parse(await cdp.eval(`JSON.stringify(window.__gperf.summary([${JSON.stringify(label)}]))`));
   await cdp.eval('window.__gperf.tag("")');
-  return { ...block, endedWhereItStarted: before === after };
+  return { ...block, moves, sent: presses, endedWhereItStarted: before === after };
 }
 
 async function idleBlock(cdp, ms) {
@@ -470,6 +503,107 @@ async function armAndGo(cdp, url) {
 
 async function main() {
   const cdp = await connect();
+
+  /* ---- WHY IS THE PAGE EMPTY? ----------------------------------------------------------------
+   * `measure` refuses to score a home screen with no rows in it, which is right, and it says
+   * nothing about WHY there are none. This navigates exactly as `measure` does and then reports
+   * what the document actually contains — the failed requests above all, because the usual answer
+   * is an API call the set could not make rather than anything about the build. */
+  if (CMD === 'why') {
+    await cdp.send('Page.enable');
+    const failed = [];
+    await cdp.send('Network.enable');
+    cdp.on('Network.loadingFailed', (p) => failed.push(p));
+    const urls = new Map();
+    const apiCalls = [];
+    const consoleMsgs = [];
+    await cdp.send('Runtime.enable');
+    cdp.on('Runtime.consoleAPICalled', (p) => {
+      if (p.type === 'error' || p.type === 'warning') {
+        consoleMsgs.push(p.type + ': ' + (p.args || []).map((a) => a.value ?? a.description ?? a.type).join(' ').slice(0, 200));
+      }
+    });
+    cdp.on('Runtime.exceptionThrown', (p) => {
+      consoleMsgs.push('exception: ' + (p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || '').slice(0, 200));
+    });
+    cdp.on('Network.requestWillBeSent', (p) => {
+      urls.set(p.requestId, p.request.url);
+      if (/\/api\//.test(p.request.url)) apiCalls.push({ id: p.requestId, url: p.request.url, status: 'sent' });
+    });
+    cdp.on('Network.responseReceived', (p) => {
+      const c = apiCalls.find((x) => x.id === p.requestId);
+      if (c) c.status = 'HTTP ' + p.response.status;
+    });
+    cdp.on('Network.loadingFailed', (p) => {
+      const c = apiCalls.find((x) => x.id === p.requestId);
+      if (c) c.status = 'FAILED ' + p.errorText + (p.blockedReason ? ' blocked=' + p.blockedReason : '');
+    });
+    cdp.on('Network.responseReceived', (p) => {
+      if (p.response.status >= 400) failed.push({ requestId: p.requestId, errorText: 'HTTP ' + p.response.status });
+    });
+    await armAndGo(cdp, URL_);
+    await sleep(8000);
+    /* RELOAD WITH THE LISTENERS CERTAINLY ATTACHED. The first navigation races the CDP domains
+     * being enabled, and "the app made no request" and "we were not listening yet" look identical
+     * in the log. Everything below is recorded from a load that cannot have that ambiguity. */
+    urls.clear(); apiCalls.length = 0; consoleMsgs.length = 0;
+    let allReqs = 0;
+    cdp.on('Network.requestWillBeSent', () => { allReqs++; });
+    await cdp.eval('location.reload()');
+    await sleep(14000);
+    console.log(`\n  (after an explicit reload: ${allReqs} requests of every kind were seen)`);
+    const d = JSON.parse(await cdp.eval(`JSON.stringify({
+      href: location.href,
+      rows: document.querySelectorAll('.tv-spot').length,
+      ready: document.readyState,
+      body: (document.body && document.body.innerText || '').slice(0, 300)
+    })`));
+    console.log(`\n  href   ${d.href}\n  ready  ${d.ready}\n  rows   ${d.rows}\n  body   ${JSON.stringify(d.body)}`);
+    /* Ask the PAGE to make the call, so the answer includes whatever the page's own origin,
+     * headers and service worker do to it — a curl from this machine proves nothing about it. */
+    const probe = await cdp.eval(`(async () => {
+      try {
+        const r = await fetch('/api/home?lang=en&logos=1', { credentials: 'include' });
+        const t = await r.text();
+        return 'same-origin /api/home -> ' + r.status + ', ' + t.length + ' bytes';
+      } catch (e) { return 'same-origin /api/home THREW: ' + e.message; }
+    })()`, true);
+    console.log(`  fetch  ${probe}`);
+    const sw = await cdp.eval(`navigator.serviceWorker ? navigator.serviceWorker.controller ? 'CONTROLLED by a service worker' : 'no controller' : 'no SW api'`);
+    console.log(`  sw     ${sw}`);
+    /* DID THE --css ARM ACTUALLY LAND? An injected rule that silently fails to match produces a
+     * clean "no effect" result, which is the most expensive kind of wrong answer. */
+    const armed = await cdp.eval(`(() => {
+      const el = document.querySelector('#__css_arm');
+      /* SCOPED. The featured hero has an .art-photo too, with its OWN 0.45s fade, and it is the
+       * first in the document — sampling it reports the arm as inert when it applied perfectly to
+       * every row on the page. */
+      const photo = document.querySelector('.tv-spot-layer .art-photo');
+      const logo = document.querySelector('.tv-spot-plate .tv-spot-logo');
+      return JSON.stringify({
+        styleTag: !!el,
+        photoTransition: photo ? getComputedStyle(photo).transition : '(none on page)',
+        logoTransition: logo ? getComputedStyle(logo).transition : '(none on page)',
+      });
+    })()`);
+    const a = JSON.parse(armed);
+    console.log(`  cssArm style tag present: ${a.styleTag}`);
+    console.log(`         .art-photo    transition = ${a.photoTransition}`);
+    console.log(`         .tv-spot-logo transition = ${a.logoTransition}`);
+    if (failed.length) {
+      console.log('\n  failed requests:');
+      for (const f of failed.slice(0, 12)) console.log(`    ${(f.errorText || '').padEnd(28)} ${(urls.get(f.requestId) || '').slice(0, 110)}`);
+    } else console.log('\n  no failed requests recorded');
+    console.log('\n  /api/ requests the PAGE made:');
+    if (!apiCalls.length) console.log('    (none — the app never issued one)');
+    for (const c of apiCalls.slice(0, 10)) console.log(`    ${c.status.padEnd(34)} ${c.url.slice(0, 100)}`);
+    if (consoleMsgs.length) {
+      console.log('\n  console:');
+      for (const m of consoleMsgs.slice(0, 10)) console.log('    ' + m);
+    }
+    sweepInspectors();
+    return;
+  }
 
   if (CMD === 'verify') {
     const href = await cdp.eval('location.href');
@@ -769,7 +903,10 @@ async function main() {
           const label = `${surface}-${axis}-${cad.label}`;
           const b = await runBlock(cdp, label, { key, backKey, gap: cad.gap, presses, span });
           blocks.push({ surface, axis, cadence: cad.label, live, ...b });
-          console.log(`    ${label.padEnd(30)} on-time ${String(b.onTimePct).padStart(5)}%  p95 ${String(b.p95).padStart(5)}  p99 ${String(b.p99).padStart(5)}  worst ${String(b.worstFrame).padStart(6)}  >67 ${String(b.framesOver67).padStart(3)}  run50 ${String(b.maxRunOver50).padStart(2)}  lat ${String(b.latencyMedian).padStart(5)}${live ? '' : '   !! DEAD'}`);
+          /* `moves/sent` leads the line on purpose: two arms whose move counts differ are not
+             comparable on any of the numbers after it. See MOVE_COUNTER. */
+          const drop = b.sent - b.moves;
+          console.log(`    ${label.padEnd(30)} moved ${String(b.moves).padStart(3)}/${String(b.sent).padStart(3)}${drop > 0 ? ` (-${drop})` : '     '}  on-time ${String(b.onTimePct).padStart(5)}%  p95 ${String(b.p95).padStart(5)}  p99 ${String(b.p99).padStart(5)}  worst ${String(b.worstFrame).padStart(6)}  >67 ${String(b.framesOver67).padStart(3)}  run50 ${String(b.maxRunOver50).padStart(2)}  lat ${String(b.latencyMedian).padStart(5)}${live ? '' : '   !! DEAD'}`);
           await sleep(800);
         }
       }

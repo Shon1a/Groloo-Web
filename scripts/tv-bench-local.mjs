@@ -49,6 +49,10 @@ const SNAP = flag('snap');
 const COMPARE = arg('compare', '');
 const DPR = Number(arg('dpr', '2'));
 const SOAK = Number(arg('soak', '0'));   // minutes of continuous navigation, sampled once a minute
+/* `--ls='k=v,k2=v2'` — the experiment keys, exactly as scripts/tv-measure.mjs takes them, so an arm
+ * can be run against ONE build here and then against the same build on the set without rewriting
+ * it. Two dists compared is two binaries; one dist with the arm flipped is a comparison. */
+const LS_ARM = arg('ls', '');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ---- --compare: diff two --snap files and exit ------------------------------------------------ */
@@ -228,14 +232,18 @@ async function openPage(browser) {
     viewport: { width: 1920, height: 1080 }, deviceScaleFactor: DPR, serviceWorkers: 'block', reducedMotion: 'no-preference',
   });
   await routeAll(context);
-  await context.addInitScript(({ previews }) => {
+  await context.addInitScript(({ previews, lsArm }) => {
     window.__GROLOO_PERF__ = true;
     try {
       const s = JSON.parse(localStorage.getItem('groloo.settings.v1') || '{}');
       s.tvRowTrailers = previews === 'on';
       localStorage.setItem('groloo.settings.v1', JSON.stringify(s));
     } catch { /* no storage */ }
-  }, { previews: PREVIEWS });
+    for (const pair of String(lsArm).split(',').filter(Boolean)) {
+      const i = pair.indexOf('=');
+      try { localStorage.setItem(pair.slice(0, i).trim(), pair.slice(i + 1).trim()); } catch { /* no storage */ }
+    }
+  }, { previews: PREVIEWS, lsArm: LS_ARM });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send('Performance.enable');
