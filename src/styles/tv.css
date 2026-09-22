@@ -1794,154 +1794,32 @@
   padding-left: var(--sp-copy-bleed);
   padding-right: var(--sp-copy-bleed);
 }
-/* ONE BLOCK PER SLOT, STACKED — sharing the artwork's `xfade` state so the copy and the picture
-   can never disagree about which title is on screen.
-
-   THEY DO NOT MOVE, AND THIS IS THE ONE THING THE MEASUREMENT IS COMPLETELY UNAMBIGUOUS ABOUT.
-   Correlating the copy's pixel row against itself across every frame of the reference, the best
-   horizontal offset is EXACTLY 0 on every single one, while the same test finds a clean 24px drift
-   on the artwork. The picture moves; the words do not. A sideways slide was added here on the
-   theory that direction should be legible — it is moving letters, which the eye tries to read
-   while they travel, and no interface built for a sofa asks that of anyone.
-
-   THEY DO NOT CROSS-FADE EITHER. The old copy fades out and is gone before the new one starts.
-   Overlapping two blocks of body text means several frames of one paragraph legible through
-   another, which at 10 feet is not a dissolve, it is a smear — artwork can cross-fade because a
-   photograph over a photograph is still a picture; text over text is neither.
-
-   THE TWO HALVES ARE NOT THE SAME ANIMATION, and that asymmetry is the whole character of it.
-   Measured off the reference by pixel standard deviation, which for light text on a dark panel is
-   opacity directly. Three presses, and all three agree to within a frame:
-
-     44.3 | 5.8, 13.2, 18.7, 24.2, 29.5, 34.0, 37.6, 40.1, 41.6, 43.2, 44.0, 44.9
-      ^ the frame before the press                                            ^ settled
-
-     OUT — ONE FRAME. The copy is at full strength on the frame before the press and at the floor
-     on the press frame itself. It is a CUT, not a fade.
-
-     GAP — the same single frame. The outgoing text is gone and the incoming has not started;
-     never two paragraphs on screen at once.
-
-     IN — normalised: .21, .34, .48, .61, .73, .82, .88, .92, .96, .98, 1 over about 350ms,
-     beginning immediately after that one frame. Half-arrived at 28% of its own length, which is a
-     QUADRATIC ease-out; a quartic was tried first, from reading the opening step as steeper than
-     it is, and half-arrived in a twelfth of its length against the reference's quarter.
-
-   ---- WHAT THIS REPLACED, AND WHY IT WAS THE BIGGEST GAP IN THE ROW ----------------------------
-   The previous pair was `330ms linear` out, then the in delayed by that same 330ms — a reading of
-   an earlier, rougher capture that recorded the out as "ten steps of −0.10". The clean capture has
-   no such ramp: those ten steps were the incoming copy RISING, read backwards off a press whose
-   start had been missed by a third of a second.
-
-   The cost of the error was the whole cascade's length. Out plus gap plus in came to 690ms, so the
-   synopsis was still arriving more than two-thirds of a second after a press that the strip had
-   answered in 267ms — against ~350ms in the reference. The row felt like it was catching up with
-   itself, and this is where the time was going.
-
-   So: cut out, no delay, quad ease-out in. */
-/* ---- THE COPY SLIDES, AND THE NOTE THAT SAID OTHERWISE WAS WRONG --------------------------
-   THE OLD CLAIM, kept because it was believed for a long time and is the reason this was deleted
-   once: "correlating the copy's pixel row against itself across every frame gives a best offset of
-   EXACTLY 0 on every one". That came from an early, rough capture — the same one that produced the
-   24px artwork drift, the 330ms linear copy fade-out and the 13-frame slide, none of which survive
-   on a clean recording either.
-
-   RE-MEASURED PROPERLY, correlating the metadata block against the SETTLED frame with a shift
-   search, and reported only on frames where the text is above a quarter strength so the number is
-   not noise. Two presses, agreeing to a hundredth of a pixel, correlation .97-1.00:
-
-       67ms   100    133    167    200    233    267    300    333   367ms
-     19.64  12.67   7.86   4.65   2.59   1.29   0.58   0.25   0.09   0.00  px
-
-   Fitted: a QUARTIC ease-out, 32px, 370ms, starting 25ms after the press — RMS 0.04px across all
-   ten points, which is as close as this method can measure anything.
-
-   32px IS 3.55% OF THE REFERENCE'S 902px BILLBOARD, and `--sp-wl` here is ~904px at 1080p, so the
-   two cards are the same size and the number transfers directly. Written against the variable
-   anyway, so it scales with the row instead of being right at exactly one panel size.
-
-   THE SIGN IS POSITIVE, which is the one thing the deleted implementation had backwards. On a
-   RIGHTWARD press the incoming copy starts to the RIGHT of where it lands and settles leftward —
-   it arrives from the side the walk is heading toward, not from behind it. */
+/* THE COPY USED TO FOLLOW THE REFERENCE'S PER-PRESS CASCADE — a one-frame cut out, then a 365ms
+   quadratic fade and a 32-41px quartic slide in, each fitted to frame captures of the reference
+   (the full measurements are in git history before the rest-gated panel replaced them). It was
+   right about the reference and wrong for this set: that cascade ran on every press, and on the
+   65UT8100 the panel was the costliest thing a press animated. It now changes only where the
+   remote rests — see `.tv-spot-infoblk` below and COPY_REST_MS in TvSpotlight. */
 .tv-spot-infoblk {
   position: absolute;
-  /* Held off the padding edge by the bleed, so the copy rests exactly where it always did and the
-     extra room exists only for the slide to travel through. */
   top: 0; bottom: 0;
   left: var(--sp-copy-bleed, 0px);
   right: var(--sp-copy-bleed, 0px);
-  opacity: 0;
-  transform: translateX(calc(var(--sp-dir, 1) * var(--sp-copy-slide, calc(var(--sp-wl) * 0.046))));
-  /* ---- OUT IS A SHORT FADE, AND THE IN WAITS FOR IT --------------------------------------
-     THE CAPTURE CANNOT SETTLE THIS ONE, and the earlier note here claimed it could. The copy is at
-     full strength on the frame before the press and at the floor on the press frame — but that is a
-     30fps recording, so its quantum IS 33ms. "Gone within one frame" excludes a 150ms fade; it does
-     NOT distinguish an instant cut from a fade of up to ~33ms, and 0s is simply the harshest end of
-     the range the measurement permits. 150ms sits outside it on the evidence and inside it on the
-     panel, which is the tiebreak that counts.
-
-     THE DELAY IS NOT OPTIONAL WITH A FADE-OUT. Both blocks are stacked and absolutely positioned,
-     so an out that overlaps the in puts two paragraphs of body text on screen together — the smear
-     this file already warns about ("a photograph over a photograph is still a picture; text over
-     text is neither"). The in therefore starts exactly where the out finishes. Move one and move
-     the other, or the row goes back to being legible-through-itself. */
-  /* ---- THE OUT IS 25ms, WHICH IS THE TOP OF WHAT THE CAPTURE ALLOWS --------------------------
-     The reference's copy is at full strength on the frame before the press and at the floor on the
-     press frame itself. At 30fps that bounds the fade-out at <=33ms and says nothing finer, so 0ms
-     and 33ms are both consistent with it — 0 was tried and reads as a blink on a 60fps panel, where
-     a hard cut is a harsher artefact than the same cut sampled at 30. 25ms is a real fade, one and
-     a half frames at 60fps, and still inside the bound.
-
-     IT IS ALSO WHAT BUYS THE EARLY START. Both blocks are stacked, so the incoming one cannot begin
-     until the outgoing has gone or two paragraphs share the screen. A 25ms out lets the in start at
-     25ms, which is where the reference starts it; the 150ms out this replaces pushed the entire
-     cascade 150ms late for the same reason. The three numbers move together or not at all. */
-  transition: opacity 25ms ease, transform 0s;
-}
-.tv-spot-infoblk.on {
+  /* ONE BLOCK, ONE FADE, AND ONLY WHEN THE REMOTE RESTS — TvSpotlight COPY_REST_MS.
+     This was two stacked blocks that cross-faded AND slid 42px on every press: four transitions on
+     the largest body text on the screen, and the panel whose ablation was the biggest single win
+     measured on the 65UT8100 (horizontal held 85.8 -> 90.8%, vertical held 76.8 -> 83.0%). Now a
+     press hides it with no transition at all (`is-copy-away` below) and a rest reveals the title the
+     billboard settled on with this one fade. The curve is the old arrival's opacity half, fitted to
+     the reference (quadratic ease-out); only the duration is shorter, because it now follows a
+     250ms wait rather than starting on the press. */
   opacity: 1;
-  transform: none;
-  /* ---- BOTH HALVES FITTED TO THE SAME TWO PRESSES -------------------------------------------
-     OPACITY — measured .19 .34 .48 .61 .73 .82 .88 .92 .96 1.0 at 33ms steps, which is half-arrived
-     at 105ms. A quadratic ease-out is half-arrived at 28% of its length, so the duration is
-     105/0.28 = 375ms; that curve then predicts .185 at 33ms against the .19 measured.
-
-     TRANSFORM — the slide, fitted at 0.04px RMS over ten points: quartic ease-out, 370ms. It gets
-     the extra 20ms it measured because the eye follows a moving edge more precisely than a
-     brightening one, and the two ending together is what makes it one gesture rather than two. */
-  /* ---- NO DELAY ON EITHER, AND THAT IS WHAT STOPS IT READING AS A BLINK -------------------
-     Both carried 25ms, from the slide's fit. Measured against the reference that is the single
-     most visible error in the whole cascade: one frame after the press Netflix's copy is already
-     at 19% and a 25ms-delayed ramp is at 1%. The panel therefore sat at NOTHING for two frames and
-     then arrived — a gap the eye reads as a blink, not as a fade, however correct the curve after
-     it is.
-
-     THE OVERLAP THIS COSTS IS NOTHING. The out above is 25ms, so for the frame and a half they
-     coexist the incoming block is under 5% — nowhere near the two-paragraphs-legible-at-once smear
-     this file warns about, which needed the old 150ms out to happen. Gap and smear are the two
-     failure modes and the short out is what lets us avoid both at once.
-
-     The slide's own fit put its start at 25ms, but 15ms and 35ms fitted within 0.01px of that, so
-     the delay was never resolved by the measurement — zero is inside its error bar and is the value
-     that costs nothing. */
-  /* REFIT WITH THE TIME BASE PINNED. Both were first fitted with a free start offset, which let a
-     25ms delay absorb curve error; once the opacity match proved the two clocks are aligned, the
-     delay had to go and the shapes had to carry the fit on their own. Re-solved against the same
-     ten frames with the start held at zero:
-
-       slide    quartic ease-out, 41.5px, 395ms   RMS 0.057px over ten points
-       opacity  quadratic ease-out, 365ms         RMS 0.89%
-
-     41.5px is 4.6% of the reference's 902px billboard, which is why the distance moved with the
-     duration — a longer travel over a longer time, landing on the same measured curve. */
-  transition:
-    opacity 365ms cubic-bezier(.25, .46, .45, .94),
-    transform 395ms cubic-bezier(.25, 1, .5, 1);
+  transition: opacity 220ms cubic-bezier(.25, .46, .45, .94);
 }
-.tv-spot.is-fast .tv-spot-infoblk,
-.tv-spot.is-fast .tv-spot-infoblk.on {
-  transition-duration: 110ms;
-  transition-delay: 0ms;
+/* A press: gone on the press frame, and — `transition: none` — without starting an animation. */
+.tv-spot.is-copy-away .tv-spot-infoblk {
+  opacity: 0;
+  transition: none;
 }
 .tv-spot.is-open .tv-spot-info {
   opacity: 1;

@@ -120,6 +120,10 @@ const AHEAD = 2;
 const BEHIND = 1;
 
 let idleHandle = 0;
+/** The row the latest call named — read when the callback runs, not when it was scheduled. */
+let pendingRow: HTMLElement | null = null;
+/** Dispatched on a row's section when it enters the prepared window; TvSpotlight arms its art on it. */
+export const ROW_PREPARE_EVENT = 'tvrowprepare';
 type IdleWindow = Window & {
   requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
   cancelIdleCallback?: (h: number) => void;
@@ -132,18 +136,34 @@ type IdleWindow = Window & {
 export function prepareRowWindow(focused: HTMLElement | null): void {
   const row = focused && focused.closest ? focused.closest<HTMLElement>('.tv-spot') : null;
   if (!row) return;
+  pendingRow = row;
+  /* ONE CALLBACK IN FLIGHT, NEVER CANCELLED BY A PRESS. This used to cancel and re-arm on every
+   * call, and with a 300ms timeout against presses ~300ms apart (HELD_ROW_MIN_MS) a run of Downs
+   * could keep pushing it back — the window was prepared after the walk rather than ahead of it,
+   * which is the whole thing it exists to do. The same defect `promoteSoon` and the billboard warm
+   * in TvSpotlight each had and lost. The callback that eventually runs reads `pendingRow`, so it
+   * prepares around wherever the remote IS by then. */
+  if (idleHandle) return;
   const w = window as IdleWindow;
-  if (idleHandle && w.cancelIdleCallback) { w.cancelIdleCallback(idleHandle); idleHandle = 0; }
   const run = () => {
     idleHandle = 0;
+    const cur = pendingRow;
+    if (!cur) return;
     const all = list();
-    const at = all.indexOf(row);
+    const at = all.indexOf(cur);
     if (at < 0) return;
     for (let i = 0; i < all.length; i++) {
       const want = i >= at - BEHIND && i <= at + AHEAD ? 'visible' : '';
       /* `.style.contentVisibility` is the inline override; '' hands the row back to the stylesheet's
        * `content-visibility: auto`. Read-then-write so an unchanged row is not invalidated. */
       if (all[i].style.contentVisibility !== want) all[i].style.contentVisibility = want;
+      /* AND ITS ARTWORK IS ARMED HERE TOO, in the same quiet moment. A row switched its pictures on
+       * from an IntersectionObserver 800px out — which fires DURING the vertical scroll, so the
+       * React render that gives its tiles a `src` and the decodes behind it landed on the frames of
+       * the very animation this function keeps clear. The event is a one-way latch in TvSpotlight
+       * (`visible`), so repeating it costs a no-op. One row further than the content window: its
+       * bitmaps are the slowest thing to have ready. */
+      if (i >= at - BEHIND && i <= at + AHEAD + 1) all[i].dispatchEvent(new Event(ROW_PREPARE_EVENT));
     }
   };
   /* The timeout matters more than the idleness: a page under continuous input may never see a true
