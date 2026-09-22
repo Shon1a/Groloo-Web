@@ -508,11 +508,12 @@ const warmDecoded = new WeakSet<HTMLImageElement>();
  *
  * Sharing is also only real if both ask for the SAME url. Two renditions would mean
  * two files, two cache entries and two decodes for one picture. */
-/* w500, THE USER'S CALL, made looking at TV-size renders of w780 / w500 / w342 side by side: 500x281
- * decodes to 0.56MB where w780 was 1.4MB (and ~16KB on the wire from the art worker against ~52KB),
- * for a slightly softer billboard and tile. w342 was visibly blurry on faces and was turned down.
- * TMDB serves backdrops at w500 as well as our worker does, so no source is left without one. */
-const BILLBOARD_RENDITION = 'w500';
+/* w780, AND SMALLER WAS TRIED ON THE SET. w500 (0.56MB decoded per title against 1.4MB) shipped in
+ * e8dab1d and was reverted the same day on the user's verdict from the 65UT8100: "nothing changed on
+ * smoothness but quality is very bad". Picture size is not what the stutter is made of — together
+ * with the RETAIN_MAX experiment (decode cut 85%, frames unmoved) that is two results saying so.
+ * Do not shrink this again to chase frames. */
+const BILLBOARD_RENDITION = 'w780';
 const THUMB_RENDITION = 'w342';
 /** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
 const LOGO_RENDITION = 'w300';
@@ -531,10 +532,9 @@ const LOGO_RENDITION = 'w300';
  * file, the same cache entry and the same decoded bitmap as the billboard — which is what makes a
  * movie row behave like an add-on row.
  *
- * BILLBOARD_RENDITION, BY CHOICE, NOT w1280. At w1280 the tile's 34.6% slice is 443 source pixels —
- * exactly what the pre-cut had — and at w500 it is 173, softer on a 626px box. The user chose the
- * lighter bitmap twice (w1280 -> w780 -> w500), on a set whose GPU is the first thing to run out.
- * w1280 is still one key away (`groloo.tvart=shared1280`).
+ * BILLBOARD_RENDITION (w780), BY CHOICE, NOT w1280. At w1280 the tile's 34.6% slice is 443 source
+ * pixels — exactly what the pre-cut had — and at w780 it is 270, a little softer on a 626px box.
+ * w500 (173) went too far and was reverted. w1280 is still one key away (`groloo.tvart=shared1280`).
  *
  * Only when the crop really is a slice of THIS backdrop: the file named in the crop URL has to be
  * the backdrop's file. Anything else — no crop, a crop of another frame — renders as before. */
@@ -543,8 +543,8 @@ const LOGO_RENDITION = 'w300';
  * the pre-cut was 640x1040 (2.7MB), and GPU is what the 65UT8100 runs out of first. Whether the
  * shared picture's swap outweighs its texture cost is a question only the set can answer, so the
  * candidates are one key apart and can be run interleaved by scripts/tv-measure.mjs (`--ls`):
- *   (unset)     one picture at BILLBOARD_RENDITION (w500) — THE DEFAULT, the user's choice: 0.56MB
- *               per title where w780 was 1.4MB and w1280 3.7MB; softer, see BILLBOARD_RENDITION
+ *   (unset)     one picture at BILLBOARD_RENDITION (w780) — THE DEFAULT: 1.4MB per title where
+ *               w1280 was 3.7MB; w500 was tried and rejected on the set, see BILLBOARD_RENDITION
  *   shared1280  one picture, w1280 — tile crops it in CSS at the pre-cut's own 443px of source
  *   crop        two pictures: the w640 pre-cut tile + a w780 billboard (before 70992e4)
  *   crop320     two pictures: a w320 pre-cut tile (1/4 of the pixels) + a w780 billboard
