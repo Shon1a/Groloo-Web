@@ -1805,20 +1805,28 @@
   top: 0; bottom: 0;
   left: var(--sp-copy-bleed, 0px);
   right: var(--sp-copy-bleed, 0px);
-  /* ONE BLOCK, ONE FADE, AND ONLY WHEN THE REMOTE RESTS — TvSpotlight COPY_REST_MS.
-     This was two stacked blocks that cross-faded AND slid 42px on every press: four transitions on
-     the largest body text on the screen, and the panel whose ablation was the biggest single win
+  /* ONE BLOCK, AND IT ARRIVES ONLY WHEN THE REMOTE RESTS — TvSpotlight COPY_REST_MS.
+     This was two stacked blocks that cross-faded AND slid on EVERY press: four transitions on the
+     largest body text on the screen, and the panel whose ablation was the biggest single win
      measured on the 65UT8100 (horizontal held 85.8 -> 90.8%, vertical held 76.8 -> 83.0%). Now a
-     press hides it with no transition at all (`is-copy-away` below) and a rest reveals the title the
-     billboard settled on with this one fade. The curve is the old arrival's opacity half, fitted to
-     the reference (quadratic ease-out); only the duration is shorter, because it now follows a
-     250ms wait rather than starting on the press. */
+     press hides it with no transition at all (`is-copy-away` below) and the rest brings the settled
+     title in with the SAME arrival the per-press cascade had — the reference-fitted quadratic fade
+     and quartic slide from the side the walk went — once, where the remote stops.
+
+     THE ARRIVAL IS KEPT, NOT THINNED. The first rest-gated build revealed with a bare 220ms fade and
+     read as text popping back after a blank; the slide is what makes it read as the copy following
+     the row. It costs nothing while moving, which is the only time cost mattered. */
   opacity: 1;
-  transition: opacity 220ms cubic-bezier(.25, .46, .45, .94);
+  transform: none;
+  transition:
+    opacity 365ms cubic-bezier(.25, .46, .45, .94),
+    transform 395ms cubic-bezier(.25, 1, .5, 1);
 }
-/* A press: gone on the press frame, and — `transition: none` — without starting an animation. */
+/* A press: gone on the press frame, parked at the slide's starting offset on the side the press went
+   toward, and — `transition: none` — without starting an animation. The rest slides it home. */
 .tv-spot.is-copy-away .tv-spot-infoblk {
   opacity: 0;
+  transform: translateX(calc(var(--sp-dir, 1) * var(--sp-copy-slide, calc(var(--sp-wl) * 0.046))));
   transition: none;
 }
 .tv-spot.is-open .tv-spot-info {
