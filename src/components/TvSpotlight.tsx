@@ -9,7 +9,7 @@ import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, apiId
 import { retainImage, isDecoded } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
-import { registerTvRow, rowIndexOf } from '../lib/tvRowRegistry';
+import { registerTvRow, rowIndexOf, prepareRowWindow, ROW_PREPARE_EVENT } from '../lib/tvRowRegistry';
 import { parallaxEnabled, springEnabled, tileFadeAlways } from '../lib/tvMotionFlags';
 import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '../lib/tvRowWindow';
 import { usePreviewSound } from '../stores/previewSound';
@@ -447,6 +447,21 @@ const OPEN_COMMIT_MS = 420;
  * behaviour needs, and it is the behaviour that has always been correct — recorded rather than
  * quietly fixed, because "under half" is the kind of invariant someone later enforces. */
 const SWAP_WAIT_CAP = 200;
+
+/* ---- THE COPY WAITS FOR THE REMOTE TO REST ---------------------------------------------------
+ * The info panel (genre · year · rating and the synopsis) used to cross-fade two stacked blocks and
+ * slide them 42px on EVERY press: four transitions on two blocks of body text, the largest painted
+ * text on the screen. Ablating that panel was the single biggest win measured on the 65UT8100 —
+ * horizontal held 85.8 -> 90.8% on time, vertical held 76.8 -> 83.0% — and promoting it to its own
+ * layer instead measured worse once combined with the hero layers (see tv.css `.tv-spot-infoblk`).
+ *
+ * So the panel no longer animates while the remote is moving at all. A press HIDES it on the press
+ * frame — a class, not a transition, so no animation is started and it can never show one title's
+ * synopsis under another title's picture — and once no press has arrived for this long it shows
+ * the title the billboard settled on with ONE opacity fade. Walking a row costs the copy nothing;
+ * stopping costs one fade. That is how the reference behaves too: its text belongs to where you
+ * stop, not to what you pass. */
+const COPY_REST_MS = 250;
 
 /* ---- HOW FAST THE PHOTOGRAPH ITSELF COMES UP, and why a HELD key needs its own answer --------
  *
@@ -929,6 +944,29 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const [xfade, setXfade] = useState<{ a: Slot; b: Slot | null; front: 'a' | 'b' }>(
     () => ({ a: list[0], b: null, front: 'a' }),
   );
+  /* THE COPY'S OWN SLOT — see COPY_REST_MS. It follows `xfade` at once for anything that is not a
+   * press (a row opening, a catalogue cut, `enrich` filling in a synopsis) and only after the rest
+   * for a press. `rev` changes on every update, so the reveal below runs even when the slot is the
+   * same title it was (walk right, walk back). */
+  const [copy, setCopy] = useState<{ slot: Slot | null; rev: number }>(() => ({ slot: list[0], rev: 0 }));
+  /** The pending rest timer; `step` clears it so a stale title cannot be revealed mid-walk. */
+  const copyTimer = useRef(0);
+  useEffect(() => {
+    const cur = xfade[xfade.front];
+    if (copyTimer.current) { window.clearTimeout(copyTimer.current); copyTimer.current = 0; }
+    const away = !!sectionRef.current?.classList.contains('is-copy-away');
+    if (!away) { setCopy((c) => ({ slot: cur, rev: c.rev + 1 })); return; }
+    copyTimer.current = window.setTimeout(() => {
+      copyTimer.current = 0;
+      setCopy((c) => ({ slot: cur, rev: c.rev + 1 }));
+    }, COPY_REST_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [xfade]);
+  /* The reveal: the new text is already in the DOM at opacity 0 when this runs, so dropping the
+   * class is the one opacity transition a rest costs. Layout effect, so it lands in the same frame
+   * as the text it reveals rather than one frame of empty panel later. */
+  useLayoutEffect(() => { sectionRef.current?.classList.remove('is-copy-away'); }, [copy.rev]);
+  useEffect(() => () => { if (copyTimer.current) window.clearTimeout(copyTimer.current); }, []);
   const firstRun = useRef(true);
   const trackRef = useRef<HTMLDivElement>(null);
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
@@ -986,12 +1024,22 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const prevTrackRef = useRef<HTMLDivElement>(null);
   const peekAnim = useRef<Animation | null>(null);
   const peekFirst = useRef(true);
+  /** The peek's tile pitch, measured once and reused — see the note in the effect. 0 = not yet. */
+  const peekStride = useRef(0);
+  useEffect(() => {
+    const drop = () => { peekStride.current = 0; };
+    window.addEventListener('resize', drop);
+    return () => window.removeEventListener('resize', drop);
+  }, []);
   useEffect(() => () => { peekAnim.current?.cancel(); if (cutId.current) window.clearTimeout(cutId.current); }, []);
   useEffect(() => {
     if (peekFirst.current) { peekFirst.current = false; return; }
     const el = prevTrackRef.current, root = sectionRef.current;
     if (!el || !root || reduceMotion) return;
-    const dir = Number(getComputedStyle(root).getPropertyValue('--sp-dir')) || 1;
+    /* `lastDir`, not `getComputedStyle(root)` — the same number `step` wrote to `--sp-dir`, read
+     * from where it already is in JS. Reading it back off the node forced a full style
+     * recalculation of a freshly-committed row on every press, before the frame's own. */
+    const dir = lastDir.current;
     /* ---- THE STRIDE IS MEASURED, NOT READ OFF A CUSTOM PROPERTY -----------------------------
      * `--sp-wp` and `--sp-gap` are UNREGISTERED, so their computed value is the token stream they
      * were written as — `calc(clamp(240px, …) * 0.615)` — and `parseFloat` of that is NaN. The
@@ -999,10 +1047,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * `getAnimations()` returned 0 and the track sat at its resting -329px through every press.
      * The distance between the two tiles is the same number, already resolved, and costs one
      * layout read per deliberate press. */
+    /* MEASURED ONCE, NOT PER PRESS. Two `getBoundingClientRect` calls here forced a synchronous
+     * layout of the just-committed row on every press, for a pitch that only changes when the
+     * viewport does — cached, and dropped on resize. */
     const tiles = el.children;
     if (tiles.length < 2) return;
-    const stride = tiles[1].getBoundingClientRect().left - tiles[0].getBoundingClientRect().left;
-    if (!Number.isFinite(stride) || stride <= 0) return;
+    if (!(peekStride.current > 0)) {
+      peekStride.current = tiles[1].getBoundingClientRect().left - tiles[0].getBoundingClientRect().left;
+    }
+    const stride = peekStride.current;
+    if (!Number.isFinite(stride) || stride <= 0) { peekStride.current = 0; return; }
     const end = dir > 0 ? -stride : 0;
 
     /* ---- A HELD KEY GLIDES, IT DOES NOT RE-RUN --------------------------------------------
@@ -1168,27 +1222,30 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * from everything else the press does. See lib/tvMotionFlags.ts. */
     if (!parallaxEnabled()) return;
     const held = root.classList.contains('is-fast');
-    const cs = getComputedStyle(root);
-    const dir = Number(cs.getPropertyValue('--sp-dir')) || 0;
-    if (!dir) return;   // the first paint of a row was not reached by a press; nothing to explain
+    /* `lastDir`, not `getComputedStyle(root).getPropertyValue('--sp-dir')`: that read forced a full
+     * style recalculation of the freshly-committed row on every press, ahead of the frame's own.
+     * `--sp-dir` is still unset until a press has happened, which is what the guard below checked;
+     * the node's inline style answers that without resolving anything. */
+    if (!root.style.getPropertyValue('--sp-dir')) return;   // not reached by a press; nothing to explain
+    const dir = lastDir.current;
     /* NOT `--sp-slide`. The strip's held duration (HELD_SLIDE_MS, 260ms) is deliberately LONGER
      * than the press pace so that it never completes and never stalls — and a drift built to the
      * same number would inherit exactly the overlap this is arranged to avoid. */
     const slide = held ? HELD_PARALLAX_MS : PRESS_PARALLAX_MS;
     const distance = held ? BILLBOARD_PARALLAX_HELD : BILLBOARD_PARALLAX_PRESS;
     const from = `translateX(calc(${dir} * ${distance}))`;
-    const away = `translateX(calc(${-dir} * ${distance}))`;
     /* THE PICTURE MOVES, NOT THE LAYER. The layer also carries the title plate, and the reference
      * holds that still — drifting it would make the billboard slide as one panel, which is the
      * opposite of parallax. `.tv-spot-art` is the photograph alone, and it is overscanned in
      * tv.css so the drift never pulls an edge into frame. */
-    const anims = Array.from(root.querySelectorAll<HTMLElement>('.tv-spot-art')).map((el) => {
-      const entering = !!el.closest('.tv-spot-layer')?.classList.contains('on');
-      return el.animate(
-        entering ? [{ transform: from }, { transform: 'none' }] : [{ transform: 'none' }, { transform: away }],
+    /* THE INCOMING PICTURE ONLY. The leaving one used to drift `away` as well — a second
+     * compositor animation per press for a layer that is fading out in its first two frames
+     * (LAYER_OUT_MS is fast-out), where 1.6-3.2% of movement cannot be seen. One drift per press. */
+    const anims = Array.from(root.querySelectorAll<HTMLElement>('.tv-spot-layer.on .tv-spot-art')).map((el) =>
+      el.animate(
+        [{ transform: from }, { transform: 'none' }],
         { duration: slide, easing: held ? 'linear' : 'cubic-bezier(.22, 1, .36, 1)' },
-      );
-    });
+      ));
     /* NOT SEEKED TO THE STRIP'S CLOCK, AND THE ATTEMPT IS WORTH RECORDING so nobody spends the
      * television time on it twice. The theory was that this effect starts late — it waits for the
      * swap commit, for the reason below — so the drift should be created and then advanced to
@@ -1625,8 +1682,18 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       if (entries.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); }
     }, { rootMargin: '800px 0px' });
     io.observe(el);
-    return () => io.disconnect();
+    /* THE ROW WINDOW ARMS IT FIRST, WHEN IT CAN — lib/tvRowRegistry `prepareRowWindow` fires this on
+     * an idle callback for the rows around the remote, so the latch (and the render that hands the
+     * tiles their `src`) happens between presses instead of on a frame of the vertical scroll, which
+     * is when the observer above would otherwise get there. The observer stays as the fallback. */
+    const arm = () => { setVisible(true); io.disconnect(); };
+    el.addEventListener(ROW_PREPARE_EVENT, arm);
+    return () => { io.disconnect(); el.removeEventListener(ROW_PREPARE_EVENT, arm); };
   }, []);
+  /* The first row the remote lands on has not been reached by a vertical move, which is the only
+   * thing that prepared the window — so the rows below the first focus were cold until the first
+   * Down. Opening a row prepares around it. */
+  useEffect(() => { if (open) prepareRowWindow(sectionRef.current); }, [open]);
 
   /* Drive the cross-dissolve off `active`: load the focused title into the hidden layer and flip
    * it to the front.
@@ -2291,6 +2358,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * The class is cleared on a timer rather than on the next press, so letting go of the button
        * restores the full effect for the card you actually stop on. */
       el.classList.toggle('is-fast', chained);
+      /* THE COPY LEAVES ON THE PRESS FRAME and comes back when the remote rests — COPY_REST_MS.
+       * A pending reveal is cancelled here, not in the effect, because the flip that would cancel it
+       * can be a gate-wait (SWAP_WAIT_CAP) behind the press, and in that gap the old timer could
+       * reveal the title the viewer just walked off. */
+      el.classList.add('is-copy-away');
+      if (copyTimer.current) { window.clearTimeout(copyTimer.current); copyTimer.current = 0; }
       if (fastOff.current) window.clearTimeout(fastOff.current);
       fastOff.current = window.setTimeout(endChain, SLIDE_CHAIN_WINDOW);
     }
@@ -2655,10 +2728,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           Height is still reserved on the container, so opening a row never pushes the rows below
           it, and the two blocks stack inside that reserved box. */}
       <div className="tv-spot-info">
-        {(['a', 'b'] as const).map((slot) => {
-          const it = xfade[slot];
-          const on = xfade.front === slot;
-          if (!it || it === 'end') return <div key={slot} className={`tv-spot-infoblk${on ? ' on' : ''}`} />;
+        {(() => {
+          const it = copy.slot;
+          if (!it || it === 'end') return <div className="tv-spot-infoblk" />;
           const a = withArt(it);
           const bits = [
             resumeOf?.(it)?.note || '',
@@ -2667,14 +2739,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
             a.rating ? `★ ${a.rating}` : '',
           ].filter(Boolean);
           return (
-            <div key={slot} className={`tv-spot-infoblk${on ? ' on' : ''}`} aria-hidden={!on}>
+            <div className="tv-spot-infoblk">
               <div className="tv-spot-meta">
                 {bits.map((b, i) => <span key={i}>{b}</span>)}
               </div>
               {a.overview && <p className="tv-spot-plot">{a.overview}</p>}
             </div>
           );
-        })}
+        })()}
       </div>
     </section>
   );
