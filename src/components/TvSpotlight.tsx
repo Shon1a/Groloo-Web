@@ -461,7 +461,9 @@ const SWAP_WAIT_CAP = 200;
  * the title the billboard settled on with ONE opacity fade. Walking a row costs the copy nothing;
  * stopping costs one fade. That is how the reference behaves too: its text belongs to where you
  * stop, not to what you pass. */
-const COPY_REST_MS = 250;
+/* 200, not 250: the panel is blank for this long after the last press, and at 250 the gap read as
+ * the text going missing rather than waiting. Presses closer together than this keep it hidden. */
+const COPY_REST_MS = 200;
 
 /* ---- HOW FAST THE PHOTOGRAPH ITSELF COMES UP, and why a HELD key needs its own answer --------
  *
@@ -506,7 +508,11 @@ const warmDecoded = new WeakSet<HTMLImageElement>();
  *
  * Sharing is also only real if both ask for the SAME url. Two renditions would mean
  * two files, two cache entries and two decodes for one picture. */
-const BILLBOARD_RENDITION = 'w780';
+/* w500, THE USER'S CALL, made looking at TV-size renders of w780 / w500 / w342 side by side: 500x281
+ * decodes to 0.56MB where w780 was 1.4MB (and ~16KB on the wire from the art worker against ~52KB),
+ * for a slightly softer billboard and tile. w342 was visibly blurry on faces and was turned down.
+ * TMDB serves backdrops at w500 as well as our worker does, so no source is left without one. */
+const BILLBOARD_RENDITION = 'w500';
 const THUMB_RENDITION = 'w342';
 /** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
 const LOGO_RENDITION = 'w300';
@@ -525,10 +531,10 @@ const LOGO_RENDITION = 'w300';
  * file, the same cache entry and the same decoded bitmap as the billboard — which is what makes a
  * movie row behave like an add-on row.
  *
- * w780, BY CHOICE, NOT w1280. At w1280 the tile's 34.6% slice is 443 source pixels — exactly what
- * the pre-cut had — and at w780 it is 270, visibly softer on a 626px box. The user took the softer
- * tile for the lighter bitmap: 780x439 (1.4MB) per title against 1280x720 (3.7MB), on a set whose
- * GPU is the first thing to run out. w1280 is still one key away (`groloo.tvart=shared1280`).
+ * BILLBOARD_RENDITION, BY CHOICE, NOT w1280. At w1280 the tile's 34.6% slice is 443 source pixels —
+ * exactly what the pre-cut had — and at w500 it is 173, softer on a 626px box. The user chose the
+ * lighter bitmap twice (w1280 -> w780 -> w500), on a set whose GPU is the first thing to run out.
+ * w1280 is still one key away (`groloo.tvart=shared1280`).
  *
  * Only when the crop really is a slice of THIS backdrop: the file named in the crop URL has to be
  * the backdrop's file. Anything else — no crop, a crop of another frame — renders as before. */
@@ -537,8 +543,8 @@ const LOGO_RENDITION = 'w300';
  * the pre-cut was 640x1040 (2.7MB), and GPU is what the 65UT8100 runs out of first. Whether the
  * shared picture's swap outweighs its texture cost is a question only the set can answer, so the
  * candidates are one key apart and can be run interleaved by scripts/tv-measure.mjs (`--ls`):
- *   (unset)     one picture, w780  — THE DEFAULT, chosen by the user over w1280: 1.4MB per tile
- *               where w1280 was 3.7MB, tile slightly softer (a 270px slice for a 626px box)
+ *   (unset)     one picture at BILLBOARD_RENDITION (w500) — THE DEFAULT, the user's choice: 0.56MB
+ *               per title where w780 was 1.4MB and w1280 3.7MB; softer, see BILLBOARD_RENDITION
  *   shared1280  one picture, w1280 — tile crops it in CSS at the pre-cut's own 443px of source
  *   crop        two pictures: the w640 pre-cut tile + a w780 billboard (before 70992e4)
  *   crop320     two pictures: a w320 pre-cut tile (1/4 of the pixels) + a w780 billboard
