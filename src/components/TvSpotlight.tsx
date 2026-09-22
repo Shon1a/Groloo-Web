@@ -470,11 +470,12 @@ const ART_FADE_MS = 110;
 /** Comfortably inside the ~120ms of a held key, so each card completes before the next arrives. */
 const ART_FADE_MS_CHAINED = 90;
 
-/* URLs already asked for by the warm-ahead, so walking back and forth over a row does not build a
- * fresh Image per press for a picture the browser already has. Module-scoped because the whole
- * point is that it OUTLIVES the row: this is what makes a return visit to a row free.
- * Strings only — no bitmaps are pinned here, which is the note on the warm effect. */
-const warmed = new Set<string>();
+/* Elements the warm-ahead has already asked to decode. It used to be a Set of URLS that latched
+ * for the life of the page — which, once the warm started RETAINING into a 10-entry LRU, meant a
+ * picture evicted from that LRU was never warmed again: walk a row forward and back and every
+ * billboard on the way back was cold. Keyed on the ELEMENT instead, so an evicted URL comes back
+ * as a new element and is warmed like a new one, and a retained one is not decoded twice. */
+const warmDecoded = new WeakSet<HTMLImageElement>();
 
 /* Renditions sized to what is painted, not to the source. The billboard is 16:9 of a <=380px
  * row (~675px wide) and thumbs paint at ~228px — see the note in lib/hero.ts for why reaching
@@ -494,12 +495,47 @@ const THUMB_RENDITION = 'w342';
 /** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
 const LOGO_RENDITION = 'w300';
 
+/* ---- ONE PICTURE PER TITLE, AND THE BAKED CROP IS ONLY A POSITION IN IT --------------------------
+ * The add-on rows glided and the movie rows did not, and the difference was not the rows: on an
+ * add-on row the billboard IS the tile's picture — one URL, decoded nine tiles ahead by the strip's
+ * own promotion — so the swap gate always found it in hand. A row with baked art held TWO pictures
+ * per title, the pre-cut portrait slice for the tile and the 16:9 backdrop for the billboard, and
+ * every press asked for the one the strip had never touched.
+ *
+ * The slice was never a different picture. `/crop` cuts a full-height, tile-shaped window out of
+ * the w1280 of this same backdrop, positioned by the number in its URL (`f4231` = 42.31% of the way
+ * across — art.js `travelFraction`), and that number means exactly what CSS object-position means.
+ * So the tile shows the w1280 backdrop itself at that position: the same source pixels, framed
+ * identically, and now the same file, the same cache entry and the same decoded bitmap as the
+ * billboard — which is what makes a movie row behave like an add-on row.
+ *
+ * w1280 AND NOT w780 because the tile needs it: its slice is 34.6% of the width, 443 source pixels
+ * at w1280 — exactly what the pre-cut had — against 270 at w780, which is the softness the crop was
+ * invented to fix. It costs less than it replaced: one 1280x720 bitmap (3.7MB) where there were a
+ * 640x1040 slice and a 780x439 backdrop (4.1MB), and one decode instead of two. The billboard gets
+ * sharper for free. A dpr-1 screen cannot show the difference, so it keeps w780.
+ *
+ * Only when the crop really is a slice of THIS backdrop: the file named in the crop URL has to be
+ * the backdrop's file. Anything else — no crop, a crop of another frame — renders as before. */
+const SHARED_RENDITION =
+  (typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5) ? 'w1280' : BILLBOARD_RENDITION;
+function sharedArtOf(it: MediaItem): PeekArt | null {
+  const cut = it.posterArt;
+  if (!cut || !it.backdrop) return null;
+  const m = /\/crop\/w\d+\/f(\d+)\/([A-Za-z0-9]+)\.webp/.exec(cut);
+  if (!m || !it.backdrop.includes(`/${m[2]}.`)) return null;
+  const travel = Math.min(10000, Number(m[1])) / 100;
+  return { src: imgW(it.backdrop, SHARED_RENDITION), pos: `${travel.toFixed(2)}% 50%` };
+}
+
 /** What the peek at the screen edge shows: a picture and where to sit it in the tile's
  *  box. Same choice the tile makes, so the card you walked past keeps the artwork it
  *  had rather than reverting to TMDB's poster on its way out. */
 type PeekArt = { src: string; pos: string };
 const EMPTY_PEEK: PeekArt = { src: '', pos: '50% 50%' };
 function peekArtOf(it: MediaItem): PeekArt {
+  const one = sharedArtOf(it);
+  if (one) return one;                                // the billboard's own picture
   const cut = artW(it.posterArt);
   if (cut) return { src: cut, pos: '50% 50%' };      // already the tile's shape
   const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
@@ -564,7 +600,7 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
    *
    * `poster` stays as the onError fallback: a title with no backdrop at all
    * still renders what this row rendered before any of this existed. */
-  /* PRE-CUT IF WE HAVE ONE, otherwise crop the shared backdrop here.
+  /* (Before `sharedArtOf`) PRE-CUT IF WE HAVE ONE, otherwise crop the shared backdrop here.
    *
    * `posterArt` is the slice already cut to the tile's shape — exactly the pixels
    * shown, so it is both sharper and smaller than fetching the whole frame to
@@ -574,16 +610,19 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
    * Falling back to the shared backdrop is not a degradation to paper over: it is
    * how a title with no focal point yet, or one whose crop we declined, renders —
    * the same picture, cropped by object-fit, at lower detail. */
-  const cut = artW(it.posterArt);
-  const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
-  const src = cut || shared || imgW(it.poster || '', THUMB_RENDITION);
-  const fallbackSrc = cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : '');
+  /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
+   * for when that one fails to load, which is the role the backdrop used to play for it. */
+  const one = sharedArtOf(it);
+  const cut = one ? '' : artW(it.posterArt);
+  const shared = one ? '' : imgW(it.backdrop || '', BILLBOARD_RENDITION);
+  const src = one?.src || cut || shared || imgW(it.poster || '', THUMB_RENDITION);
+  const fallbackSrc = one ? artW(it.posterArt) : cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : '');
   // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
-  const objectPosition = cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
+  const objectPosition = one ? one.pos : cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
   const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
   /* What names this tile: its wordmark, its title in type, or nothing at all when it
    * has fallen back to a plain poster that already carries its own. */
-  const name: 'mark' | 'text' | null = mark ? 'mark' : ((cut || shared) ? 'text' : null);
+  const name: 'mark' | 'text' | null = mark ? 'mark' : ((one || cut || shared) ? 'text' : null);
   return (
     <button
       type="button"
@@ -1398,6 +1437,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * for the one request. Catalogue rows keep the old fallback — their cards genuinely sometimes
    * have a poster and no backdrop, with nothing else coming. */
   const billboardUrl = (it: MediaItem): string => {
+    /* The picture the tile under it is already showing, when there is one — see `sharedArtOf`. */
+    const one = artOn ? sharedArtOf(it) : null;
+    if (one) return one.src;
     const source = enrich ? it.backdrop : (it.backdrop || it.poster);
     return artOn ? imgW(source || '', BILLBOARD_RENDITION) : '';
   };
@@ -1771,56 +1813,71 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * `backdrop || poster`. Different rendition of a different picture — a different URL, and so a
    * different cache entry. The billboard was the one bitmap on this row that was always cold.
    *
-   * ONE CARD EITHER WAY, matching the span the preview and `enrich` already use, and for the same
-   * reason: one press of Left or Right is what happens next. The walk wraps, so the warm wraps.
+   * AHEAD IN THE DIRECTION OF TRAVEL, AND FURTHER THAN ONE CARD. It was one card either way, and
+   * that is the whole difference between a catalogue row that glides and a movie row that does
+   * not. On an add-on row the billboard IS the tile's picture — one URL, promoted nine tiles ahead
+   * of the walk — so the gate below always finds it decoded and flips on the press frame. On a row
+   * with baked poster art the tile is a portrait slice and the billboard a separate 16:9 backdrop
+   * plus a wordmark, and only THIS warm stood between the press and a cold decode. One card of it
+   * is gone after one press. So: three ahead the way the remote last went, one behind.
    *
-   * NOT RETAINED, DELIBERATELY. The Image is dropped as soon as it has decoded — holding it would
-   * pin a ~1.4MB pixmap per neighbour per row, and thirteen rows of that is precisely the passive
-   * load this component is arranged to avoid (see the note on `visible`). The BYTES stay in the
-   * HTTP cache, which is the part that costs a round trip; the re-decode at the gate is fast and
-   * off the main thread.
+   * ONE WARM IN FLIGHT, AND IT IS NOT CANCELLED BY A PRESS. It used to be an effect that cancelled
+   * its idle callback in cleanup and re-armed it on every change of `active` — the exact defect
+   * `promoteSoon` records for the tiles: at a walking cadence the callback is rebuilt before it
+   * can run, so a sequence of presses warmed NOTHING and every one of them sat out the gate's cap.
+   * Now every press calls `warmSoon`, which does nothing if a warm is already pending, and the one
+   * that runs reads where the walk IS then (`liveActive`, `lastDir`) through a ref to this
+   * render's closures, so it warms around the viewer rather than around the press that armed it.
    *
-   * ON THE IDLE FRAME, for the reason the tile promotion records one screenful down: decoding
-   * artwork on the keypress frame measured WORSE than not windowing at all, because it lands on
-   * the one frame that is animating a cross-fade. Between presses the row is doing nothing. */
-  const BILLBOARD_WARM_SPAN = 1;
-  useEffect(() => {
+   * RETAINED, WHICH IS THE POINT OF THE WARM. Dropping the element the moment it had decoded made
+   * the decoded frame immediately evictable, so the warm bought a cached BYTE RANGE and the gate
+   * paid for the decode anyway. The ceiling is RETAIN_MAX, global, so this does not scale with
+   * rows on screen. Farthest first, so the NEXT card is the most recently retained and the last
+   * to be evicted.
+   *
+   * ON THE IDLE FRAME, for the reason the tile promotion records: decoding artwork on the keypress
+   * frame measured WORSE than not windowing at all, because it lands on the one frame that is
+   * animating a cross-fade. Between presses the row is doing nothing. */
+  const BILLBOARD_WARM_AHEAD = 3;
+  const BILLBOARD_WARM_BEHIND = 1;
+  const warmNow = () => {
     if (!artOn || stops < 2) return;
-    const warm = () => {
-      for (let d = 1; d <= BILLBOARD_WARM_SPAN; d++) {
-        for (const i of [(active + d) % stops, (active - d + stops) % stops]) {
-          const slot = slotAt(i);
-          if (slot === 'end') continue;
-          const art = withArt(slot);
-          /* THE WORDMARK IS WARMED WITH THE PHOTOGRAPH, because the swap now waits for BOTH (see
-           * the gate above) and a gate is only free if everything it waits on is already in hand.
-           * Warming just the backdrop would have moved the stall rather than removed it: every
-           * press would sit out a cold ~20KB PNG and, often as not, hit the 200ms cap — which is
-           * the exact "blink traded for a lag" this warm exists to prevent. */
-          for (const url of [billboardUrl(art), logoOf(art) || '']) {
-            if (!url || warmed.has(url)) continue;
-            warmed.add(url);
-            /* RETAINED NOW, WHICH IS THE POINT OF THE WARM. Dropping the element the moment it had
-             * decoded — what this did — made the decoded frame immediately evictable, so the warm
-             * bought a cached BYTE RANGE and the gate one press later paid for the decode anyway.
-             * Holding it in the bounded LRU is what turns the warm into a warm. The ceiling lives
-             * on RETAIN_MAX and is global, so this no longer scales with rows on screen, which is
-             * what the old note was right to worry about. */
-            const img = retainImage(url);
-            if (typeof img.decode === 'function') img.decode().catch(() => { /* 404 / expired signature — the gate's cap covers it */ });
-          }
-        }
+    const at = liveActive.current;
+    const dir = lastDir.current;
+    const order: number[] = [];
+    for (let d = BILLBOARD_WARM_BEHIND; d >= 1; d--) order.push(mod(at - dir * d, stops));
+    for (let d = BILLBOARD_WARM_AHEAD; d >= 1; d--) order.push(mod(at + dir * d, stops));
+    for (const i of order) {
+      const slot = slotAt(i);
+      if (!slot || slot === 'end') continue;
+      const art = withArt(slot);
+      /* THE WORDMARK IS WARMED WITH THE PHOTOGRAPH, because the swap waits for BOTH (see the gate
+       * above) and a gate is only free if everything it waits on is already in hand. */
+      for (const url of [billboardUrl(art), logoOf(art) || '']) {
+        if (!url) continue;
+        const img = retainImage(url);
+        if (warmDecoded.has(img)) continue;
+        warmDecoded.add(img);
+        if (typeof img.decode === 'function') img.decode().catch(() => { /* 404 / expired signature — the gate's cap covers it */ });
       }
-    };
-    const ric = window.requestIdleCallback;
-    if (typeof ric === 'function') {
-      const id = ric(warm, { timeout: 600 });
-      return () => window.cancelIdleCallback?.(id);
     }
-    const id = window.setTimeout(warm, 120);
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [artOn, active, stops, artById]);
+  };
+  const warmLatest = useRef(warmNow);
+  warmLatest.current = warmNow;
+  const warmId = useRef(0);
+  const warmSoon = () => {
+    if (warmId.current) return;
+    const run = () => { warmId.current = 0; warmLatest.current(); };
+    const ric = window.requestIdleCallback;
+    warmId.current = typeof ric === 'function' ? ric(run, { timeout: 600 }) : window.setTimeout(run, 120);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { warmSoon(); }, [artOn, active, stops, artById]);
+  useEffect(() => () => {
+    if (!warmId.current) return;
+    if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(warmId.current);
+    else window.clearTimeout(warmId.current);
+  }, []);
 
   /* ---- A JUMP IS NOT SLID, AND ONLY TWO THINGS JUMP -------------------------------------------
    * Compared in the strip's OWN coordinate. This used to compare the walk index, which wraps — so
