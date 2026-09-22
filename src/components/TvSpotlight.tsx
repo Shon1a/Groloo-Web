@@ -506,15 +506,14 @@ const LOGO_RENDITION = 'w300';
  * The slice was never a different picture. `/crop` cuts a full-height, tile-shaped window out of
  * the w1280 of this same backdrop, positioned by the number in its URL (`f4231` = 42.31% of the way
  * across — art.js `travelFraction`), and that number means exactly what CSS object-position means.
- * So the tile shows the w1280 backdrop itself at that position: the same source pixels, framed
- * identically, and now the same file, the same cache entry and the same decoded bitmap as the
- * billboard — which is what makes a movie row behave like an add-on row.
+ * So the tile shows the backdrop itself at that position: framed identically, and now the same
+ * file, the same cache entry and the same decoded bitmap as the billboard — which is what makes a
+ * movie row behave like an add-on row.
  *
- * w1280 AND NOT w780 because the tile needs it: its slice is 34.6% of the width, 443 source pixels
- * at w1280 — exactly what the pre-cut had — against 270 at w780, which is the softness the crop was
- * invented to fix. It costs less than it replaced: one 1280x720 bitmap (3.7MB) where there were a
- * 640x1040 slice and a 780x439 backdrop (4.1MB), and one decode instead of two. The billboard gets
- * sharper for free. A dpr-1 screen cannot show the difference, so it keeps w780.
+ * w780, BY CHOICE, NOT w1280. At w1280 the tile's 34.6% slice is 443 source pixels — exactly what
+ * the pre-cut had — and at w780 it is 270, visibly softer on a 626px box. The user took the softer
+ * tile for the lighter bitmap: 780x439 (1.4MB) per title against 1280x720 (3.7MB), on a set whose
+ * GPU is the first thing to run out. w1280 is still one key away (`groloo.tvart=shared1280`).
  *
  * Only when the crop really is a slice of THIS backdrop: the file named in the crop URL has to be
  * the backdrop's file. Anything else — no crop, a crop of another frame — renders as before. */
@@ -523,20 +522,21 @@ const LOGO_RENDITION = 'w300';
  * the pre-cut was 640x1040 (2.7MB), and GPU is what the 65UT8100 runs out of first. Whether the
  * shared picture's swap outweighs its texture cost is a question only the set can answer, so the
  * candidates are one key apart and can be run interleaved by scripts/tv-measure.mjs (`--ls`):
- *   (unset)     one picture, w1280 — tile crops it in CSS, billboard shows it whole
- *   shared780   one picture, w780  — 40% of the pixels, tile visibly softer
+ *   (unset)     one picture, w780  — THE DEFAULT, chosen by the user over w1280: 1.4MB per tile
+ *               where w1280 was 3.7MB, tile slightly softer (a 270px slice for a 626px box)
+ *   shared1280  one picture, w1280 — tile crops it in CSS at the pre-cut's own 443px of source
  *   crop        two pictures: the w640 pre-cut tile + a w780 billboard (before 70992e4)
  *   crop320     two pictures: a w320 pre-cut tile (1/4 of the pixels) + a w780 billboard
  * Read once: a TV does not change arms mid-session, and a per-tile read would be storage I/O per card. */
-const TV_ART: '' | 'shared780' | 'crop' | 'crop320' = (() => {
+const TV_ART: '' | 'shared1280' | 'crop' | 'crop320' = (() => {
   try {
     const v = localStorage.getItem('groloo.tvart');
-    return v === 'shared780' || v === 'crop' || v === 'crop320' ? v : '';
+    return v === 'shared1280' || v === 'crop' || v === 'crop320' ? v : '';
   } catch { return ''; }
 })();
 const SHARED_RENDITION =
-  TV_ART === 'shared780' ? BILLBOARD_RENDITION
-  : (typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5) ? 'w1280' : BILLBOARD_RENDITION;
+  TV_ART === 'shared1280' && typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5
+    ? 'w1280' : BILLBOARD_RENDITION;
 /** The pre-cut size the `crop` arms ask for; the default follows the screen (artSize). */
 const CROP_SIZE = TV_ART === 'crop320' ? 'w320' as const : undefined;
 function sharedArtOf(it: MediaItem): PeekArt | null {
