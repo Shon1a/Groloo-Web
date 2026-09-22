@@ -15,6 +15,7 @@ import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
 import { FadeBg, FadeImg } from './FadeArt';
+import { prefetchArt } from '../lib/artPrefetch';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
  * whenever MODE === 'tv', so home rows, Upcoming and add-on catalogues all get it).
@@ -543,6 +544,34 @@ function peekArtOf(it: MediaItem): PeekArt {
   return { src: imgW(it.poster || '', THUMB_RENDITION), pos: '50% 50%' };
 }
 
+/** A tile's picture, its one fallback, and where to sit it — the Tile's choice, in one place so the
+ *  prefetch below asks for exactly the URL the tile will. */
+function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: string; own: boolean } {
+  /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
+   * for when that one fails to load, which is the role the backdrop used to play for it. */
+  const one = sharedArtOf(it);
+  const cut = one ? '' : artW(it.posterArt);
+  const shared = one ? '' : imgW(it.backdrop || '', BILLBOARD_RENDITION);
+  return {
+    src: one?.src || cut || shared || imgW(it.poster || '', THUMB_RENDITION),
+    fallbackSrc: one ? artW(it.posterArt) : cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : ''),
+    // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
+    pos: one ? one.pos : cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%'),
+    // Our own artwork (not TMDB's lettered poster), so the tile names it — see `name` in Tile.
+    own: !!(one || cut || shared),
+  };
+}
+
+/** The billboard's picture for a card. On an `enrich` row a poster is not a stand-in for a
+ *  backdrop that has not arrived — see the note on `billboardUrl`, which is this gated on `artOn`. */
+function billboardSrcOf(it: MediaItem, enrich: boolean): string {
+  /* The picture the tile under it is already showing, when there is one — see `sharedArtOf`. */
+  const one = sharedArtOf(it);
+  if (one) return one.src;
+  const source = enrich ? it.backdrop : (it.backdrop || it.poster);
+  return imgW(source || '', BILLBOARD_RENDITION);
+}
+
 /* THE SOUND BADGE'S TWO GLYPHS, and they are the player's own — same 24-unit box, same filled
  * cone, same 1.8 stroke on the waves and on the cross. Copied rather than imported because the
  * player is a lazily-loaded chunk and a home row must not pull it in for two paths; a private
@@ -610,19 +639,11 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
    * Falling back to the shared backdrop is not a degradation to paper over: it is
    * how a title with no focal point yet, or one whose crop we declined, renders —
    * the same picture, cropped by object-fit, at lower detail. */
-  /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
-   * for when that one fails to load, which is the role the backdrop used to play for it. */
-  const one = sharedArtOf(it);
-  const cut = one ? '' : artW(it.posterArt);
-  const shared = one ? '' : imgW(it.backdrop || '', BILLBOARD_RENDITION);
-  const src = one?.src || cut || shared || imgW(it.poster || '', THUMB_RENDITION);
-  const fallbackSrc = one ? artW(it.posterArt) : cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : '');
-  // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
-  const objectPosition = one ? one.pos : cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
+  const { src, fallbackSrc, pos: objectPosition, own } = tilePictureOf(it);
   const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
   /* What names this tile: its wordmark, its title in type, or nothing at all when it
    * has fallen back to a plain poster that already carries its own. */
-  const name: 'mark' | 'text' | null = mark ? 'mark' : ((one || cut || shared) ? 'text' : null);
+  const name: 'mark' | 'text' | null = mark ? 'mark' : (own ? 'text' : null);
   return (
     <button
       type="button"
@@ -1436,13 +1457,31 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * as a card waiting. The branded gradient already exists for exactly this and holds the frame
    * for the one request. Catalogue rows keep the old fallback — their cards genuinely sometimes
    * have a poster and no backdrop, with nothing else coming. */
-  const billboardUrl = (it: MediaItem): string => {
-    /* The picture the tile under it is already showing, when there is one — see `sharedArtOf`. */
-    const one = artOn ? sharedArtOf(it) : null;
-    if (one) return one.src;
-    const source = enrich ? it.backdrop : (it.backdrop || it.poster);
-    return artOn ? imgW(source || '', BILLBOARD_RENDITION) : '';
-  };
+  const billboardUrl = (it: MediaItem): string => (artOn ? billboardSrcOf(it, !!enrich) : '');
+
+  /* ---- A ROW NOT YET REACHED DOWNLOADS ITS FIRST SCREEN AHEAD OF TIME -------------------------
+   * The billboard, the tiles beside it and their wordmarks — the pictures this row shows the
+   * moment the remote arrives — handed to lib/artPrefetch, which downloads them (bytes only, no
+   * decode) once the home screen has settled, nearest rows to the remote first. A row that already
+   * has its artwork on is doing this itself through `promoteSoon`, so it queues nothing. */
+  const PREFETCH_TITLES = 7;
+  useEffect(() => {
+    if (artOn || !n) return;
+    const urls: string[] = [];
+    for (let d = 0; d < Math.min(PREFETCH_TITLES, n); d++) {
+      const it = list[(active + d) % n];
+      if (!it) continue;
+      const a = withArt(it);
+      if (d === 0) urls.push(billboardSrcOf(a, !!enrich));
+      urls.push(tilePictureOf(a).src, logoOf(a) || '');
+    }
+    prefetchArt(urls, () => {
+      const focused = rowIndexOf((document.activeElement?.closest('.tv-spot') as HTMLElement | null) ?? null);
+      if (myRow.current < 0) return 99;
+      return focused < 0 ? myRow.current : Math.abs(myRow.current - focused);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artOn, list, n]);
 
   /* ---- THE WINDOW, BUILT FRESH ON EVERY PRESS AND CHEAP BECAUSE OF IT -------------------------
    * The strip used to be one memo holding every tile, guarded against rebuilding on a focus change
