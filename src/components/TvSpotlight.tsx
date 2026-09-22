@@ -518,9 +518,29 @@ const LOGO_RENDITION = 'w300';
  *
  * Only when the crop really is a slice of THIS backdrop: the file named in the crop URL has to be
  * the backdrop's file. Anything else — no crop, a crop of another frame — renders as before. */
+/* ---- EXPERIMENT ARM: `localStorage['groloo.tvart']` — WHICH PICTURES A TILE AND BILLBOARD USE --
+ * One picture per title fixed the billboard swap but made each tile's bitmap 1280x720 (3.7MB) where
+ * the pre-cut was 640x1040 (2.7MB), and GPU is what the 65UT8100 runs out of first. Whether the
+ * shared picture's swap outweighs its texture cost is a question only the set can answer, so the
+ * candidates are one key apart and can be run interleaved by scripts/tv-measure.mjs (`--ls`):
+ *   (unset)     one picture, w1280 — tile crops it in CSS, billboard shows it whole
+ *   shared780   one picture, w780  — 40% of the pixels, tile visibly softer
+ *   crop        two pictures: the w640 pre-cut tile + a w780 billboard (before 70992e4)
+ *   crop320     two pictures: a w320 pre-cut tile (1/4 of the pixels) + a w780 billboard
+ * Read once: a TV does not change arms mid-session, and a per-tile read would be storage I/O per card. */
+const TV_ART: '' | 'shared780' | 'crop' | 'crop320' = (() => {
+  try {
+    const v = localStorage.getItem('groloo.tvart');
+    return v === 'shared780' || v === 'crop' || v === 'crop320' ? v : '';
+  } catch { return ''; }
+})();
 const SHARED_RENDITION =
-  (typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5) ? 'w1280' : BILLBOARD_RENDITION;
+  TV_ART === 'shared780' ? BILLBOARD_RENDITION
+  : (typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5) ? 'w1280' : BILLBOARD_RENDITION;
+/** The pre-cut size the `crop` arms ask for; the default follows the screen (artSize). */
+const CROP_SIZE = TV_ART === 'crop320' ? 'w320' as const : undefined;
 function sharedArtOf(it: MediaItem): PeekArt | null {
+  if (TV_ART === 'crop' || TV_ART === 'crop320') return null;
   const cut = it.posterArt;
   if (!cut || !it.backdrop) return null;
   const m = /\/crop\/w\d+\/f(\d+)\/([A-Za-z0-9]+)\.webp/.exec(cut);
@@ -537,7 +557,7 @@ const EMPTY_PEEK: PeekArt = { src: '', pos: '50% 50%' };
 function peekArtOf(it: MediaItem): PeekArt {
   const one = sharedArtOf(it);
   if (one) return one;                                // the billboard's own picture
-  const cut = artW(it.posterArt);
+  const cut = artW(it.posterArt, CROP_SIZE);
   if (cut) return { src: cut, pos: '50% 50%' };      // already the tile's shape
   const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
   if (shared) return { src: shared, pos: artPosition(it.artFocusX as number | null) };
@@ -550,11 +570,11 @@ function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: 
   /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
    * for when that one fails to load, which is the role the backdrop used to play for it. */
   const one = sharedArtOf(it);
-  const cut = one ? '' : artW(it.posterArt);
+  const cut = one ? '' : artW(it.posterArt, CROP_SIZE);
   const shared = one ? '' : imgW(it.backdrop || '', BILLBOARD_RENDITION);
   return {
     src: one?.src || cut || shared || imgW(it.poster || '', THUMB_RENDITION),
-    fallbackSrc: one ? artW(it.posterArt) : cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : ''),
+    fallbackSrc: one ? artW(it.posterArt, CROP_SIZE) : cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : ''),
     // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
     pos: one ? one.pos : cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%'),
     // Our own artwork (not TMDB's lettered poster), so the tile names it — see `name` in Tile.
