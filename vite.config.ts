@@ -383,7 +383,16 @@ export default defineConfig(({ mode }) => ({
                * `purgeOnQuotaError` clears THIS cache if a put still hits the quota, which is
                * also how a set that filled it with opaque entries under the old rule recovers:
                * the first failed put empties it, and the ~100KB entries that follow fit. */
-              fetchOptions: { mode: 'cors', credentials: 'omit' },
+              /* `cache: 'reload'` IS NOT OPTIONAL, AND ITS ABSENCE BROKE MOST TILES ON THE SET.
+               * Every picture a television had already shown sits in its HTTP cache from a
+               * no-cors request made BEFORE the worker sent CORS headers, stamped immutable for a
+               * year. A cors fetch is answered from that entry, finds no
+               * Access-Control-Allow-Origin, and fails without touching the network — measured on
+               * the 65UT8100: the tile <img>, new Image() and fetch() all errored on a known URL
+               * while the same URL with a fresh query string loaded. 'reload' goes to the network
+               * (this rule only fetches on a miss in its own cache anyway) and overwrites the stale
+               * HTTP entry with one that carries the header. */
+              fetchOptions: { mode: 'cors', credentials: 'omit', cache: 'reload' },
               // ~150 tiles are live on a home screen, and each row now also holds a
               // billboard and a wordmark under this same rule — so where 600 covered
               // the posters plus the rows either side, that needs roughly doubling.
@@ -397,9 +406,11 @@ export default defineConfig(({ mode }) => ({
             handler: 'CacheFirst',
             options: {
               cacheName: 'tmdb-images',
-              // TMDB already answers with `Access-Control-Allow-Origin: *` — cors for the
-              // same reason as groloo-art above: real bytes in the quota, not padded ones.
-              fetchOptions: { mode: 'cors', credentials: 'omit' },
+              // TMDB answers with `Access-Control-Allow-Origin: *` when the request carries an
+              // Origin — cors for the same reason as groloo-art above (real bytes in the quota, not
+              // padded ones), and `reload` for the same reason too: an entry cached from an old
+              // no-cors request has no ACAO and would fail the cors check without a network trip.
+              fetchOptions: { mode: 'cors', credentials: 'omit', cache: 'reload' },
               expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30, purgeOnQuotaError: true },
               cacheableResponse: { statuses: [200] },
             },
