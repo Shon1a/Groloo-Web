@@ -358,15 +358,37 @@ export default defineConfig(({ mode }) => ({
              * baked posters lived at and nothing serves any more — so on a revisit
              * every one of these went to the network while TMDB's own images came
              * back instantly from the cache next door. */
-            urlPattern: ({ url }) => /^\/(crop|img|logo)\//.test(url.pathname),
+            // The full shape of OUR urls, not just the prefix: this rule now fetches in cors mode
+            // (below), and an add-on host that happens to serve a /logo/ path without CORS
+            // headers would lose its picture to a failed cors fetch.
+            urlPattern: ({ url }) => /^\/(crop|img|logo)\/(w\d+|original)\/(f\d+\/)?[A-Za-z0-9]{8,64}\.webp$/.test(url.pathname),
             handler: 'CacheFirst',
             options: {
               cacheName: 'groloo-art',
+              /* FETCHED IN CORS MODE, SO WHAT IS STORED IS THE PICTURE AND NOT A 13MB BILL.
+               * An <img> or a CSS background asks in no-cors mode, and a no-cors response
+               * is opaque: Chromium charges each one to the quota at a padded size, whatever
+               * its bytes. Measured: one 116KB billboard stored opaque cost 13,156,214 bytes
+               * of quota; a TMDB image stored from a cors fetch cost 69,241 for 67,817 bytes.
+               * At that rate a television's quota was spent after a few dozen pictures and
+               * every put after it failed — this cache had quietly stopped caching, so each
+               * launch fetched the home screen's art from the network again.
+               *
+               * The art worker sends `Access-Control-Allow-Origin: *` for exactly this
+               * (art-worker withCors), and a SW may answer a no-cors request with a cors
+               * response, so the page's elements are untouched. Opaque is no longer
+               * accepted: status 0 now means the cors fetch failed, and that is not a
+               * picture worth keeping.
+               *
+               * `purgeOnQuotaError` clears THIS cache if a put still hits the quota, which is
+               * also how a set that filled it with opaque entries under the old rule recovers:
+               * the first failed put empties it, and the ~100KB entries that follow fit. */
+              fetchOptions: { mode: 'cors', credentials: 'omit' },
               // ~150 tiles are live on a home screen, and each row now also holds a
               // billboard and a wordmark under this same rule — so where 600 covered
               // the posters plus the rows either side, that needs roughly doubling.
-              expiration: { maxEntries: 1200, maxAgeSeconds: 60 * 60 * 24 * 60 },
-              cacheableResponse: { statuses: [0, 200] },
+              expiration: { maxEntries: 1200, maxAgeSeconds: 60 * 60 * 24 * 60, purgeOnQuotaError: true },
+              cacheableResponse: { statuses: [200] },
             },
           },
           {
@@ -375,8 +397,11 @@ export default defineConfig(({ mode }) => ({
             handler: 'CacheFirst',
             options: {
               cacheName: 'tmdb-images',
-              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              cacheableResponse: { statuses: [0, 200] },
+              // TMDB already answers with `Access-Control-Allow-Origin: *` — cors for the
+              // same reason as groloo-art above: real bytes in the quota, not padded ones.
+              fetchOptions: { mode: 'cors', credentials: 'omit' },
+              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30, purgeOnQuotaError: true },
+              cacheableResponse: { statuses: [200] },
             },
           },
           {

@@ -15,6 +15,7 @@ import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
 import { FadeBg, FadeImg } from './FadeArt';
+import { prefetchArt } from '../lib/artPrefetch';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
  * whenever MODE === 'tv', so home rows, Upcoming and add-on catalogues all get it).
@@ -505,21 +506,41 @@ const LOGO_RENDITION = 'w300';
  * The slice was never a different picture. `/crop` cuts a full-height, tile-shaped window out of
  * the w1280 of this same backdrop, positioned by the number in its URL (`f4231` = 42.31% of the way
  * across — art.js `travelFraction`), and that number means exactly what CSS object-position means.
- * So the tile shows the w1280 backdrop itself at that position: the same source pixels, framed
- * identically, and now the same file, the same cache entry and the same decoded bitmap as the
- * billboard — which is what makes a movie row behave like an add-on row.
+ * So the tile shows the backdrop itself at that position: framed identically, and now the same
+ * file, the same cache entry and the same decoded bitmap as the billboard — which is what makes a
+ * movie row behave like an add-on row.
  *
- * w1280 AND NOT w780 because the tile needs it: its slice is 34.6% of the width, 443 source pixels
- * at w1280 — exactly what the pre-cut had — against 270 at w780, which is the softness the crop was
- * invented to fix. It costs less than it replaced: one 1280x720 bitmap (3.7MB) where there were a
- * 640x1040 slice and a 780x439 backdrop (4.1MB), and one decode instead of two. The billboard gets
- * sharper for free. A dpr-1 screen cannot show the difference, so it keeps w780.
+ * w780, BY CHOICE, NOT w1280. At w1280 the tile's 34.6% slice is 443 source pixels — exactly what
+ * the pre-cut had — and at w780 it is 270, visibly softer on a 626px box. The user took the softer
+ * tile for the lighter bitmap: 780x439 (1.4MB) per title against 1280x720 (3.7MB), on a set whose
+ * GPU is the first thing to run out. w1280 is still one key away (`groloo.tvart=shared1280`).
  *
  * Only when the crop really is a slice of THIS backdrop: the file named in the crop URL has to be
  * the backdrop's file. Anything else — no crop, a crop of another frame — renders as before. */
+/* ---- EXPERIMENT ARM: `localStorage['groloo.tvart']` — WHICH PICTURES A TILE AND BILLBOARD USE --
+ * One picture per title fixed the billboard swap but made each tile's bitmap 1280x720 (3.7MB) where
+ * the pre-cut was 640x1040 (2.7MB), and GPU is what the 65UT8100 runs out of first. Whether the
+ * shared picture's swap outweighs its texture cost is a question only the set can answer, so the
+ * candidates are one key apart and can be run interleaved by scripts/tv-measure.mjs (`--ls`):
+ *   (unset)     one picture, w780  — THE DEFAULT, chosen by the user over w1280: 1.4MB per tile
+ *               where w1280 was 3.7MB, tile slightly softer (a 270px slice for a 626px box)
+ *   shared1280  one picture, w1280 — tile crops it in CSS at the pre-cut's own 443px of source
+ *   crop        two pictures: the w640 pre-cut tile + a w780 billboard (before 70992e4)
+ *   crop320     two pictures: a w320 pre-cut tile (1/4 of the pixels) + a w780 billboard
+ * Read once: a TV does not change arms mid-session, and a per-tile read would be storage I/O per card. */
+const TV_ART: '' | 'shared1280' | 'crop' | 'crop320' = (() => {
+  try {
+    const v = localStorage.getItem('groloo.tvart');
+    return v === 'shared1280' || v === 'crop' || v === 'crop320' ? v : '';
+  } catch { return ''; }
+})();
 const SHARED_RENDITION =
-  (typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5) ? 'w1280' : BILLBOARD_RENDITION;
+  TV_ART === 'shared1280' && typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.5
+    ? 'w1280' : BILLBOARD_RENDITION;
+/** The pre-cut size the `crop` arms ask for; the default follows the screen (artSize). */
+const CROP_SIZE = TV_ART === 'crop320' ? 'w320' as const : undefined;
 function sharedArtOf(it: MediaItem): PeekArt | null {
+  if (TV_ART === 'crop' || TV_ART === 'crop320') return null;
   const cut = it.posterArt;
   if (!cut || !it.backdrop) return null;
   const m = /\/crop\/w\d+\/f(\d+)\/([A-Za-z0-9]+)\.webp/.exec(cut);
@@ -536,11 +557,39 @@ const EMPTY_PEEK: PeekArt = { src: '', pos: '50% 50%' };
 function peekArtOf(it: MediaItem): PeekArt {
   const one = sharedArtOf(it);
   if (one) return one;                                // the billboard's own picture
-  const cut = artW(it.posterArt);
+  const cut = artW(it.posterArt, CROP_SIZE);
   if (cut) return { src: cut, pos: '50% 50%' };      // already the tile's shape
   const shared = imgW(it.backdrop || '', BILLBOARD_RENDITION);
   if (shared) return { src: shared, pos: artPosition(it.artFocusX as number | null) };
   return { src: imgW(it.poster || '', THUMB_RENDITION), pos: '50% 50%' };
+}
+
+/** A tile's picture, its one fallback, and where to sit it — the Tile's choice, in one place so the
+ *  prefetch below asks for exactly the URL the tile will. */
+function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: string; own: boolean } {
+  /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
+   * for when that one fails to load, which is the role the backdrop used to play for it. */
+  const one = sharedArtOf(it);
+  const cut = one ? '' : artW(it.posterArt, CROP_SIZE);
+  const shared = one ? '' : imgW(it.backdrop || '', BILLBOARD_RENDITION);
+  return {
+    src: one?.src || cut || shared || imgW(it.poster || '', THUMB_RENDITION),
+    fallbackSrc: one ? artW(it.posterArt, CROP_SIZE) : cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : ''),
+    // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
+    pos: one ? one.pos : cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%'),
+    // Our own artwork (not TMDB's lettered poster), so the tile names it — see `name` in Tile.
+    own: !!(one || cut || shared),
+  };
+}
+
+/** The billboard's picture for a card. On an `enrich` row a poster is not a stand-in for a
+ *  backdrop that has not arrived — see the note on `billboardUrl`, which is this gated on `artOn`. */
+function billboardSrcOf(it: MediaItem, enrich: boolean): string {
+  /* The picture the tile under it is already showing, when there is one — see `sharedArtOf`. */
+  const one = sharedArtOf(it);
+  if (one) return one.src;
+  const source = enrich ? it.backdrop : (it.backdrop || it.poster);
+  return imgW(source || '', BILLBOARD_RENDITION);
 }
 
 /* THE SOUND BADGE'S TWO GLYPHS, and they are the player's own — same 24-unit box, same filled
@@ -610,19 +659,11 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
    * Falling back to the shared backdrop is not a degradation to paper over: it is
    * how a title with no focal point yet, or one whose crop we declined, renders —
    * the same picture, cropped by object-fit, at lower detail. */
-  /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
-   * for when that one fails to load, which is the role the backdrop used to play for it. */
-  const one = sharedArtOf(it);
-  const cut = one ? '' : artW(it.posterArt);
-  const shared = one ? '' : imgW(it.backdrop || '', BILLBOARD_RENDITION);
-  const src = one?.src || cut || shared || imgW(it.poster || '', THUMB_RENDITION);
-  const fallbackSrc = one ? artW(it.posterArt) : cut ? (shared || '') : (shared ? imgW(it.poster || '', THUMB_RENDITION) : '');
-  // A pre-cut slice is already the tile's shape, so there is nothing left to pan.
-  const objectPosition = one ? one.pos : cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%');
+  const { src, fallbackSrc, pos: objectPosition, own } = tilePictureOf(it);
   const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
   /* What names this tile: its wordmark, its title in type, or nothing at all when it
    * has fallen back to a plain poster that already carries its own. */
-  const name: 'mark' | 'text' | null = mark ? 'mark' : ((one || cut || shared) ? 'text' : null);
+  const name: 'mark' | 'text' | null = mark ? 'mark' : (own ? 'text' : null);
   return (
     <button
       type="button"
@@ -1436,13 +1477,31 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * as a card waiting. The branded gradient already exists for exactly this and holds the frame
    * for the one request. Catalogue rows keep the old fallback — their cards genuinely sometimes
    * have a poster and no backdrop, with nothing else coming. */
-  const billboardUrl = (it: MediaItem): string => {
-    /* The picture the tile under it is already showing, when there is one — see `sharedArtOf`. */
-    const one = artOn ? sharedArtOf(it) : null;
-    if (one) return one.src;
-    const source = enrich ? it.backdrop : (it.backdrop || it.poster);
-    return artOn ? imgW(source || '', BILLBOARD_RENDITION) : '';
-  };
+  const billboardUrl = (it: MediaItem): string => (artOn ? billboardSrcOf(it, !!enrich) : '');
+
+  /* ---- A ROW NOT YET REACHED DOWNLOADS ITS FIRST SCREEN AHEAD OF TIME -------------------------
+   * The billboard, the tiles beside it and their wordmarks — the pictures this row shows the
+   * moment the remote arrives — handed to lib/artPrefetch, which downloads them (bytes only, no
+   * decode) once the home screen has settled, nearest rows to the remote first. A row that already
+   * has its artwork on is doing this itself through `promoteSoon`, so it queues nothing. */
+  const PREFETCH_TITLES = 7;
+  useEffect(() => {
+    if (artOn || !n) return;
+    const urls: string[] = [];
+    for (let d = 0; d < Math.min(PREFETCH_TITLES, n); d++) {
+      const it = list[(active + d) % n];
+      if (!it) continue;
+      const a = withArt(it);
+      if (d === 0) urls.push(billboardSrcOf(a, !!enrich));
+      urls.push(tilePictureOf(a).src, logoOf(a) || '');
+    }
+    prefetchArt(urls, () => {
+      const focused = rowIndexOf((document.activeElement?.closest('.tv-spot') as HTMLElement | null) ?? null);
+      if (myRow.current < 0) return 99;
+      return focused < 0 ? myRow.current : Math.abs(myRow.current - focused);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artOn, list, n]);
 
   /* ---- THE WINDOW, BUILT FRESH ON EVERY PRESS AND CHEAP BECAUSE OF IT -------------------------
    * The strip used to be one memo holding every tile, guarded against rebuilding on a focus change
