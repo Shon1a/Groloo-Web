@@ -541,7 +541,10 @@
      it sitting on the card rather than on its edge at the size the billboard is now. */
   left: 64px; bottom: 72px;
   max-width: 46%;
-  animation: tvHeroRise .5s cubic-bezier(.2, .7, .2, 1) both;
+  /* `backwards`, not `both` — see the note at `.tv-spot.is-open .tv-spot-info`: a held final frame
+     keeps this "active" forever, and the featured hero paints before EVERY row, so it made the
+     compositor assume overlap with the whole page. The resting style is the last keyframe. */
+  animation: tvHeroRise .5s cubic-bezier(.2, .7, .2, 1) backwards;
   /* THE COPY CARRIES ITS OWN CONTRAST NOW THAT THE SCRIM IS GONE. Without it the meta line and
      synopsis are white text laid straight on a photograph, and the featured backdrop is the one
      picture in the app nothing else is guaranteeing the brightness of — a snow shot or a lit
@@ -1829,9 +1832,17 @@
   transform: translateX(calc(var(--sp-dir, 1) * var(--sp-copy-slide, calc(var(--sp-wl) * 0.046))));
   transition: none;
 }
+/* `backwards`, NEVER `both`, ON ANYTHING THAT STAYS ON THE HOME SCREEN. A finished animation with
+   `forwards`/`both` fill is still "active" to the compositor for as long as the element exists, and
+   Chromium cannot bound an active transform/opacity animation — so it ASSUMES OVERLAP with everything
+   painted after it and promotes it all. On this page that was every later row's stage and info panel:
+   52 layers on the desktop census against 37 without this one rule, and the chain is rebuilt on every
+   vertical move because `is-open` moves. Measured on the 65UT8100 as the difference between a row near
+   the top (69.4% on time, a dozen rows promoted beneath it) and an add-on row at the bottom (82.0%).
+   The resting style here IS the last keyframe (opacity 1, no transform), so `backwards` looks the same. */
 .tv-spot.is-open .tv-spot-info {
   opacity: 1;
-  animation: tvSpotFade .42s cubic-bezier(.2, .7, .2, 1) both;   /* fades with the billboard */
+  animation: tvSpotFade .42s cubic-bezier(.2, .7, .2, 1) backwards;   /* fades with the billboard */
 }
 .tv-spot-meta {
   display: flex; align-items: center; flex-wrap: wrap;
