@@ -67,8 +67,14 @@ import { useEffect, useState } from 'react';
  *
  * So decode is real work that is not on the critical path — it runs off the main thread and in the
  * gaps between presses, where the row is idle anyway. Freeing it frees time nothing was waiting
- * for. Worth recording precisely because the 85% looks like it ought to matter. */
-const RETAIN_MAX = 10;
+ * for. Worth recording precisely because the 85% looks like it ought to matter.
+ *
+ * 10 -> 12 WHEN THE ROW'S WARM WIDENED to three cards ahead and one behind (TvSpotlight's
+ * `warmNow`): four pairs plus the pair on the billboard is exactly ten, which left nothing for the
+ * hero or a row you just left and let the warm evict the picture it was about to need. Two more
+ * is ~3MB of pixmap at worst. Not a re-run of the 24 experiment — that asked whether MORE cache
+ * speeds a hold (it does not); this keeps the warm from being thrown away before the press. */
+const RETAIN_MAX = 12;
 
 /** Insertion-ordered, so the first key is always the least recently retained. */
 const retained = new Map<string, HTMLImageElement>();
