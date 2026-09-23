@@ -448,22 +448,6 @@ const OPEN_COMMIT_MS = 420;
  * quietly fixed, because "under half" is the kind of invariant someone later enforces. */
 const SWAP_WAIT_CAP = 200;
 
-/* ---- THE COPY WAITS FOR THE REMOTE TO REST ---------------------------------------------------
- * The info panel (genre · year · rating and the synopsis) used to cross-fade two stacked blocks and
- * slide them 42px on EVERY press: four transitions on two blocks of body text, the largest painted
- * text on the screen. Ablating that panel was the single biggest win measured on the 65UT8100 —
- * horizontal held 85.8 -> 90.8% on time, vertical held 76.8 -> 83.0% — and promoting it to its own
- * layer instead measured worse once combined with the hero layers (see tv.css `.tv-spot-infoblk`).
- *
- * So the panel no longer animates while the remote is moving at all. A press HIDES it on the press
- * frame — a class, not a transition, so no animation is started and it can never show one title's
- * synopsis under another title's picture — and once no press has arrived for this long it shows
- * the title the billboard settled on with ONE opacity fade. Walking a row costs the copy nothing;
- * stopping costs one fade. That is how the reference behaves too: its text belongs to where you
- * stop, not to what you pass. */
-/* 200, not 250: the panel is blank for this long after the last press, and at 250 the gap read as
- * the text going missing rather than waiting. Presses closer together than this keep it hidden. */
-const COPY_REST_MS = 200;
 
 /* ---- HOW FAST THE PHOTOGRAPH ITSELF COMES UP, and why a HELD key needs its own answer --------
  *
@@ -951,29 +935,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const [xfade, setXfade] = useState<{ a: Slot; b: Slot | null; front: 'a' | 'b' }>(
     () => ({ a: list[0], b: null, front: 'a' }),
   );
-  /* THE COPY'S OWN SLOT — see COPY_REST_MS. It follows `xfade` at once for anything that is not a
-   * press (a row opening, a catalogue cut, `enrich` filling in a synopsis) and only after the rest
-   * for a press. `rev` changes on every update, so the reveal below runs even when the slot is the
-   * same title it was (walk right, walk back). */
-  const [copy, setCopy] = useState<{ slot: Slot | null; rev: number }>(() => ({ slot: list[0], rev: 0 }));
-  /** The pending rest timer; `step` clears it so a stale title cannot be revealed mid-walk. */
-  const copyTimer = useRef(0);
-  useEffect(() => {
-    const cur = xfade[xfade.front];
-    if (copyTimer.current) { window.clearTimeout(copyTimer.current); copyTimer.current = 0; }
-    const away = !!sectionRef.current?.classList.contains('is-copy-away');
-    if (!away) { setCopy((c) => ({ slot: cur, rev: c.rev + 1 })); return; }
-    copyTimer.current = window.setTimeout(() => {
-      copyTimer.current = 0;
-      setCopy((c) => ({ slot: cur, rev: c.rev + 1 }));
-    }, COPY_REST_MS);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [xfade]);
-  /* The reveal: the new text is already in the DOM at opacity 0 when this runs, so dropping the
-   * class is the one opacity transition a rest costs. Layout effect, so it lands in the same frame
-   * as the text it reveals rather than one frame of empty panel later. */
-  useLayoutEffect(() => { sectionRef.current?.classList.remove('is-copy-away'); }, [copy.rev]);
-  useEffect(() => () => { if (copyTimer.current) window.clearTimeout(copyTimer.current); }, []);
   const firstRun = useRef(true);
   const trackRef = useRef<HTMLDivElement>(null);
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
@@ -1227,7 +1188,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     /* MEASUREMENT SWITCH, default on. Two `Element.animate()` calls per press are two compositor
      * animations, and `Layerize` appears in the traced bad frames — so this needs to be separable
      * from everything else the press does. See lib/tvMotionFlags.ts. */
-    if (!parallaxEnabled()) return;
+    const drift = parallaxEnabled();
     const held = root.classList.contains('is-fast');
     /* `lastDir`, not `getComputedStyle(root).getPropertyValue('--sp-dir')`: that read forced a full
      * style recalculation of the freshly-committed row on every press, ahead of the frame's own.
@@ -1248,11 +1209,32 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     /* THE INCOMING PICTURE ONLY. The leaving one used to drift `away` as well — a second
      * compositor animation per press for a layer that is fading out in its first two frames
      * (LAYER_OUT_MS is fast-out), where 1.6-3.2% of movement cannot be seen. One drift per press. */
-    const anims = Array.from(root.querySelectorAll<HTMLElement>('.tv-spot-layer.on .tv-spot-art')).map((el) =>
-      el.animate(
-        [{ transform: from }, { transform: 'none' }],
-        { duration: slide, easing: held ? 'linear' : 'cubic-bezier(.22, 1, .36, 1)' },
+    const timing = { duration: slide, easing: held ? 'linear' : 'cubic-bezier(.22, 1, .36, 1)' };
+    const anims = drift
+      ? Array.from(root.querySelectorAll<HTMLElement>('.tv-spot-layer.on .tv-spot-art')).map((el) =>
+          el.animate([{ transform: from }, { transform: 'none' }], timing))
+      : [];
+    /* ---- THE COPY MOVES WITH THE PICTURE, NOT AFTER IT --------------------------------------
+     * The user's ask, and what the reference does: the genre/year/rating line and the synopsis
+     * change IN THE SAME FRAME as the billboard and arrive with the SAME motion — same side, same
+     * distance, same duration, same curve — so picture and text read as one card changing.
+     * They are rendered from `xfade`'s front slot, so the text swaps in the commit that swaps the
+     * picture, and this starts both animations in one call site so they cannot drift apart.
+     *
+     * ONE animation on ONE block. The old per-press copy was four transitions on two stacked
+     * blocks (a cross-fade and a slide each) — the costliest thing a press animated on the
+     * 65UT8100. The out is a cut (the block is re-rendered with the new title), which is what the
+     * reference's copy does on the press frame. WAAPI with no `fill`, so it ENDS: a held final
+     * frame would stay "active" and make the compositor promote everything painted after it (see
+     * tv.css `.tv-spot.is-open .tv-spot-info`). With the drift switched off the text still fades in
+     * on the picture's clock rather than cutting. */
+    const copy = root.querySelector<HTMLElement>('.tv-spot-infoblk');
+    if (copy && copy.childElementCount) {
+      anims.push(copy.animate(
+        drift ? [{ opacity: 0, transform: from }, { opacity: 1, transform: 'none' }] : [{ opacity: 0 }, { opacity: 1 }],
+        timing,
       ));
+    }
     /* NOT SEEKED TO THE STRIP'S CLOCK, AND THE ATTEMPT IS WORTH RECORDING so nobody spends the
      * television time on it twice. The theory was that this effect starts late — it waits for the
      * swap commit, for the reason below — so the drift should be created and then advanced to
@@ -2365,12 +2347,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * The class is cleared on a timer rather than on the next press, so letting go of the button
        * restores the full effect for the card you actually stop on. */
       el.classList.toggle('is-fast', chained);
-      /* THE COPY LEAVES ON THE PRESS FRAME and comes back when the remote rests — COPY_REST_MS.
-       * A pending reveal is cancelled here, not in the effect, because the flip that would cancel it
-       * can be a gate-wait (SWAP_WAIT_CAP) behind the press, and in that gap the old timer could
-       * reveal the title the viewer just walked off. */
-      el.classList.add('is-copy-away');
-      if (copyTimer.current) { window.clearTimeout(copyTimer.current); copyTimer.current = 0; }
       if (fastOff.current) window.clearTimeout(fastOff.current);
       fastOff.current = window.setTimeout(endChain, SLIDE_CHAIN_WINDOW);
     }
@@ -2727,7 +2703,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           it, and the two blocks stack inside that reserved box. */}
       <div className="tv-spot-info">
         {(() => {
-          const it = copy.slot;
+          const it = xfade[xfade.front];
           if (!it || it === 'end') return <div className="tv-spot-infoblk" />;
           const a = withArt(it);
           const bits = [

@@ -1778,40 +1778,15 @@
   padding-left: var(--sp-copy-bleed);
   padding-right: var(--sp-copy-bleed);
 }
-/* THE COPY USED TO FOLLOW THE REFERENCE'S PER-PRESS CASCADE — a one-frame cut out, then a 365ms
-   quadratic fade and a 32-41px quartic slide in, each fitted to frame captures of the reference
-   (the full measurements are in git history before the rest-gated panel replaced them). It was
-   right about the reference and wrong for this set: that cascade ran on every press, and on the
-   65UT8100 the panel was the costliest thing a press animated. It now changes only where the
-   remote rests — see `.tv-spot-infoblk` below and COPY_REST_MS in TvSpotlight. */
+/* ONE BLOCK, MOVED BY TvSpotlight IN STEP WITH THE PICTURE — the same WAAPI call that drifts the
+   incoming billboard art animates this (opacity + the same drift), so text and picture change in the
+   same frame on the same curve. No CSS transition here on purpose: a second clock is exactly what
+   put the two out of step before. */
 .tv-spot-infoblk {
   position: absolute;
   top: 0; bottom: 0;
   left: var(--sp-copy-bleed, 0px);
   right: var(--sp-copy-bleed, 0px);
-  /* ONE BLOCK, AND IT ARRIVES ONLY WHEN THE REMOTE RESTS — TvSpotlight COPY_REST_MS.
-     This was two stacked blocks that cross-faded AND slid on EVERY press: four transitions on the
-     largest body text on the screen, and the panel whose ablation was the biggest single win
-     measured on the 65UT8100 (horizontal held 85.8 -> 90.8%, vertical held 76.8 -> 83.0%). Now a
-     press hides it with no transition at all (`is-copy-away` below) and the rest brings the settled
-     title in with the SAME arrival the per-press cascade had — the reference-fitted quadratic fade
-     and quartic slide from the side the walk went — once, where the remote stops.
-
-     THE ARRIVAL IS KEPT, NOT THINNED. The first rest-gated build revealed with a bare 220ms fade and
-     read as text popping back after a blank; the slide is what makes it read as the copy following
-     the row. It costs nothing while moving, which is the only time cost mattered. */
-  opacity: 1;
-  transform: none;
-  transition:
-    opacity 365ms cubic-bezier(.25, .46, .45, .94),
-    transform 395ms cubic-bezier(.25, 1, .5, 1);
-}
-/* A press: gone on the press frame, parked at the slide's starting offset on the side the press went
-   toward, and — `transition: none` — without starting an animation. The rest slides it home. */
-.tv-spot.is-copy-away .tv-spot-infoblk {
-  opacity: 0;
-  transform: translateX(calc(var(--sp-dir, 1) * var(--sp-copy-slide, calc(var(--sp-wl) * 0.046))));
-  transition: none;
 }
 /* `backwards`, NEVER `both`, ON ANYTHING THAT STAYS ON THE HOME SCREEN. A finished animation with
    `forwards`/`both` fill is still "active" to the compositor for as long as the element exists, and
