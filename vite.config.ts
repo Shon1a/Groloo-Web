@@ -361,7 +361,7 @@ export default defineConfig(({ mode }) => ({
             // The full shape of OUR urls, not just the prefix: this rule now fetches in cors mode
             // (below), and an add-on host that happens to serve a /logo/ path without CORS
             // headers would lose its picture to a failed cors fetch.
-            urlPattern: ({ url }) => /^\/(crop|img|logo)\/(w\d+|original)\/(f\d+\/)?[A-Za-z0-9]{8,64}\.webp$/.test(url.pathname),
+            urlPattern: ({ url }) => /^\/(crop|img|logo|tile)\/(w\d+|original)\/(f\d+\/)?([A-Za-z0-9]{8,64}\/)?[A-Za-z0-9]{8,64}\.webp$/.test(url.pathname),
             handler: 'CacheFirst',
             options: {
               cacheName: 'groloo-art',

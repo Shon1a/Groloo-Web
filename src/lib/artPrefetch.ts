@@ -23,7 +23,7 @@
  * ========================================================================== */
 
 /** Our art worker's urls exactly — the same test as the groloo-art rule in vite.config.ts. */
-const ART_PATH = /^\/(crop|img|logo)\/(w\d+|original)\/(f\d+\/)?[A-Za-z0-9]{8,64}\.webp$/;
+const ART_PATH = /^\/(crop|img|logo|tile)\/(w\d+|original)\/(f\d+\/)?([A-Za-z0-9]{8,64}\/)?[A-Za-z0-9]{8,64}\.webp$/;
 const CONCURRENCY = 3;
 /** Nothing starts until the first screen has had this long to itself. */
 const START_AFTER_MS = 2500;
