@@ -446,7 +446,26 @@ const OPEN_COMMIT_MS = 420;
  * 230ms slide it was written against is 115ms. The rule it states is a stricter one than the
  * behaviour needs, and it is the behaviour that has always been correct — recorded rather than
  * quietly fixed, because "under half" is the kind of invariant someone later enforces. */
-const SWAP_WAIT_CAP = 200;
+/* 200 -> 260 (2026-09-23): on the 65UT8100 pictures decode slower than on a PC, and a swap that
+ * capped out before its picture was ready dissolved to the placeholder and then popped the photo in
+ * with no drift — the "skips its animation" the user saw when pressing fast. 260 is still under the
+ * 267ms slide, so the rule above holds, and taps are now paced at TAP_STEP_MIN_MS (300) so the extra
+ * wait always fits between two steps. */
+const SWAP_WAIT_CAP = 260;
+
+/* ---- TAPS WALK AT A STEADY PACE, LIKE A HELD KEY — AND LIKE THE REFERENCE ----------------------
+ * Spam Right on Netflix and the row does not try to follow every press: it steps at an even rate
+ * and the extra presses simply ride along. This row used to take every tap the moment it arrived,
+ * so fast tapping cancelled each drift, dissolve and copy arrival part-way and the billboard jumped
+ * between titles instead of moving — and on the set, where pictures decode slower, the swap often
+ * outran its own picture.
+ *
+ * So a tap closer than this to the last step is NOT dropped (a deliberate press must never be lost —
+ * see the note on `chained` in `step`); it is held and taken the moment the pace allows. Only ONE is
+ * ever held: further taps inside the window replace its direction rather than queueing more steps,
+ * so letting go stops the row at once instead of letting a backlog play out. Same number as
+ * HELD_STEP_MIN_MS, measured best on the set, so a tapped walk and a held walk go at one speed. */
+const TAP_STEP_MIN_MS = HELD_STEP_MIN_MS;
 
 
 /* ---- HOW FAST THE PHOTOGRAPH ITSELF COMES UP, and why a HELD key needs its own answer --------
@@ -2509,6 +2528,29 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * episode leads when there is one, because on a resume row it is the most specific thing the
    * line can say. The see-all card has no metadata of its own and stays blank. */
 
+  /** The one tap held back by TAP_STEP_MIN_MS, and its timer. */
+  const pendingTap = useRef<{ delta: number; id: number } | null>(null);
+  useEffect(() => () => { if (pendingTap.current) window.clearTimeout(pendingTap.current.id); }, []);
+  /** Step now, or — for a tap that came too soon after the last step — once the pace allows. */
+  const paced = (delta: number, held: boolean) => {
+    if (held) { step(delta, true); return; }   // a hold has its own pace (HELD_STEP_MIN_MS)
+    const wait = TAP_STEP_MIN_MS - (performance.now() - lastStepAt.current);
+    if (wait <= 0 && !pendingTap.current) { step(delta, false); return; }
+    if (pendingTap.current) { pendingTap.current.delta = delta; return; }
+    const id = window.setTimeout(() => {
+      const p = pendingTap.current;
+      pendingTap.current = null;
+      if (!p) return;
+      // The remote may have left the row (Down, Up, OK) while this waited — then it is not ours.
+      if (!sectionRef.current?.contains(document.activeElement)) return;
+      // Left off the first card leaves the row only on a press the viewer made there, not on one
+      // that was queued behind the walk — a held-back tap that would run off the start just stops.
+      if (p.delta < 0 && liveActive.current <= 0) return;
+      step(p.delta, false);
+    }, Math.max(0, wait));
+    pendingTap.current = { delta, id };
+  };
+
   const onHeroKey = (e: ReactKeyboardEvent) => {
     // Left/Right walk the row and are consumed here so the global D-pad handler doesn't also
     // move focus off the billboard. Up/Down bubble on through to it.
@@ -2517,7 +2559,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * return of its own and both directions have to record the key either way. */
     const held = e.repeat || heldKey.current === e.key;
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') heldKey.current = e.key;
-    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); step(1, held); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); paced(1, held); }
     else if (e.key === 'ArrowLeft') {
       e.preventDefault(); e.stopPropagation();
       /* ---- LEFT OFF THE FIRST CARD LEAVES THE ROW --------------------------------------------
@@ -2536,7 +2578,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           || document.querySelector<HTMLElement>('.tv-nav-item');
         if (nav) { nav.focus(); return; }
       }
-      step(-1, held);
+      paced(-1, held);
     }
   };
 
