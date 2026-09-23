@@ -1230,10 +1230,36 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * on the picture's clock rather than cutting. */
     const copy = root.querySelector<HTMLElement>('.tv-spot-infoblk');
     if (copy && copy.childElementCount) {
-      anims.push(copy.animate(
-        drift ? [{ opacity: 0, transform: from }, { opacity: 1, transform: 'none' }] : [{ opacity: 0 }, { opacity: 1 }],
-        timing,
-      ));
+      if (held) {
+        /* A HOLD keeps the picture's own short linear drift: a 395ms arrival cannot finish inside a
+         * 300ms walking pace, and text still settling when the next title lands is the smear the
+         * reference never shows. */
+        anims.push(copy.animate(
+          drift ? [{ opacity: 0, transform: from }, { opacity: 1, transform: 'none' }] : [{ opacity: 0 }, { opacity: 1 }],
+          timing,
+        ));
+      } else {
+        /* A DELIBERATE PRESS gets the reference's own copy motion, measured off its frames and fitted
+         * with the time base pinned to the press (these were the numbers in tv.css before the copy
+         * was rest-gated; see git history of `.tv-spot-infoblk.on`):
+         *   slide    quartic ease-out, 41.5px (4.6% of the billboard's width), 395ms, RMS 0.057px
+         *   opacity  quadratic ease-out, 365ms, RMS 0.89%
+         * It STARTS on the same frame as the picture (that is the sync) but travels further and
+         * settles later and softer than the art's 3.2% drift — the picture answers the press, the
+         * text glides in under it. Two animations because the two properties have their own
+         * durations and curves; both are on one element and both end (no fill).
+         * `var(--sp-wl)` is the billboard width the reference's 4.6% was measured against. */
+        if (drift) {
+          anims.push(copy.animate(
+            [{ transform: `translateX(calc(${dir} * var(--sp-wl) * 0.046))` }, { transform: 'none' }],
+            { duration: 395, easing: 'cubic-bezier(.25, 1, .5, 1)' },
+          ));
+        }
+        anims.push(copy.animate(
+          [{ opacity: 0 }, { opacity: 1 }],
+          { duration: 365, easing: 'cubic-bezier(.25, .46, .45, .94)' },
+        ));
+      }
     }
     /* NOT SEEKED TO THE STRIP'S CLOCK, AND THE ATTEMPT IS WORTH RECORDING so nobody spends the
      * television time on it twice. The theory was that this effect starts late — it waits for the
