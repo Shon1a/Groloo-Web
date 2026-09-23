@@ -549,10 +549,10 @@ const LOGO_RENDITION = 'w300';
  *   crop        two pictures: the w640 pre-cut tile + a w780 billboard (before 70992e4)
  *   crop320     two pictures: a w320 pre-cut tile (1/4 of the pixels) + a w780 billboard
  * Read once: a TV does not change arms mid-session, and a per-tile read would be storage I/O per card. */
-const TV_ART: '' | 'shared1280' | 'crop' | 'crop320' = (() => {
+const TV_ART: '' | 'shared1280' | 'crop' | 'crop320' | 'overlay' = (() => {
   try {
     const v = localStorage.getItem('groloo.tvart');
-    return v === 'shared1280' || v === 'crop' || v === 'crop320' ? v : '';
+    return v === 'shared1280' || v === 'crop' || v === 'crop320' || v === 'overlay' ? v : '';
   } catch { return ''; }
 })();
 const SHARED_RENDITION =
@@ -576,6 +576,9 @@ function sharedArtOf(it: MediaItem): PeekArt | null {
 type PeekArt = { src: string; pos: string };
 const EMPTY_PEEK: PeekArt = { src: '', pos: '50% 50%' };
 function peekArtOf(it: MediaItem): PeekArt {
+  // The tile's own baked picture when it has one, so the wordmark does not vanish as it slides out.
+  const baked = bakedTileOf(it);
+  if (baked) return { src: baked, pos: '50% 50%' };
   const one = sharedArtOf(it);
   if (one) return one;                                // the billboard's own picture
   const cut = artW(it.posterArt, CROP_SIZE);
@@ -587,7 +590,39 @@ function peekArtOf(it: MediaItem): PeekArt {
 
 /** A tile's picture, its one fallback, and where to sit it — the Tile's choice, in one place so the
  *  prefetch below asks for exactly the URL the tile will. */
-function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: string; own: boolean } {
+/* ---- THE WORDMARK DRAWN INTO THE TILE: ONE PICTURE PER TILE -----------------------------------
+ * MEASURED ON THE 65UT8100: with the gradients gone, an official row ran at 82.6% of frames on time
+ * against 87% for a third-party add-on row, whose tiles are one plain poster each — and hiding the
+ * official row's remaining overlays closed the gap. The tile's wordmark was one of them: an <img>
+ * laid over every tile. The art worker's `/tile/` route now draws it into the crop itself, at the
+ * place and size the CSS used to put it (art-worker `tile`), so an official tile is ONE image, as a
+ * third-party poster is and as a Netflix tile is.
+ *
+ * Only for a wordmark the transformer can draw: a PNG, which is what every `/logo/` URL from our
+ * worker is made from (198 of 204 on the live home). TMDB's handful of SVG wordmarks keep the
+ * overlay. The URL is the crop URL with the wordmark's file appended, so a corrected crop or a
+ * different wordmark is a different address, like every other art URL here.
+ *
+ * NOT THE BILLBOARD'S PICTURE ANY MORE for these tiles — the billboard keeps the shared backdrop and
+ * its own wordmark plate, and the warm-ahead (`warmNow`) decodes it three cards ahead. */
+function logoFileOf(it: MediaItem): string {
+  const u = it.titleLogo || it.logo || '';
+  const m = /\/logo\/(?:w\d+|original)\/([A-Za-z0-9]{8,64})\.webp$/.exec(u)
+    || /image\.tmdb\.org\/t\/p\/(?:w\d+|original)\/([A-Za-z0-9]{8,64})\.png$/.exec(u);
+  return m ? m[1] : '';
+}
+function bakedTileOf(it: MediaItem): string {
+  if (TV_ART === 'overlay') return '';
+  const cut = artW(it.posterArt, CROP_SIZE);
+  const logo = logoFileOf(it);
+  if (!cut || !logo || !/\/crop\/w\d+\/f\d+\/[A-Za-z0-9]{8,64}\.webp$/.test(cut)) return '';
+  return cut.replace('/crop/', '/tile/').replace(/\.webp$/, `/${logo}.webp`);
+}
+
+function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: string; own: boolean; baked: boolean } {
+  const baked = bakedTileOf(it);
+  /* A baked tile falls back to the plain crop — the same picture without its wordmark, never a hole. */
+  if (baked) return { src: baked, fallbackSrc: artW(it.posterArt, CROP_SIZE), pos: '50% 50%', own: true, baked: true };
   /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
    * for when that one fails to load, which is the role the backdrop used to play for it. */
   const one = sharedArtOf(it);
@@ -600,6 +635,7 @@ function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: 
     pos: one ? one.pos : cut ? '50% 50%' : (shared ? artPosition(it.artFocusX as number | null) : '50% 50%'),
     // Our own artwork (not TMDB's lettered poster), so the tile names it — see `name` in Tile.
     own: !!(one || cut || shared),
+    baked: false,
   };
 }
 
@@ -680,11 +716,12 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
    * Falling back to the shared backdrop is not a degradation to paper over: it is
    * how a title with no focal point yet, or one whose crop we declined, renders —
    * the same picture, cropped by object-fit, at lower detail. */
-  const { src, fallbackSrc, pos: objectPosition, own } = tilePictureOf(it);
-  const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
+  const { src, fallbackSrc, pos: objectPosition, own, baked } = tilePictureOf(it);
+  // A baked tile already carries its wordmark in the picture — no <img> over it (see `bakedTileOf`).
+  const mark = baked ? '' : imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
   /* What names this tile: its wordmark, its title in type, or nothing at all when it
    * has fallen back to a plain poster that already carries its own. */
-  const name: 'mark' | 'text' | null = mark ? 'mark' : (own ? 'text' : null);
+  const name: 'mark' | 'text' | null = baked ? null : mark ? 'mark' : (own ? 'text' : null);
   return (
     <button
       type="button"
@@ -1556,8 +1593,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       const it = list[(active + d) % n];
       if (!it) continue;
       const a = withArt(it);
-      if (d === 0) urls.push(billboardSrcOf(a, !!enrich));
-      urls.push(tilePictureOf(a).src, logoOf(a) || '');
+      const tp = tilePictureOf(a);
+      // A baked tile carries its wordmark; the separate one is only still wanted by the billboard.
+      if (d === 0) urls.push(billboardSrcOf(a, !!enrich), logoOf(a) || '');
+      urls.push(tp.src, tp.baked ? '' : (logoOf(a) || ''));
     }
     prefetchArt(urls, () => {
       const focused = rowIndexOf((document.activeElement?.closest('.tv-spot') as HTMLElement | null) ?? null);
