@@ -452,7 +452,7 @@
 .tv-hero-stage {
   position: relative;
   height: clamp(440px, 82vh, 920px);
-  /* SQUARE, NOT ROUNDED: a rounded clip over animating children costs Chromium a mask layer. */
+  border-radius: 12px;
   overflow: hidden;
   background: #000;
 }
@@ -521,6 +521,7 @@
    its ring is drawn as the ::after directly below. */
 .tv-hero-scrim {
   position: absolute; inset: 0;
+  border-radius: 12px;
   cursor: pointer;
 }
 
@@ -775,6 +776,7 @@
 .tv-spot-stage {
   position: relative;
   height: var(--spot-h);
+  border-radius: 12px;
   contain: layout;
 }
 
@@ -782,8 +784,8 @@
    do, so the posters are bounded exactly as before while the billboard on top is not. */
 .tv-spot-rail {
   position: absolute; inset: 0;
-  /* Square: a rounded clip over the sliding strip is a mask layer on every press. */
   overflow: hidden;
+  border-radius: 12px;
 
   /* NOTHING PAINTS UNDER THE BILLBOARD, and this is what actually fixed the red line.
      The strip parks the walked-past tiles in [0, --sp-wl] — the billboard's own box — on the
@@ -952,6 +954,7 @@
   flex: 0 0 var(--sp-wp);
   width: var(--sp-wp);
   height: 100%;
+  border-radius: 10px;
   overflow: hidden;
 }
 .tv-spot-previmg {
@@ -1087,8 +1090,7 @@
   width: var(--sp-wp);
   padding: 0; border: 0; margin: 0;
   cursor: pointer;
-  /* Square corners — see .tv-hero-stage. */
-  overflow: hidden;
+  border-radius: 10px; overflow: hidden;
   outline: none;
   /* the fallback gradient is set inline per title; the <img> covers it once decoded */
 }
@@ -1219,8 +1221,7 @@
   width: var(--sp-wl); height: 100%;
   padding: 0; border: 0; margin: 0;
   background: #000; cursor: pointer;
-  /* Square corners — a rounded clip over the cross-fading art layers is a mask layer per press. */
-  overflow: hidden;
+  border-radius: 12px; overflow: hidden;
   outline: none; z-index: 2;
   transform: scale(1);
   transform-origin: 100% 50%;
@@ -1836,7 +1837,7 @@
    to this file — Poster/PosterCard stay shared with the web build. */
 .tv-shell .strip-row { gap: var(--sp-gap); }
 .tv-shell .pcard { width: var(--sp-wp); }
-.tv-shell .pcard .poster { height: var(--spot-h); border-radius: 0; }
+.tv-shell .pcard .poster { height: var(--spot-h); border-radius: 10px; }
 .tv-shell .pcard .cap { display: none; }
 
 /* NO MOUSE CHROME ON THE RAILS — this is what actually stops a rail reading as a different
@@ -3276,8 +3277,8 @@
  * the list has to be explicit. Anything given a radius AND made focusable belongs here. */
 .tv-shell .tv-nav-item:focus-visible { border-radius: 999px; }
 .tv-shell .tv-hero-scrim:focus-visible,
-.tv-shell .tv-spot-hero:focus-visible { border-radius: 0; }
-.tv-shell .pcard .poster:focus-visible { border-radius: 0; }
+.tv-shell .tv-spot-hero:focus-visible { border-radius: 12px; }
+.tv-shell .pcard .poster:focus-visible { border-radius: 10px; }
 
 /* THE ROW BILLBOARD RINGS ITSELF ON THE INSIDE, and it has to.
    It is pinned to left:0/top:0 at the full height of .tv-spot-stage, and the stage both clips
