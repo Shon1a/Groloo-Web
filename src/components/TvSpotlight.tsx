@@ -756,7 +756,8 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
       {/* The scrim exists to make a NAME legible, so it paints only when there is one.
           Rendering it unconditionally put a gradient over every tile that shows neither
           — a plain TMDB poster carries its own title and needs no help. */}
-      {!!name && <span className="tv-spot-thumbscrim" aria-hidden="true" />}
+      {/* No scrim span: no gradient over any picture on the browse pages (tv.css, where the
+          `.tv-spot-thumbscrim` rule used to be). */}
       {name === 'text' && (
         <span className="tv-spot-thumbtitle" aria-hidden="true">{it.title}</span>
       )}
@@ -2652,16 +2653,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
             );
           })}
 
-          {/* ---- THE SCRIM IS ONE ELEMENT AND IT NEVER MOVES -----------------------------------
-              It used to be the background of `.tv-spot-card-in`, one per layer, which meant it
-              cross-dissolved WITH the plate — and the plate's timing is deliberately not the
-              layer's: the outgoing one leaves in 90ms and the incoming one does not begin its
-              rise until 110ms after that. For the gap between them there was no scrim on the card
-              at all, so every press flicked the black off the bottom of the billboard and back
-              on. It read as a fault in the artwork rather than as a cascade.
-              Hoisted here it is drawn once, above both art layers and below both plates, and a
-              press cannot touch it. Same fix, same reason, as `.tv-hero-scrim` in TvHero. */}
-          <div className="tv-spot-scrim" aria-hidden="true" />
+          {/* The billboard scrim that stood here is gone — no gradient over any picture (tv.css). */}
 
           {/* THE PLATES CROSS-FADE, THE SCRIM UNDER THEM DOES NOT. Split out of the art layers so
               the two can keep their own clocks (see the note above): the tag, the wordmark and the
