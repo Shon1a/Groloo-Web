@@ -959,6 +959,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
    *  Up here with the other refs because `step` is defined past an early return. */
   const lastStepAt = useRef(0);
+  /** The one tap held back by TAP_STEP_MIN_MS, and its timer. Up here, above `if (!n) return null`,
+   *  with the other press refs — `paced` itself is below that early return, and a hook there is
+   *  called conditionally (lint caught it; a row that renders empty and then fills would throw). */
+  const pendingTap = useRef<{ delta: number; id: number } | null>(null);
+  useEffect(() => () => { if (pendingTap.current) window.clearTimeout(pendingTap.current.id); }, []);
   /* WHICH ARROW IS PHYSICALLY DOWN, which is the difference between a hold and fast tapping and
    * cannot be inferred from timing (see SLIDE_CHAIN_WINDOW). A hold sends keydown after keydown
    * with no keyup between them; separate presses each send a keyup. So a keydown that arrives
@@ -2528,9 +2533,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * episode leads when there is one, because on a resume row it is the most specific thing the
    * line can say. The see-all card has no metadata of its own and stays blank. */
 
-  /** The one tap held back by TAP_STEP_MIN_MS, and its timer. */
-  const pendingTap = useRef<{ delta: number; id: number } | null>(null);
-  useEffect(() => () => { if (pendingTap.current) window.clearTimeout(pendingTap.current.id); }, []);
   /** Step now, or — for a tap that came too soon after the last step — once the pace allows. */
   const paced = (delta: number, held: boolean) => {
     if (held) { step(delta, true); return; }   // a hold has its own pace (HELD_STEP_MIN_MS)
