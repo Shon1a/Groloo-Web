@@ -235,7 +235,10 @@
      the one number to change if it wants to go further; the ceiling is roughly 0.30, past which the
      group starts to collide with the top of the bar and the gradient stops sitting behind it. */
   padding: 0 48px calc(var(--tv-topnav-h) * 0.16);
-  background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.55) 55%, rgba(0,0,0,0) 100%);
+  /* NO WASH. This was a 180deg black-to-transparent gradient over the top of every page — the
+     user's rule is no gradient over anything on the browse pages. The items carry a text shadow
+     instead (`.tv-nav-item`), which is enough for type over artwork. */
+  background: none;
 }
 
 /* Both outer columns are empty spacers now that the avatar has moved into the group. They are
@@ -327,6 +330,8 @@
   font-weight: 500;
   line-height: 1;
   color: rgba(255,255,255,0.62);
+  /* Legibility over artwork now that the bar has no gradient wash behind it (`.tv-topnav`). */
+  text-shadow: 0 1px 4px rgba(0,0,0,.9);
   background: none;
   border: 0;
   border-radius: 999px;
@@ -1112,26 +1117,21 @@
 }
 .tv-spot-thumbimg.rdy { opacity: 1; }
 
-/* THE WORDMARK ON A POSTER TILE, AND THE DARKENING UNDER IT.
-   These used to be baked into the picture on a server. They are elements now, so the
-   tile and the billboard can share ONE image — the same file, the same decoded bitmap
-   — and so that correcting a poster is a number in the payload rather than a cached
-   file that outlives three caches.
-   The scrim is a fixed gradient rather than one measured against the artwork, which is
-   the one thing the baker did better; the mark carries a shadow to cover the cases a
-   flat gradient cannot. Both sit above the picture and below the progress bar. */
-.tv-spot-thumbscrim {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 48%;
-  background: linear-gradient(0deg, rgba(0,0,0,.86) 0%, rgba(0,0,0,.55) 38%, rgba(0,0,0,0) 100%);
-  pointer-events: none;
-}
+/* THE WORDMARK ON A POSTER TILE. It used to be baked into the picture on a server; it is an
+   element now, so the tile and the billboard can share ONE image — the same file, the same decoded
+   bitmap — and correcting a poster is a number in the payload rather than a cached file. */
+/* `.tv-spot-thumbscrim` IS GONE, element and rule. NO GRADIENT OVER ANY PICTURE ON HOME / SERIES / MOVIES / ANIME — the user's rule (2026-09-23).
+   On the 65UT8100 an official row measured 69-70% of frames on time against 79-82% for a
+   third-party add-on row, and hiding the overlays on the official row (tile scrims and wordmarks,
+   the billboard wordmark, the copy) closed the whole gap; the picture itself (16:9, CSS-cropped)
+   stayed and was not the cost. */
 .tv-spot-thumbmark {
   position: absolute; left: 8%; right: 8%; bottom: 7%;
   width: 84%; max-height: 22%;
   object-fit: contain; object-position: 50% 100%;
-  /* A wordmark is usually white, occasionally dark; the shadow keeps the dark ones
-     legible without a second, heavier scrim over the whole tile. */
-  filter: drop-shadow(0 1px 3px rgba(0,0,0,.85));
+  /* NO `filter: drop-shadow` any more. A filter on every tile's wordmark is an offscreen blur per
+     tile each time one is rasterised — and a tile enters the strip on every press. It was one of the
+     overlays the set measured as the whole gap between an official row and an add-on row. */
   opacity: 0; transition: opacity .35s ease; pointer-events: none;
 }
 .tv-spot-thumbmark.rdy { opacity: 1; }
@@ -1433,32 +1433,11 @@
   transition: opacity 230ms cubic-bezier(.33, 1, .68, 1) 33ms;
 }
 
-/* ---- THE BLACK UNDER THE TITLE, AND WHY IT IS NOT PART OF THE TITLE ------------------------
-   THE DEFECT: the gradient at the foot of the billboard blinked out and back on every press.
-   It was `background` on `.tv-spot-card-in`, one copy per art layer, so it inherited the plate's
-   cascade — out with the outgoing layer in 90ms, and not back until 110ms later over 200ms. For
-   ~110ms the card had NO scrim, which on a bright backdrop is a visible flash of the photograph
-   where black should be. The cascade is right for the wordmark, which is per-title; it is wrong
-   for the scrim, which belongs to the BILLBOARD and is identical for every title in the row.
-   So it is drawn once, above both art layers (z-index 1 — a scrim baked into each would also
-   double-darken the overlap while a dissolve is half-and-half) and below both plates. Nothing a
-   press does can reach it, which is the whole requirement: it is stationary.
-
-   FIXED HEIGHT, NOT THE PLATE'S. It used to be the plate's own box, so it grew and shrank with
-   the wordmark — a title falling back to text had a shorter gradient than one with a tall logo,
-   which is a second, quieter version of the same fault. 160px clears the tallest plate the card
-   can build (22px padding + an 84px wordmark cap + 22) with room over it, and the top of the ramp
-   is transparent, so nothing shows where the plate happens to be shorter. Deliberately NOT
-   re-cut when the movie/series tag was removed from the plate: the scrim is the billboard's, and
-   a gradient that tracks whatever the plate currently holds is the thing this rule exists to
-   stop being. */
-.tv-spot-scrim {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  height: 160px;
-  z-index: 1;
-  pointer-events: none;
-  background: linear-gradient(0deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.25) 60%, transparent 100%);
-}
+/* `.tv-spot-scrim` IS GONE, element and rule. NO GRADIENT OVER ANY PICTURE ON HOME / SERIES / MOVIES / ANIME — the user's rule (2026-09-23).
+   On the 65UT8100 an official row measured 69-70% of frames on time against 79-82% for a
+   third-party add-on row, and hiding the overlays on the official row (tile scrims and wordmarks,
+   the billboard wordmark, the copy) closed the whole gap; the picture itself (16:9, CSS-cropped)
+   stayed and was not the cost. */
 
 /* ---- THE ROW PREVIEW (muted trailer on the billboard) ------------------------------------
    UNDERNEATH the artwork, at z-index 0, and the artwork fades off it. The obvious build — video
@@ -1695,7 +1674,9 @@
   transition: opacity .35s ease;
 }
 .tv-spot-logo.rdy { opacity: 1; }
-.tv-spot-cardtitle { display: block; font-size: 34px; font-weight: 800; color: #fff; }
+/* A shadow on the TYPE, not a gradient over the picture — the billboard has no scrim now, and
+   this is the same shadow `.tv-spot-thumbtitle` already carries. */
+.tv-spot-cardtitle { display: block; font-size: 34px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.85); }
 
 /* ---- THE PREVIEW'S SOUND BADGE ------------------------------------------------------------
    A speaker, crossed while the preview is muted, in the corner of the billboard. It reports
