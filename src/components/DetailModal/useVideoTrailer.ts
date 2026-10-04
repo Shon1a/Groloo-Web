@@ -267,6 +267,8 @@ export function useVideoTrailer(
   const renditionsRef = useRef(opts?.renditions);
   renditionsRef.current = opts?.renditions;
   const cropScale = opts?.cropScale ?? 1;
+  /* A caller that names a crop gets it LAID OUT, not transformed — see `place` in the mount. */
+  const layoutCrop = opts?.cropScale !== undefined;
   const maxRendition = opts?.maxRenditionPx ?? Infinity;
   /* Read through a ref inside the mount effect for the same reason as the renditions above: the
    * effect runs on `src` alone, and a preview that restarted because someone pressed the red
@@ -308,6 +310,8 @@ export function useVideoTrailer(
      * `el` — can still take this row's listeners off a SHARED element. Without it the one element
      * would accumulate a full set of handlers for every row ever focused. */
     let detachListeners: (() => void) | null = null;
+    /* Re-runs `place` when the slot changes size (a card that grows, a resize). */
+    let resizeObs: ResizeObserver | null = null;
 
     const mountTimer = window.setTimeout(() => {
       /* THE RENDITION IS PICKED FIRST, because the shared element wants its `src` at acquire time
@@ -388,6 +392,38 @@ export function useVideoTrailer(
       videoRef.current = v;
       muteFnRef.current = (m: boolean) => { v.muted = m; if (!m) v.volume = 1; };
 
+      /* ---- THE CROP IS LAID OUT, NOT TRANSFORMED --------------------------------------------------
+       * The crop used to be `object-fit: cover` plus `transform: scale(crop)` in tv.css, and on the
+       * television the black bands it exists to remove were still there, top and bottom. Exactly the
+       * picture of the transform not reaching the video: cover alone fills the width of a box wider
+       * than 16:9, and the band baked into a scope trailer's 16:9 file survives inside it. A set is
+       * free to hand video to its own media pipeline, which positions the picture from the element's
+       * box and need not apply a CSS transform on top.
+       *
+       * So the element's BOX is made the cropped size: wide enough to cover the slot, times the crop,
+       * at the file's own aspect, centred, with the slot's `overflow: hidden` taking the excess. That
+       * is the same picture the transform drew on a desktop, pixel for pixel, expressed in the one
+       * thing every way of drawing a video honours — where the element is and how big it is. The
+       * element's aspect is the file's, so the fit has nothing left to decide. 16:9 until the file
+       * says otherwise, which is what IMDb encodes everything into. */
+      const place = () => {
+        if (!layoutCrop || done || !el) return;
+        const bw = slot.clientWidth, bh = slot.clientHeight;
+        if (!bw || !bh) return;
+        const a = v.videoWidth > 0 && v.videoHeight > 0 ? v.videoWidth / v.videoHeight : 16 / 9;
+        const w = Math.max(bw, bh * a) * cropScale;
+        const h = w / a;
+        v.style.width = `${w}px`;
+        v.style.height = `${h}px`;
+        v.style.left = `${(bw - w) / 2}px`;
+        v.style.top = `${(bh - h) / 2}px`;
+      };
+      place();
+      if (layoutCrop) {
+        v.addEventListener('loadedmetadata', place);
+        if (typeof ResizeObserver === 'function') { resizeObs = new ResizeObserver(place); resizeObs.observe(slot); }
+      }
+
       const show = () => {
         if (revealed.current || done) return;
         revealed.current = true;
@@ -416,6 +452,8 @@ export function useVideoTrailer(
         v.removeEventListener('ended', teardown);
         v.removeEventListener('error', fail);
         v.removeEventListener('pause', onPause);
+        v.removeEventListener('loadedmetadata', place);
+        resizeObs?.disconnect(); resizeObs = null;
         detachListeners = null;
         if (usedShared) {
           /* The element belongs to the whole app, not to this row. Hand it back: the picture goes
@@ -511,6 +549,7 @@ export function useVideoTrailer(
         v.removeEventListener('error', fail);
         v.removeEventListener('pause', onPause);
         v.removeEventListener('loadedmetadata', start);
+        v.removeEventListener('loadedmetadata', place);
       };
 
 
@@ -545,6 +584,7 @@ export function useVideoTrailer(
       done = true;
       window.clearTimeout(mountTimer);
       if (revealTimer) window.clearTimeout(revealTimer);
+      resizeObs?.disconnect(); resizeObs = null;
       if (el) {
         /* SPLIT IN TWO, AND THE SPLIT IS THE POINT. This cleanup runs inside the React commit for
          * the keypress the viewer is watching, so whatever happens here happens on that frame.

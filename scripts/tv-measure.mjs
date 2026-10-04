@@ -684,6 +684,116 @@ async function main() {
    *
    * Written as ONE expression with no function bodies: Runtime.evaluate takes an expression, and a
    * `return` inside an injected wrapper is what the first two attempts died on. */
+  /* ---- HOW LONG AFTER A PRESS DOES THE BILLBOARD ACTUALLY CHANGE PICTURE? --------------------
+   * Frame statistics cannot answer this and it is what "not smooth" often means. TvSpotlight
+   * HOLDS the cross-dissolve until the incoming backdrop and wordmark are decoded, capped at
+   * SWAP_WAIT_CAP (200ms) — so a picture that is not in hand yet does not drop frames, it makes
+   * the billboard arrive late, or hit the cap and dissolve to the gradient instead.
+   *
+   * Measured as the viewer sees it: keydown -> the front layer's background-image is a different
+   * URL. Anything near zero means the warm-ahead had it decoded; a cluster at the cap means the
+   * artwork pipeline, not the renderer, is what is being waited on. */
+  if (CMD === 'art') {
+    await gotoSurface(cdp, 'home');
+    await sleep(12000);
+    await seatOnRow(cdp);
+    await sleep(3000);
+    await cdp.eval(`(() => {
+      window.__art = { waits: [], capped: 0, pending: null, last: null };
+      const front = () => {
+        const el = document.querySelector('.tv-spot.is-open .tv-spot-layer.on .art-photo')
+          || document.querySelector('.tv-spot-layer.on .art-photo');
+        return el ? (el.style.backgroundImage || getComputedStyle(el).backgroundImage || '') : '';
+      };
+      window.__art.last = front();
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') window.__art.pending = performance.now();
+      }, true);
+      const tick = () => {
+        const f = front();
+        if (f !== window.__art.last) {
+          window.__art.last = f;
+          if (window.__art.pending !== null) {
+            const dt = performance.now() - window.__art.pending;
+            window.__art.pending = null;
+            window.__art.waits.push(Math.round(dt));
+            if (dt >= 195) window.__art.capped++;
+          }
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    })()`);
+    const N = 16;
+    for (let i = 0; i < N; i++) { await press(cdp, 'ArrowRight'); await sleep(900); }
+    await sleep(800);
+    const r = JSON.parse(await cdp.eval('JSON.stringify(window.__art)'));
+    const w = r.waits.slice().sort((a, b) => a - b);
+    const pct = (p) => (w.length ? w[Math.min(w.length - 1, Math.floor(w.length * p))] : -1);
+    console.log('');
+    console.log(`  ${N} deliberate presses, 900ms apart`);
+    console.log(`  billboard changed on ${w.length} of them`);
+    console.log(`  press -> picture actually changed:  p50 ${pct(0.5)}ms  p95 ${pct(0.95)}ms  worst ${w[w.length - 1]}ms`);
+    console.log(`  hit the 200ms decode cap:           ${r.capped} of ${w.length}`);
+    console.log(`  all waits: ${w.join(', ')}`);
+    console.log('');
+    console.log('  near 0  = the warm-ahead had it decoded, artwork is NOT the constraint');
+    console.log('  near 200 = the swap is waiting out the cap, artwork IS the constraint');
+    return;
+  }
+
+  /* ---- BYTES OR DECODE? They need opposite fixes, and the answer decides whether a CDN is
+   * worth anything here. Captures every image the set fetches during a walk, with where it came
+   * from, how big it was and how long the network took. A picture that arrives in 40ms and still
+   * makes the billboard late is a DECODE problem and no CDN can touch it. */
+  if (CMD === 'imgnet') {
+    await cdp.send('Network.enable');
+    const reqs = new Map();
+    cdp.on('Network.requestWillBeSent', (p) => {
+      if (p.type === 'Image' || /\.(jpg|jpeg|png|webp|avif)/i.test(p.request.url)) {
+        reqs.set(p.requestId, { url: p.request.url, t0: p.timestamp, host: new URL(p.request.url).host });
+      }
+    });
+    cdp.on('Network.responseReceived', (p) => {
+      const r = reqs.get(p.requestId);
+      if (r) { r.mime = p.response.mimeType; r.fromCache = !!p.response.fromDiskCache; r.status = p.response.status; }
+    });
+    cdp.on('Network.loadingFinished', (p) => {
+      const r = reqs.get(p.requestId);
+      if (r) { r.bytes = p.encodedDataLength; r.ms = Math.round((p.timestamp - r.t0) * 1000); }
+    });
+    await gotoSurface(cdp, 'home');
+    await sleep(12000);
+    await seatOnRow(cdp);
+    await sleep(3000);
+    reqs.clear();
+    for (let i = 0; i < 16; i++) { await press(cdp, 'ArrowRight'); await sleep(900); }
+    await sleep(1500);
+    const all = [...reqs.values()].filter((r) => r.ms !== undefined);
+    const byHost = new Map();
+    for (const r of all) {
+      if (!byHost.has(r.host)) byHost.set(r.host, []);
+      byHost.get(r.host).push(r);
+    }
+    console.log(`\n  ${all.length} images fetched during 16 presses\n`);
+    for (const [host, list] of byHost) {
+      const ms = list.map((r) => r.ms).sort((a, b) => a - b);
+      const kb = list.reduce((s, r) => s + (r.bytes || 0), 0) / 1024;
+      const cached = list.filter((r) => r.fromCache).length;
+      console.log(`  ${host}`);
+      console.log(`    ${list.length} files, ${Math.round(kb)} KB total, ${Math.round(kb / list.length)} KB each`);
+      console.log(`    network ms: p50 ${ms[Math.floor(ms.length / 2)]}  p95 ${ms[Math.floor(ms.length * 0.95)]}  worst ${ms[ms.length - 1]}`);
+      console.log(`    served from disk cache: ${cached}/${list.length}`);
+      console.log(`    types: ${[...new Set(list.map((r) => r.mime))].join(', ')}`);
+    }
+    const slow = all.filter((r) => r.ms > 150).sort((a, b) => b.ms - a.ms).slice(0, 5);
+    if (slow.length) {
+      console.log('\n  slowest fetches:');
+      for (const r of slow) console.log(`    ${String(r.ms).padStart(5)}ms  ${Math.round((r.bytes || 0) / 1024)}KB  ${r.url.slice(-70)}`);
+    }
+    return;
+  }
+
   if (CMD === 'img') {
     await gotoSurface(cdp, 'home');
     /* A plain wait rather than waitSettled: that reads the app's own perf probe, which only the
