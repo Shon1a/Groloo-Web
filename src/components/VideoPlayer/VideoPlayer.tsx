@@ -827,8 +827,11 @@ export default function VideoPlayer() {
     setSegments(null);
     const s = source?.series;
     if (!s?.imdb) return;
+    // markers are keyed like streams: a folded-in sequel season under the sequel's own id
+    const st = s.seasons.find((x) => x.season === s.season)?.stream;
+    const [imdb, season] = st ? [st.imdb, st.season] : [s.imdb, s.season];
     let alive = true;
-    apiFetch(`/api/introdb/${encodeURIComponent(s.imdb)}/${s.season}/${s.ep}`)
+    apiFetch(`/api/introdb/${encodeURIComponent(imdb)}/${season}/${s.ep}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (alive && d && (d.intro || d.outro)) setSegments(d); })
       .catch(() => {});
