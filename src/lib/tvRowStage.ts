@@ -145,6 +145,8 @@ export interface StageSlot {
   /** The end card's own words. */
   endLabel: string;
   endIcon: string;
+  /** A batch is in flight (OK was pressed on the "+" card): the stack's ring turns into a spinner. */
+  endBusy: boolean;
   heading: string;
   /** The line of facts and the synopsis beneath. */
   meta: string[];
@@ -179,6 +181,18 @@ const span = (cls: string, text: string): HTMLSpanElement => {
   s.textContent = text;
   return s;
 };
+/** THE END CARD ON THE BILLBOARD — the front card of EndTile in TvSpotlight, filling the billboard,
+ *  so the two share every rule in tv.css: the shine and the icon in its ring. Only the front card:
+ *  the stack of cards after it is the strip's own end card, standing under the billboard with its
+ *  cards showing past the billboard's right edge. No label either; the plate carries it. */
+const endFront = (icon: string): HTMLSpanElement => {
+  const ring = span('tv-end-ring', '');
+  ring.appendChild(span('tv-spot-blank-ic', icon));
+  const front = span('tv-end-front', '');
+  front.setAttribute('aria-hidden', 'true');
+  front.append(span('tv-end-sheen', ''), ring);
+  return front;
+};
 const infoKeyOf = (slot: StageSlot): string => (slot.kind === 'title' ? `${slot.meta.join('\u0001')}\u0002${slot.plot}` : '');
 
 export class TvRowStage {
@@ -186,6 +200,9 @@ export class TvRowStage {
   /** Which of the two cards (layer + plate) is `.on`. The copy blocks have their own index, `infoOn`. */
   private front: 0 | 1 = 0;
   private layerKey: [string, string] = ['', ''];
+  /** Whether each layer holds the end card. The hero carries `is-end` while the front one does, so the
+   *  focus ring can go round the stack's front card rather than the whole billboard (tv.css). */
+  private endIn: [boolean, boolean] = [false, false];
   private infoKey: [string, string] = ['', ''];
   /** Which copy block is `.on`. It follows `front` on every press but a HELD one, which leaves the copy
    *  alone (the stylesheet hides it while the key is down) and lets `settle` put the right one up. */
@@ -276,9 +293,11 @@ export class TvRowStage {
     const f = this.front;
     const b = (1 - f) as 0 | 1;
     this.fillCard(f, slot);
+    this.markEnd();
     if (this.infoOn !== f) this.flipInfo(f);
     this.infoStale = false;
     this.layerKey[b] = '';
+    this.endIn[b] = false;
     this.infoKey[b] = '';
     this.fillId[b]++;
     window.clearTimeout(this.plateTimer[b]);
@@ -294,7 +313,7 @@ export class TvRowStage {
   refresh(slot: StageSlot, peek: StagePeek): boolean {
     const f = this.front;
     let changed = false;
-    if (this.layerKey[f] !== slot.key) { this.fillLayer(f, slot); this.fillPlate(f, slot); this.layerKey[f] = slot.key; changed = true; }
+    if (this.layerKey[f] !== slot.key) { this.fillLayer(f, slot); this.fillPlate(f, slot); this.layerKey[f] = slot.key; this.markEnd(); changed = true; }
     /* NOT THE COPY WHILE A HOLD HAS LEFT IT FOR `settle`. React catches up with a hold every few steps,
      * and this used to write the synopsis for the card on screen each time — the dearest thing a step
      * can do, under a stylesheet that hides it, and the very work a hold is built to skip. Worse, it
@@ -398,6 +417,17 @@ export class TvRowStage {
     plates[from].classList.remove('on');
     plates[from].setAttribute('aria-hidden', 'true');
     this.front = to;
+    this.markEnd();
+  }
+
+  /** `is-end` on the billboard while the end card is the one on screen, and `is-end-on` on the strip in
+   *  the same moment — the strip's end card is then the one under the billboard, and its stack, showing
+   *  past the billboard's edge, takes the billboard's beat (tv.css). A toggle that changes nothing
+   *  leaves the attribute alone, so a walk through titles costs no style work here. */
+  private markEnd() {
+    const on = this.endIn[this.front];
+    this.p.hero.classList.toggle('is-end', on);
+    this.p.strip.classList.toggle('is-end-on', on);
   }
 
   private flipInfo(to: 0 | 1) {
@@ -488,12 +518,20 @@ export class TvRowStage {
     const layer = this.p.layers[i];
     const id = ++this.fillId[i];
     window.clearTimeout(this.plateTimer[i]);
+    this.endIn[i] = slot.kind === 'end';
     if (slot.kind === 'none') { layer.replaceChildren(); return; }
     if (slot.kind === 'end') {
-      const blank = div('tv-spot-blank');
-      const ic = span('tv-spot-blank-ic', slot.endIcon);
-      ic.setAttribute('aria-hidden', 'true');
-      blank.appendChild(ic);
+      /* THE LABEL FLIPPING TO "LOADING" IS NOT A NEW CARD. It changes the slot's key, so `refresh` comes
+       * here for the card already on screen — and building it again would deal the stack out a second
+       * time, under the press that asked for more. The stack is kept and only told it is busy. */
+      const had = layer.firstElementChild;
+      if (had instanceof HTMLElement && had.classList.contains('tv-spot-blank') && had.dataset.icon === slot.endIcon) {
+        had.classList.toggle('is-busy', slot.endBusy);
+        return;
+      }
+      const blank = div(slot.endBusy ? 'tv-spot-blank is-busy' : 'tv-spot-blank');
+      blank.dataset.icon = slot.endIcon;
+      blank.appendChild(endFront(slot.endIcon));
       layer.replaceChildren(blank);
       return;
     }
@@ -540,6 +578,8 @@ export class TvRowStage {
     if (slot.kind === 'none') { plate.replaceChildren(); return; }
     const card = div('tv-spot-card-in');
     if (slot.kind === 'end') {
+      /* dark type: the end card is silver (tv.css) */
+      card.classList.add('is-end');
       card.append(span('tv-spot-tag', slot.endLabel), span('tv-spot-cardtitle', slot.heading));
       plate.replaceChildren(card);
       return;
