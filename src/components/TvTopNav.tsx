@@ -57,10 +57,9 @@ const GATED = ['/addons', '/settings', '/library'];
 // meant. The avatar is the canonical entry point (it is also where a viewer expects their
 // account to live); the duplicate text item was removed.
 /* THE PAGES FOLLOW FOCUS — walking the bar is choosing, no OK needed, the way a ten-foot app's tab
- * strip works. Only these four, and that is deliberate: they are the browse surfaces, the same kind
- * of screen in a row, and landing on one is cheap to undo. Search and My Space still wait for OK —
- * Search would take the remote out of the bar into its keyboard the moment it arrived, and My Space
- * signed out opens the sign-in sheet, which nobody should get for walking past it.
+ * strip works. Every item does it, Search and My Space included: the search page takes no focus on
+ * mount (the remote stays in the bar until Down), and My Space renders for a guest too, with its own
+ * Sign in button — so walking onto it signed out shows the page, and only OK raises the sign-in sheet.
  *
  * DWELL is how long the remote has to rest on an item before its page is mounted (the old page
  * starts sliding away at once — see lib/tvPageSlide.ts). It is what makes a walk from Home to Anime
@@ -68,12 +67,22 @@ const GATED = ['/addons', '/settings', '/library'];
  * faster than this, so the pages passed on the way are never built. */
 const DWELL = 260;
 
+/* The two lazily loaded pages, fetched the moment the remote lands on their item, so the chunk is
+ * in hand by the time the old page has slid away and the swap runs — not still downloading while the
+ * new page slides in empty. Same module specifiers as App.tsx's lazy(), so it is the same chunk. */
+const PREFETCH: Record<string, () => Promise<unknown>> = {
+  '/explore': () => import('../routes/Explore'),
+  '/library': () => import('../routes/Library'),
+};
+
 const ITEMS = [
   { to: '/', key: 'nav.home' },
   { to: '/tv', key: 'nav.series' },
   { to: '/movies', key: 'nav.movies' },
   { to: '/anime', key: 'nav.anime' },
 ] as const;
+/* Every page the bar switches between — what a hop REPLACES rather than pushes (see `go`). */
+const BAR: string[] = ['/explore', ...ITEMS.map((it) => it.to), '/library'];
 
 export default function TvTopNav() {
   const t = useT();
@@ -135,13 +144,16 @@ export default function TvTopNav() {
   const [heading, setHeading] = useState<string | null>(null);
   useEffect(() => { setHeading(null); }, [pathname]);
 
+  /* `dwell` > 0 is focus landing on an item; 0 is OK. Only OK is held to the sign-in gate — see
+     THE PAGES FOLLOW FOCUS above. */
   const go = (to: string, dwell = 0) => {
-    if (GATED.includes(to) && !user) { openAuth(to); return; }
+    if (GATED.includes(to) && !user && dwell === 0) { openAuth(to); return; }
+    if (dwell > 0) PREFETCH[to]?.().catch(() => { /* the route's own lazy() reports it */ });
     setHeading(to === pathname ? null : to);
     /* ONE BACK PRESS FROM ANY TAB IS HOME. Leaving Home pushes; moving between the other tabs
        REPLACES, so walking the bar does not leave a trail of every page the remote rested on for
        Back to step through one at a time — Back from Anime goes to Home, not to Movies, then Series. */
-    const replace = pathname !== '/' && ITEMS.some((it) => it.to === pathname);
+    const replace = pathname !== '/' && BAR.includes(pathname);
     slideTo(pathname, to, () => nav(to, { replace }), dwell);
   };
   const here = heading ?? pathname;
@@ -205,6 +217,7 @@ export default function TvTopNav() {
           type="button"
           className="tv-nav-item tv-nav-search"
           aria-label={t('nav.search')}
+          onFocus={() => go('/explore', DWELL)}
           onClick={() => go('/explore')}
         >
           <SearchGlyph />
@@ -243,6 +256,7 @@ export default function TvTopNav() {
         <button
           type="button"
           className="tv-nav-item tv-nav-profile"
+          onFocus={() => go('/library', DWELL)}
           onClick={() => go('/library')}
         >
           {t('myspace.title')}
