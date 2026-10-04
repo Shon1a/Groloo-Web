@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { registerPageTrack, resetPage } from '../lib/tvPageScroll';
+import { pageArrived, registerPageSlide } from '../lib/tvPageSlide';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import { API_BASE } from '../lib/api';
@@ -40,8 +41,19 @@ export default function AppShell() {
   const mainRef = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     registerPageTrack(mainRef.current);
-    return () => registerPageTrack(null);
+    registerPageSlide(mainRef.current);
+    return () => { registerPageSlide(null); registerPageTrack(null); };
   }, []);
+
+  /* The arriving half of the top-bar page slide (lib/tvPageSlide.ts). A LAYOUT effect so the first
+   * frame the new page paints is already the first frame of its slide — in a plain effect it would
+   * paint once at rest, then jump out to the side and slide back. */
+  const prevPath = useRef(pathname);
+  useLayoutEffect(() => {
+    if (!IS_TV || prevPath.current === pathname) return;
+    pageArrived(prevPath.current, pathname);
+    prevPath.current = pathname;
+  }, [pathname]);
 
   // every route change (and genre-card query change) lands at the top of the page — on the web the
   // window is the scroll container (main has no overflow); on the TV the page is moved by transform,
