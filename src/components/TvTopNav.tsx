@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
+import { flushPageSwitch, pageSwitchPending, slideTo } from '../lib/tvPageSlide';
 
 /* THE TV TOP MENU BAR — rendered ONLY in the `--mode tv` build (AppShell gates it on
  * import.meta.env.MODE). It replaces the desktop left icon rail with the modern 10-foot
@@ -55,6 +56,18 @@ const GATED = ['/addons', '/settings', '/library'];
 // destination, and on a bar the remote walks left-to-right that means two stops where one is
 // meant. The avatar is the canonical entry point (it is also where a viewer expects their
 // account to live); the duplicate text item was removed.
+/* THE PAGES FOLLOW FOCUS — walking the bar is choosing, no OK needed, the way a ten-foot app's tab
+ * strip works. Only these four, and that is deliberate: they are the browse surfaces, the same kind
+ * of screen in a row, and landing on one is cheap to undo. Search and My Space still wait for OK —
+ * Search would take the remote out of the bar into its keyboard the moment it arrived, and My Space
+ * signed out opens the sign-in sheet, which nobody should get for walking past it.
+ *
+ * DWELL is how long the remote has to rest on an item before its page is mounted (the old page
+ * starts sliding away at once — see lib/tvPageSlide.ts). It is what makes a walk from Home to Anime
+ * cost one page mount instead of three: a remote's repeat and a deliberate run of taps both arrive
+ * faster than this, so the pages passed on the way are never built. */
+const DWELL = 260;
+
 const ITEMS = [
   { to: '/', key: 'nav.home' },
   { to: '/tv', key: 'nav.series' },
@@ -116,11 +129,23 @@ export default function TvTopNav() {
 
   // Same sign-in gate the rail uses: My space (and the other gated routes) bounce to the
   // auth modal until there's a session, then land on the page.
-  const go = (to: string) => {
+  /* The page the bar is ON ITS WAY to. Between bar pages the route only swaps once the old page has
+   * slid out (lib/tvPageSlide.ts), and the current-page wash should not wait those 150ms behind the
+   * press that asked for it — it moves the moment the choice is made, the slide follows. */
+  const [heading, setHeading] = useState<string | null>(null);
+  useEffect(() => { setHeading(null); }, [pathname]);
+
+  const go = (to: string, dwell = 0) => {
     if (GATED.includes(to) && !user) { openAuth(to); return; }
-    nav(to);
+    setHeading(to === pathname ? null : to);
+    /* ONE BACK PRESS FROM ANY TAB IS HOME. Leaving Home pushes; moving between the other tabs
+       REPLACES, so walking the bar does not leave a trail of every page the remote rested on for
+       Back to step through one at a time — Back from Anime goes to Home, not to Movies, then Series. */
+    const replace = pathname !== '/' && ITEMS.some((it) => it.to === pathname);
+    slideTo(pathname, to, () => nav(to, { replace }), dwell);
   };
-  const isActive = (to: string) => (to === '/' ? pathname === '/' : pathname.startsWith(to));
+  const here = heading ?? pathname;
+  const isActive = (to: string) => (to === '/' ? here === '/' : here.startsWith(to));
 
   return (
     <nav className="tv-topnav" aria-label="Primary navigation">
@@ -147,6 +172,18 @@ export default function TvTopNav() {
           // is not one of the pills; today there is nothing, and the pill should not chase it if
           // there ever is.
           if ((e.target as HTMLElement).classList?.contains('tv-nav-item')) place(e.target as HTMLElement);
+        }}
+        onKeyDown={(e) => {
+          /* DOWN WHILE THE PAGE IS STILL CHANGING WAITS FOR IT. The page under the bar at that moment
+             is the one leaving — already invisible, and about to be unmounted — so letting the press
+             through would put focus inside it and then lose it to <body> when it goes. Instead the
+             press stops the wait (the swap happens now) and is spent; the next Down lands in the
+             page you can see. Stopped before it bubbles to TvSpatialNav's window listener. */
+          if (e.key === 'ArrowDown' && pageSwitchPending()) {
+            flushPageSwitch();
+            e.preventDefault();
+            e.stopPropagation();
+          }
         }}
         onBlur={(e) => {
           if (e.currentTarget.contains(e.relatedTarget as Node)) return;
@@ -177,6 +214,7 @@ export default function TvTopNav() {
             key={it.to}
             type="button"
             className={`tv-nav-item${isActive(it.to) ? ' active' : ''}`}
+            onFocus={() => go(it.to, DWELL)}
             onClick={() => go(it.to)}
           >
             {t(it.key)}
