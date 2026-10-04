@@ -182,6 +182,12 @@
      a 240px card and a hairline beside a 520px one; this is the one proportion that looks like the
      same gap on both. */
   --sp-gap: calc(var(--spot-h) * 0.0316);
+  /* The end card is a poster-sized card with a stack of three more after it (see THE END CARD): how
+     far each card behind shows past the one in front, how much shorter it is at each end, and the
+     extra width the three of them add — the room the strip leaves after every end card. */
+  --sp-end-step: calc(var(--spot-h) * 0.05);
+  --sp-end-drop: calc(var(--spot-h) * 0.042);
+  --sp-end-extra: calc(var(--sp-end-step) * 3);
 
   /* Copy under the billboard. Three sizes, because they are three different jobs — the row's name,
      the facts line, the synopsis. See the block above for where the numbers come from and why they
@@ -1014,6 +1020,15 @@
   inherits: false;
   initial-value: 0;
 }
+/* How many end cards stand before the walk's position. Each is wider than a poster by its stack
+ * (`--sp-end-extra`), so the strip travels that much further for every one it has passed — written
+ * with `--active`, by the same one writer (putActive in TvSpotlight), and for the same reason not
+ * inherited. */
+@property --ends {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
 
 /* strip track — translated so [0..active] hide left/behind the billboard, [active+1..] peek.
  *
@@ -1028,7 +1043,7 @@
  * a tile at physical position p sits exactly where flex used to put the p-th child. */
 .tv-spot-strip {
   position: absolute; left: 0; top: 0; height: 100%;
-  transform: translateX(calc(var(--sp-wl) + var(--sp-gap) - (var(--active) + 1) * (var(--sp-wp) + var(--sp-gap))));
+  transform: translateX(calc(var(--sp-wl) + var(--sp-gap) - (var(--active) + 1) * (var(--sp-wp) + var(--sp-gap)) - var(--ends) * var(--sp-end-extra)));
   /* ---- 267ms ON cubic-bezier(.33, 1, .68, 1), RE-MEASURED FROM A CLEAN CAPTURE ---------------
      THREE PRESSES, IDENTICAL TO THE FRAME, off a 1080p30 recording of the reference — the row at
      t=126.87s, 128.23s and 136.13s of the clip. Per-frame travel of the strip, all three the same:
@@ -1155,44 +1170,251 @@
   pointer-events: none;
 }
 
-/* THE SEE-ALL CARD — the row's own page, sitting at the end of its strip (see TvSpotlight).
-   Deliberately the ONLY thing in a row with no picture on it: an empty framed panel is what makes
-   "the titles have run out" legible from across a room, where a card carrying artwork would just
-   look like one more title. Dashed, because a solid frame at this size reads as a disabled tile.
-   The `--border` variable the rest of this file uses is fully transparent by design, so the frame
-   is written out here rather than inherited from it. */
+/* THE END CARD — "see all" / "+ load more" — at the end of a row's strip (EndTile in TvSpotlight),
+   and the same card on the BILLBOARD once the walk reaches it (`endFront` in tvRowStage).
+
+   A SILVER CARD THE SIZE OF A POSTER, WITH THE STACK AFTER IT. The front card is exactly one poster;
+   three more cards stand behind it and show past its RIGHT edge, each a step further back (shorter
+   and darker), so "there are more of these" is said by the shape of the tile from across a room.
+   Silver because the app's accent is white: in a row of pictures it is the one card that is a
+   material rather than a picture.
+
+   THE STACK IS EXTRA WIDTH. It stands outside the poster's box, in room the strip leaves for it:
+   every tile after an end card is placed `--sp-end-extra` further right, and the strip travels that
+   much further for each end card the walk has passed (`--ends`; see tileLeft in TvSpotlight).
+
+   ON THE BILLBOARD THE FRONT CARD IS THE BILLBOARD, and the stack is not drawn a second time. The
+   strip's end card is then standing directly under the billboard, flush with its right edge, and
+   its three cards show past that edge — the same cards in the same place, so arriving on the end
+   card reads as the stack sliding in under the big card.
+
+   THE LIGHT. A shine crosses the front card, and as it leaves the right edge it catches the edge of
+   each card behind in turn. All of it is transform and opacity on small fixed-size elements, so it
+   runs on the compositor and never repaints the tile, and it only runs on the SETTLED row. No
+   filter, no backdrop-filter (see `.tv-spot-thumbmark`). `.no-anim` and reduced motion stop all of
+   it except the loading spinner, which is information. The timings are variables (`--end-cycle`,
+   `--end-delay`, `--end-lag`) so the strip, the billboard and the loading state each set their own
+   beat without a second set of selectors. */
 .tv-spot-thumb.is-seeall {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: rgba(255, 255, 255, 0.045);
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.16);
+  --end-r: 10px;
+  --end-w: var(--sp-wp);
+  --end-cycle: 5s;
+  --end-delay: 0s;
+  --end-lag: .13s;
+  /* the stack stands outside the poster's box, in the room the strip made for it */
+  overflow: visible;
+  background: none;
+}
+.tv-end-stack {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  right: calc(-1 * var(--sp-end-extra));
+  display: block;
+  pointer-events: none;
+}
+.tv-end-front,
+.tv-end-back {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  display: block;
+  border-radius: var(--end-r);
+}
+/* Back to front in document order, so each card paints over the one behind it, and its shadow,
+   thrown to the right, falls on that card's exposed edge. */
+.tv-end-back {
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    calc(var(--sp-end-step) * 0.5) 0 calc(var(--sp-end-step) * 1.1) rgba(0, 0, 0, 0.6);
+}
+.tv-end-back.is-3 {
+  --end-i: 2;
+  right: 0;
+  top: calc(var(--sp-end-drop) * 3); bottom: calc(var(--sp-end-drop) * 3);
+  background: linear-gradient(170deg, #67676c 0%, #404044 100%);
+}
+.tv-end-back.is-2 {
+  --end-i: 1;
+  right: var(--sp-end-step);
+  top: calc(var(--sp-end-drop) * 2); bottom: calc(var(--sp-end-drop) * 2);
+  background: linear-gradient(170deg, #9a9a9f 0%, #66666b 100%);
+}
+.tv-end-back.is-1 {
+  --end-i: 0;
+  right: calc(var(--sp-end-step) * 2);
+  top: var(--sp-end-drop); bottom: var(--sp-end-drop);
+  background: linear-gradient(170deg, #cfcfd3 0%, #96969b 100%);
+}
+.tv-end-front {
+  right: var(--sp-end-extra);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: calc(var(--spot-h) * 0.045);
+  /* clips the shine to the card's own corners */
+  overflow: hidden;
+  color: #0c0c0d;
+  border: 1px solid transparent;
+  background:
+    radial-gradient(120% 70% at 0% 0%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 60%) padding-box,
+    linear-gradient(170deg, #f4f4f5 0%, #dcdcdf 45%, #b9b9bd 100%) padding-box,
+    linear-gradient(165deg, #ffffff, #9d9da2) border-box;
+  box-shadow: calc(var(--sp-end-step) * 0.55) 0 calc(var(--sp-end-step) * 1.3) rgba(0, 0, 0, 0.7);
+}
+/* The light catching a card's exposed edge: brightest AT the edge, gone a step and a half in. */
+.tv-end-glint {
+  position: absolute; top: 0; bottom: 0; right: 0;
+  display: block;
+  width: calc(var(--sp-end-step) * 1.6);
+  border-radius: 0 var(--end-r) var(--end-r) 0;
+  background: linear-gradient(270deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.2) 40%, rgba(255, 255, 255, 0) 100%);
+  opacity: 0;
+}
+/* The shine. A narrow band, parked off the card's left edge; it crosses to off the right edge
+   (`--end-w`, the front card's width) in the first third of each cycle. The gradient runs straight
+   across and the ELEMENT is skewed: an angled gradient on a tall box does not fall to nothing along
+   its sides, and showed as a slab with hard vertical edges. Both parking places allow for the skew,
+   which leans the band's ends ~0.14 of a card height either way. Bright in the middle with a faint
+   dark edge either side, which is what reads as light off metal rather than a white smear. */
+.tv-end-sheen {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  display: block;
+  width: calc(var(--spot-h) * 0.32);
+  background: linear-gradient(90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(0, 0, 0, 0.05) 22%,
+    rgba(255, 255, 255, 0.95) 50%,
+    rgba(0, 0, 0, 0.05) 78%,
+    rgba(255, 255, 255, 0) 100%);
+  transform: translateX(-160%) skewX(-16deg);
+}
+.tv-end-ring {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  width: calc(var(--spot-h) * 0.15);
+  height: calc(var(--spot-h) * 0.15);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 calc(var(--spot-h) * 0.0042) currentColor;
+}
+/* ::after is the glow the shine leaves on the ring as it passes; ::before the spinner while a batch
+   loads. */
+.tv-end-ring::before,
+.tv-end-ring::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0;
+}
+.tv-end-ring::after {
+  inset: -55%;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 100%);
+}
+.tv-end-ring::before {
+  inset: 0;
+  border: calc(var(--spot-h) * 0.0052) solid transparent;
+  border-top-color: currentColor;
 }
 .tv-spot-blank-ic {
-  font-size: 40px; line-height: 1;
-  color: rgba(255, 255, 255, 0.9);
+  position: relative;
+  display: block;
+  font-size: calc(var(--spot-h) * 0.085);
+  font-weight: 300;
+  line-height: 1;
+  color: currentColor;
 }
-.tv-spot-blank-label {
-  font-size: 13px; font-weight: 800; letter-spacing: 0.16em;
+.tv-end-front .tv-spot-blank-label {
+  position: relative;
+  display: block;
+  font-size: clamp(12px, calc(var(--spot-h) * 0.029), 22px);
+  font-weight: 800; letter-spacing: 0.22em;
+  /* the tracking hangs off the last letter; give it back so the word is truly centred */
+  text-indent: 0.22em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+  color: currentColor;
 }
-/* The same card as the BILLBOARD, once the walk reaches it. It replaces `.tv-spot-art`, so it
-   fills the layer the artwork would have filled and the title plate below it is unchanged — the
-   arrow is lifted off centre by the height of that plate so the two do not crowd each other. */
+
+/* THE BILLBOARD COPY: the front card alone, filling the billboard. It replaces `.tv-spot-art`, so it
+   fills the layer the artwork would have filled; the plate (LOAD MORE · row name) sits on it where
+   it always sits, in dark type (`.tv-spot-card-in.is-end`), and the icon is lifted off centre by the
+   plate's height so the two do not crowd. The stack beside it is the strip's (see the head of this
+   block). */
 .tv-spot-blank {
+  --end-r: 12px;
+  --end-w: var(--sp-wl);
+  --end-cycle: 5s;
+  --end-delay: .3s;
   position: absolute; inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding-bottom: 84px;
-  background: rgba(255, 255, 255, 0.045);
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.16);
   border-radius: inherit;
+  background: #000;
 }
-.tv-spot-blank .tv-spot-blank-ic { font-size: 64px; }
+.tv-spot-blank .tv-end-front {
+  right: 0;
+  padding-bottom: calc(var(--spot-h) * 0.17);
+  box-shadow: none;
+}
+.tv-spot-blank .tv-end-ring { width: calc(var(--spot-h) * 0.19); height: calc(var(--spot-h) * 0.19); }
+.tv-spot-blank .tv-spot-blank-ic { font-size: calc(var(--spot-h) * 0.1); }
+.tv-spot-card-in.is-end .tv-spot-tag { color: rgba(12, 12, 13, 0.72); }
+.tv-spot-card-in.is-end .tv-spot-cardtitle { color: #0c0c0d; }
+
+/* ---- the light: on the settled row only ---- */
+.tv-spot.is-settled .is-seeall .tv-end-sheen,
+.tv-spot.is-settled .tv-spot-layer.on .tv-end-sheen {
+  animation: tv-end-sweep var(--end-cycle) cubic-bezier(.45, 0, .25, 1) var(--end-delay) infinite;
+}
+.tv-spot.is-settled .is-seeall .tv-end-ring::after,
+.tv-spot.is-settled .tv-spot-layer.on .tv-end-ring::after {
+  animation: var(--end-glow, tv-end-ringglow) var(--end-cycle) ease-out var(--end-delay) infinite;
+}
+.tv-spot.is-settled .is-seeall .tv-end-glint {
+  animation: var(--end-glint, tv-end-glint) var(--end-cycle) ease-out calc(var(--end-delay) + var(--end-i) * var(--end-lag)) infinite;
+}
+/* While the billboard shows the end card, the strip's end card is the one under it and its stack is
+   the one showing past the billboard's edge: it takes the billboard's beat, so the shine that
+   crosses the big card runs on down these cards. A second NAME for the same keyframes is what
+   restarts the glints in step with the billboard's own animation, which starts as its layer comes
+   on (the stage sets `is-end-on` in that same moment). */
+.tv-spot-strip.is-end-on .is-seeall {
+  --end-delay: .3s;
+  --end-glint: tv-end-glint-on;
+}
+/* LOADING (OK was pressed): the ring turns into a spinner and the light runs down the stack fast,
+   over and over, until the batch lands. */
+.tv-spot-thumb.is-seeall.is-busy,
+.tv-spot-blank.is-busy {
+  --end-cycle: 1.5s;
+  --end-delay: 0s;
+  --end-lag: .08s;
+  --end-glow: none;
+}
+.is-busy .tv-end-ring { box-shadow: inset 0 0 0 calc(var(--spot-h) * 0.0042) rgba(12, 12, 13, 0.22); }
+.is-busy .tv-end-ring::before { opacity: 1; animation: tv-end-spin .8s linear infinite; }
+
+@keyframes tv-end-sweep {
+  0% { transform: translateX(-160%) skewX(-16deg); }
+  32%, 100% { transform: translateX(calc(var(--end-w) + 55%)) skewX(-16deg); }
+}
+@keyframes tv-end-ringglow {
+  0%, 6% { opacity: 0; }
+  15% { opacity: 1; }
+  34%, 100% { opacity: 0; }
+}
+@keyframes tv-end-glint {
+  0%, 25% { opacity: 0; }
+  31% { opacity: 1; }
+  46%, 100% { opacity: 0; }
+}
+@keyframes tv-end-glint-on {
+  0%, 25% { opacity: 0; }
+  31% { opacity: 1; }
+  46%, 100% { opacity: 0; }
+}
+@keyframes tv-end-spin { to { transform: rotate(360deg); } }
+
+/* !important because the rules above are heavier and this has to beat every one of them. */
+.tv-spot.no-anim .tv-end-sheen,
+.tv-spot.no-anim .tv-end-glint,
+.tv-spot.no-anim .tv-end-ring::after { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .tv-end-sheen, .tv-end-glint, .tv-end-ring::after { animation: none !important; }
+}
 
 /* billboard — pinned left, over the strip, two cross-dissolving layers.
  *
@@ -3326,6 +3548,10 @@
   border-radius: inherit;
   pointer-events: none;
 }
+/* The end card on the billboard is SILVER (see THE END CARD), and the ring's white disappears into
+   it: on that card the ring is drawn dark instead. The stage sets `is-end` while the end card is the
+   one on screen. */
+.tv-shell .tv-spot-hero.is-end:focus-visible::after { border-color: rgba(12, 12, 13, 0.55); }
 
 /* THE BOTTOM IS EXPLICITLY 0, AND THAT ZERO IS LOAD-BEARING RATHER THAN LAZY.
    This was a two-value shorthand, which sets block-START and block-END — so every focusable in

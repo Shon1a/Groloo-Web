@@ -131,8 +131,19 @@ const TILE_KEYS = 1024;
 const REBASE_AT = 2 * TILE_KEYS;
 /** Always-positive modulo, so a physical position left of the origin still maps to a title. */
 const mod = (a: number, m: number): number => ((a % m) + m) % m;
-/** Where a tile at physical position `p` sits in the strip, as CSS — the strip's own pitch. */
-const tileLeft = (p: number): string => `calc(${p} * (var(--sp-wp) + var(--sp-gap)))`;
+/** Where a tile at physical position `p` sits in the strip, as CSS — the strip's own pitch, plus
+ *  the room left for every end card before it (`ends` of them). An end card is a poster with a stack
+ *  of cards standing after it (see THE END CARD in tv.css), so everything past one sits that much
+ *  further right; the strip's own transform takes the same amount off for each one the walk has
+ *  passed (`--ends`, written by putActive). */
+const tileLeft = (p: number, ends = 0): string => (ends
+  ? `calc(${p} * (var(--sp-wp) + var(--sp-gap)) + ${ends} * var(--sp-end-extra))`
+  : `calc(${p} * (var(--sp-wp) + var(--sp-gap)))`);
+/** How many end cards stand before physical position `p`, when they stand at every position
+ *  congruent to `endAt` (mod `stops`). Counted from the one at `endAt` itself, so the value can be
+ *  zero or negative to the left of it — only differences matter, since the tiles and the strip
+ *  both subtract the same count. */
+const endsBefore = (p: number, endAt: number, stops: number): number => Math.floor((p - endAt - 1) / stops) + 1;
 
 /* ms the remote must sit still on a title before its trailer is even asked for.
  *
@@ -784,22 +795,37 @@ interface EndTileProps {
   label: string;
   icon: string;
   heading: string;
+  /** A batch is in flight: the ring around the icon turns into a spinner. */
+  busy: boolean;
   onGo: () => void;
 }
 
-const EndTile = memo(function EndTile({ left, label, icon, heading, onGo }: EndTileProps) {
+const EndTile = memo(function EndTile({ left, label, icon, heading, busy, onGo }: EndTileProps) {
   return (
     <button
       type="button"
       role="listitem"
       tabIndex={-1}
-      className="tv-spot-thumb is-seeall"
+      className={`tv-spot-thumb is-seeall${busy ? ' is-busy' : ''}`}
       style={{ left }}
       aria-label={`${heading} — ${label}`}
       onClick={onGo}
     >
-      <span className="tv-spot-blank-ic" aria-hidden="true">{icon}</span>
-      <span className="tv-spot-blank-label">{label}</span>
+      {/* A poster-sized front card with three more standing after it, on the right — "there are
+          more of these" — and the light running down them. Back to front, so each paints over the
+          one behind. The stack stands outside the tile's box, in room the strip leaves for it (see
+          tileLeft). On the billboard only the front card is drawn (endFront in tvRowStage): this
+          tile is then the one under the billboard, and its stack shows past the billboard's edge. */}
+      <span className="tv-end-stack" aria-hidden="true">
+        <span className="tv-end-back is-3"><span className="tv-end-glint" /></span>
+        <span className="tv-end-back is-2"><span className="tv-end-glint" /></span>
+        <span className="tv-end-back is-1"><span className="tv-end-glint" /></span>
+        <span className="tv-end-front">
+          <span className="tv-end-sheen" />
+          <span className="tv-end-ring"><span className="tv-spot-blank-ic">{icon}</span></span>
+          <span className="tv-spot-blank-label">{label}</span>
+        </span>
+      </span>
     </button>
   );
 });
@@ -861,7 +887,7 @@ type Slot = MediaItem | 'end';
 /** What the stage shows for a stop that is not there (no title, no end card). */
 const NO_SLOT: StageSlot = {
   key: 'none', kind: 'none', bgUrl: '', fallback: '', bgPos: '50% 50%', logoUrl: '', title: '',
-  progress: 0, endLabel: '', endIcon: '', heading: '', meta: [], plot: '',
+  progress: 0, endLabel: '', endIcon: '', endBusy: false, heading: '', meta: [], plot: '',
 };
 /* A SYNOPSIS WITHOUT PICTOGRAPHS. An emoji is not in the page's typeface, so the first time one is laid out
  * the engine goes looking for a font that has it and loads that — and a colour-emoji font is the largest
@@ -1473,6 +1499,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const itemAt = (p: number): number => mod(active + (p - pos), stops);
     const out: ReactElement[] = [];
     if (!stops) return out;
+    /* Where the end cards stand: every position whose walk index is `n`. Fixed while the row only
+     * walks (a wrap moves the anchor by a whole lap), so a tile keeps its `left` for its whole life
+     * and only the row lengthening moves them — see `endsAt` for the strip's half. */
+    const endAt = mod(pos - active + n, stops);
+    const leftOf = (p: number): string => tileLeft(p, hasEnd ? endsBefore(p, endAt, stops) : 0);
     /* Nothing left of the origin. Left off the first title leaves the row for the nav bar (see
      * `onHeroKey`), so in the first lap a tile at a negative position could never be walked back
      * onto — it would be two clipped, decoded posters per row that the old strip never held. Once
@@ -1481,10 +1512,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       const slot = slotAt(itemAt(p));
       const k = mod(p, TILE_KEYS);
       if (slot === 'end') {
-        out.push(<EndTile key={`${k}:end`} left={tileLeft(p)} label={endLabel} icon={endIcon} heading={heading} onGo={goEndStable} />);
+        out.push(<EndTile key={`${k}:end`} left={leftOf(p)} label={endLabel} icon={endIcon} heading={heading} busy={canMore && !!moreBusy} onGo={goEndStable} />);
       } else if (slot) {
         const res = resumeOf?.(slot);
-        out.push(<Tile key={`${k}:${slot.id}`} item={slot} left={tileLeft(p)} pct={res?.pct ?? 0} onOpen={openTile} />);
+        out.push(<Tile key={`${k}:${slot.id}`} item={slot} left={leftOf(p)} pct={res?.pct ?? 0} onOpen={openTile} />);
       }
     }
     return out;
@@ -1608,7 +1639,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const describeSlot = (slot: Slot | undefined): StageSlot => {
     if (!slot) return NO_SLOT;
     if (slot === 'end') {
-      return { ...NO_SLOT, key: `end|${endLabel}|${endIcon}|${heading}`, kind: 'end', endLabel, endIcon, heading };
+      return { ...NO_SLOT, key: `end|${endLabel}|${endIcon}|${heading}`, kind: 'end', endLabel, endIcon, endBusy: canMore && !!moreBusy, heading };
     }
     const a = withArt(slot);
     const res = resumeOf?.(slot);
@@ -1631,6 +1662,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       progress,
       endLabel: '',
       endIcon: '',
+      endBusy: false,
       heading: '',
       /* [S2:E4 ·] genre · year · rating. The episode leads when there is one, because on a resume
        * row it is the most specific thing the line can say. The see-all card has no facts. */
@@ -2013,9 +2045,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     return () => window.clearTimeout(id);
   }, [pos]);
 
-  /** The one writer of the strip's position: a custom property the stylesheet turns into a transform
-   *  (with a transition, which is the compositor's from there). */
-  const putActive = (el: HTMLElement, v: number) => { el.style.setProperty('--active', String(v)); };
+  /** How many end cards stand before physical position `sp` — the strip's half of the room each one
+   *  takes (see `tileLeft`). Read from the walk's truth, `liveActive`, which every writer moves
+   *  together with `stripPos`; the tiles get the same count from the committed pair in `thumbs`. */
+  const endsAt = (sp: number): number => (hasEnd && stops ? endsBefore(sp, mod(sp - liveActive.current + n, stops), stops) : 0);
+  /** The one writer of the strip's position: two custom properties the stylesheet turns into a
+   *  transform (with a transition, which is the compositor's from there) — the tile under the walk,
+   *  and how many end cards the walk has passed to get there. */
+  const putActive = (el: HTMLElement, v: number) => {
+    el.style.setProperty('--active', String(v));
+    el.style.setProperty('--ends', String(endsAt(v)));
+  };
 
   /* ---- THE STRIP'S POSITION IS WRITTEN TO THE NODE, NOT RENDERED --------------------------
    * `--active` used to be an inline style on the strip, which meant moving the row required a
@@ -2042,7 +2082,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * keeps them), so the write must not animate: the transition is taken off, the value written
        * and flushed, and the transition handed back — the same two-write shape the old wrap used,
        * now for a case that happens once per page change or once per two thousand presses. */
-      if (silentHop.current) {
+      /* SO IS THE ROW LENGTHENING UNDER A WALK THAT HAS PASSED AN END CARD. That moves where the end
+       * cards stand, so the tiles take new places in this commit (`thumbs`) and the strip must take
+       * its own without being seen to travel. A press writes both values itself in `step`, so after
+       * one they already agree here; and a strip that has never had the value written (mount) has
+       * nothing to suppress, so it is not made to pay the forced layout below. */
+      const had = t.style.getPropertyValue('--ends');
+      if (silentHop.current || (had !== '' && had !== String(endsAt(stripPos.current)))) {
         silentHop.current = false;
         t.style.transition = 'none';
         putActive(t, stripPos.current);
