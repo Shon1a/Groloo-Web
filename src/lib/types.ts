@@ -72,7 +72,17 @@ export interface CastMember { name: string; character?: string; profile?: string
 export interface Creator { name: string; profile?: string }
 /** /api/meta — a "Where to watch" streaming-service button (JustWatch data via TMDB). */
 export interface WatchProvider { id: number; name: string; logo?: string | null; link?: string | null }
-export interface SeasonInfo { season: number; episodes: number; name?: string }
+export interface SeasonInfo {
+  season: number;
+  episodes: number;
+  name?: string;
+  /** Where this season's episodes live on the add-on wire, when that is NOT the title's own
+   *  `imdb` and this season number. TMDB folds sequels into one show that IMDb files as
+   *  separate titles — Bleach's Thousand-Year Blood War is season 2 to TMDB and tt14986406
+   *  to every stream add-on — so the server lists them as seasons of their own carrying the
+   *  real address: episode N of this season is `${imdb}:${season}:${N}`. */
+  stream?: { imdb: string; season: number };
+}
 
 /** /api/meta/:id — the full detail payload (server.js:668). */
 export interface MetaDetail {

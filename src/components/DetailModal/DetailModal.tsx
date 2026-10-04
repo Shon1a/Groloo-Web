@@ -459,12 +459,16 @@ export default function DetailModal() {
    * publishes its own catalog publishes its own episode ids with it — `kitsu:44081:5` has one
    * colon-separated number, not two — and the add-on's `videos[]` is the only place that
    * mapping exists. So the add-on's own id wins when there is one, and the formula stays as
-   * the fallback for everything else. */
+   * the fallback for everything else — per SEASON, since a season TMDB folded in from a
+   * sequel lives under the sequel's IMDb id (see `SeasonInfo.stream`). */
   const videoIdFor = (ep: { season: number; ep: number } | null): string | undefined => {
     if (!isTv) return streamBaseId;
     if (!ep) return undefined;
     const own = meta?.addonEpisodes?.find((v) => v.season === ep.season && v.episode === ep.ep)?.id;
-    return own ?? (streamBaseId ? `${streamBaseId}:${ep.season}:${ep.ep}` : undefined);
+    if (own) return own;
+    const st = meta?.seasonList?.find((s) => s.season === ep.season)?.stream;
+    if (st) return `${st.imdb}:${st.season}:${ep.ep}`;
+    return streamBaseId ? `${streamBaseId}:${ep.season}:${ep.ep}` : undefined;
   };
   const streamVideoId = videoIdFor(pickedEp);
 
