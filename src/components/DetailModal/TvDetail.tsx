@@ -8,6 +8,7 @@ import { registerBackHandler } from '../../lib/tvKeys';
 import TvChipMenu from './TvChipMenu';
 import TvEpisodeDeck, { hasEpisodeDeck } from './TvEpisodeDeck';
 import type { MetaDetail } from '../../lib/types';
+import { currentEp } from '../../lib/episodeNumbering';
 import type { ModalTarget } from '../../stores/modal';
 
 /* ============================================================================
@@ -309,9 +310,10 @@ export default function TvDetail(p: TvDetailProps) {
   const remembered = lastPicked.current?.id === String(target.id)
     ? { season: lastPicked.current!.season, ep: lastPicked.current!.ep }
     : null;
+  const resumeEp = currentEp(meta, target.resumeEp);
   const deckPicked = pickedEp
     ?? remembered
-    ?? (target.resumeEp ? { season: target.resumeEp.season, ep: target.resumeEp.episode } : null);
+    ?? (resumeEp ? { season: resumeEp.season, ep: resumeEp.episode } : null);
 
   const choose = (season: number, ep: number) => {
     lastPicked.current = { id: String(target.id), season, ep };
