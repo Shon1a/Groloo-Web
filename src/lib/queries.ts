@@ -73,6 +73,15 @@ export function useHome() {
   });
 }
 
+/* THE SERVER'S EPISODE-NUMBERING REVISION, sent with every series meta and season read. It
+ * means nothing to the server; it is part of the ADDRESS, and that is the point. Both reads are
+ * cached for a day — the service worker serves them stale-while-revalidate and the server sends
+ * `stale-while-revalidate=86400` — so when the server changes how a show is numbered, every
+ * device that had opened it keeps showing the old layout for one more visit, and asks add-ons
+ * for episode ids that do not exist. A new address is a cache miss everywhere at once. Bump it
+ * whenever server.js `episodeMap` would lay an already-cached show out differently. */
+const NUMBERING = '2';
+
 /* One definition of the /api/meta read, shared by the hook that RENDERS it and the one that
  * merely WARMS it (usePrefetchMeta). They must agree on the key or the prefetch fills a cache
  * entry nobody reads — so the key is written once, here, rather than twice by hand. */
@@ -81,7 +90,7 @@ function metaQuery(id: string | number | undefined, type: MediaItem['type'] | un
     queryKey: ['meta', id, type, lang] as const,
     queryFn: () => {
       const p = new URLSearchParams({ lang });
-      if (type === 'tv' || type === 'series') p.set('type', 'tv');
+      if (type === 'tv' || type === 'series') { p.set('type', 'tv'); p.set('nv', NUMBERING); }
       return api<MetaDetail>(`/api/meta/${id}?${p}`);
     },
     // admin cover/title overrides — refresh quickly instead of caching 10 min
@@ -290,6 +299,6 @@ export function useSeason(id: string | number | undefined, season: number | unde
   return useQuery({
     queryKey: ['season', id, season, lang, imdb ?? ''],
     enabled: id != null && id !== '' && season != null,
-    queryFn: () => api<SeasonEpisodes>(`/api/tv/${id}/season/${season}?lang=${encodeURIComponent(lang)}${imdb ? `&imdb=${encodeURIComponent(imdb)}` : ''}`),
+    queryFn: () => api<SeasonEpisodes>(`/api/tv/${id}/season/${season}?lang=${encodeURIComponent(lang)}${imdb ? `&imdb=${encodeURIComponent(imdb)}` : ''}&nv=${NUMBERING}`),
   });
 }

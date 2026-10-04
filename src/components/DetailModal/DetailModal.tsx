@@ -22,6 +22,7 @@ import { hasStreamingServer, streamingServerReady, torrentUrl } from '../../lib/
 import { pickWatchServices } from '../../lib/watchProviders';
 import { mediaUrl, syncAddressBar, type MediaAddress } from '../../lib/launchIntent';
 import TvDetail from './TvDetail';
+import { currentEp } from '../../lib/episodeNumbering';
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
 
@@ -422,6 +423,16 @@ export default function DetailModal() {
     setSrcTab('services');
     scrollRef.current?.scrollTo({ top: 0 });
   }, [target?.id, target?.resumeEp?.season, target?.resumeEp?.episode]);
+
+  /* The seed above runs before /api/meta lands, so it is in whatever numbering the resume point
+   * was SAVED in. Once meta says how the show is numbered now, move a remembered episode the
+   * current layout does not have to where it went (lib/episodeNumbering) — or it asks add-ons
+   * for an id that no longer exists. An episode picked from the current layout is left alone. */
+  useEffect(() => {
+    if (!pickedEp) return;
+    const cur = currentEp(meta, { season: pickedEp.season, episode: pickedEp.ep });
+    if (cur && (cur.season !== pickedEp.season || cur.episode !== pickedEp.ep)) setPickedEp({ season: cur.season, ep: cur.episode });
+  }, [meta, pickedEp]);
 
   /* THE ID THE ADD-ONS ARE ASKED UNDER, PREFERRING THE SEED'S OVER THE DETAIL FETCH'S.
    *
@@ -893,7 +904,7 @@ export default function DetailModal() {
               {meta?.tagline && <div className="m-tagline" id="mTagline">{meta.tagline}</div>}
               <p className="plot m-plot" id="mPlot">{plot}</p>
 
-              {isTv && meta && <div ref={episodesRef}><EpisodeChooser key={String(target.id)} meta={meta} titleId={target.id} initial={target.resumeEp} onEpisode={(season, ep) => setPickedEp({ season, ep })} /></div>}
+              {isTv && meta && <div ref={episodesRef}><EpisodeChooser key={String(target.id)} meta={meta} titleId={target.id} initial={currentEp(meta, target.resumeEp)} onEpisode={(season, ep) => setPickedEp({ season, ep })} /></div>}
 
               <div className="m-streams" ref={streamsRef}>
                 <div className="m-rail-head">

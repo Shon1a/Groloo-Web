@@ -115,6 +115,9 @@ export interface MetaDetail {
   imdb?: string;
   seasons?: number;
   seasonList?: SeasonInfo[];
+  /** Present only when the server re-numbered this show: TMDB's numbering → `seasonList`'s, as
+   *  runs of `[season, episode, tmdbSeason, tmdbEpisode, length]`. See lib/episodeNumbering. */
+  tmdbRuns?: Array<[number, number, number, number, number]>;
   /** "Where to watch" streaming services (JustWatch data via TMDB). */
   providers?: WatchProvider[];
   /** JustWatch aggregate link for the title (fallback target). */
