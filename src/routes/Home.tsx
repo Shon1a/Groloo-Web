@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from 'react';
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useHome } from '../lib/queries';
 import { useT } from '../i18n/i18n';
@@ -14,6 +15,7 @@ import ContinueRow from '../components/ContinueRow';
 import AddonRows from '../components/AddonRows';
 import { useModal, openItem } from '../stores/modal';
 import { useLibrary } from '../stores/library';
+import { registerRowStager } from '../lib/tvRowRegistry';
 import type { MediaItem } from '../lib/types';
 
 /* Home = the featured hero + the categorised rows (via /api/home): Hero,
@@ -35,6 +37,75 @@ const IS_TV = import.meta.env.MODE === 'tv';
  * title the row does not have to go and FETCH to reach SPOT_MAX. The payload holds one TMDB page
  * (~20 after gating), so this is really "don't clip the seed"; MUST TRACK SPOT_MAX. */
 const HOME_RAIL_CAP = IS_TV ? 40 : 14;
+
+/* ---- THE ROWS ARRIVE IN STAGES ON A TELEVISION ----------------------------------------------------
+ *
+ * Mounting the home screen used to be ONE commit: the featured billboard, the upcoming row and a dozen
+ * category rows, each with its tiles, its stage and its effects, in a single task. Traced at the set's
+ * speed that task is ~1.5 seconds, and for all of it the remote is dead — a press made while it runs is
+ * not handled until it ends, which on a first launch (or coming back from a browse page) is exactly
+ * when someone is about to press one. Only the first screen of it is on screen: the other rows start
+ * below the fold, and nobody can see them mount.
+ *
+ * So the first screen mounts at once — billboard, upcoming, Continue Watching and the first strip — and
+ * the rest follow ONE ROW PER COMMIT, each in a transition (React slices a transition's render and
+ * yields to input between slices), a few milliseconds apart. The longest task is one row, not twelve,
+ * and the add-on and studio rows, whose own requests used to start with everything else, start last.
+ *
+ * A Down that reaches the last row mounted so far is never lost to this and never waits for the timer:
+ * `stepRow` asks the stager registered below to mount the next row NOW and steps onto it. Once the
+ * tail is in, the limit is lifted for good, so a refetch that adds a row later is not held back by a
+ * count taken earlier. The web build mounts everything at once, as it always did. */
+const STAGE_FIRST = 1;
+const STAGE_GAP_MS = 32;
+
+type StripRow = { cat: string; title: string; items: MediaItem[] };
+
+function StagedStrips({ rows, tail, onSelect, onSeeAll }: {
+  rows: StripRow[];
+  tail: ReactNode;
+  onSelect: (item: MediaItem) => void;
+  onSeeAll: (cat: string) => void;
+}) {
+  const total = rows.length;
+  /* Rows shown so far; Infinity once the tail (studios + add-on rows) has been mounted. */
+  const [limit, setLimit] = useState<number>(IS_TV ? STAGE_FIRST : Infinity);
+  /* The COMMITTED limit, written in a layout effect and never during render. A write in render leaks the
+   * value of a transition render that has not committed (and may never), and the stager below would
+   * read "everything is mounted" while a row was still on its way — a press lost to a half-finished
+   * mount. */
+  const shown = useRef(limit);
+  useLayoutEffect(() => { shown.current = limit; }, [limit]);
+  /* ALWAYS AN ABSOLUTE TARGET — one past the limit that is committed NOW — never an increment of
+   * whatever the update queue holds. The timer's transition and a press's synchronous mount are two
+   * updates aimed at the same next row; as increments they stacked, and four rows of staging became
+   * the whole page mounting in a single render, which is exactly what this exists to avoid. */
+  const grow = useCallback((from: number) => {
+    const to = from >= total ? Infinity : from + 1;
+    return (n: number) => Math.max(n, to);
+  }, [total]);
+  useEffect(() => {
+    if (!IS_TV || limit === Infinity) return;
+    const id = window.setTimeout(() => startTransition(() => setLimit(grow(limit))), STAGE_GAP_MS);
+    return () => window.clearTimeout(id);
+  }, [limit, grow]);
+  useEffect(() => {
+    if (!IS_TV) return;
+    return registerRowStager(() => {
+      if (shown.current === Infinity) return false;
+      flushSync(() => setLimit(grow(shown.current)));
+      return true;
+    });
+  }, [grow]);
+  return (
+    <>
+      {rows.slice(0, limit).map((r) => (
+        <Row key={r.cat} cat={r.cat} title={r.title} items={r.items} onSelect={onSelect} onSeeAll={onSeeAll} />
+      ))}
+      {limit === Infinity && tail}
+    </>
+  );
+}
 
 export default function Home() {
   const t = useT();
@@ -130,6 +201,21 @@ export default function Home() {
    * row nobody walks to the end of is a row labelled "Movies & Series" that only ever shows
    * movies. Built in the memo above, beside the row lists, for the same identity reason. */
 
+  const stripRows: StripRow[] = [];
+  for (const row of HOME_ROWS) {
+    if (!rowVisible(row.cat)) continue; // add-on gating (Heart core / JS fallback)
+    // Cap each home rail. The API returns ~20 per row and Row renders every one as a
+    // live poster tile, so ~13 rows put ~260 decoded bitmaps on the home screen —
+    // the largest passive memory load in the app and a real out-of-memory risk on a
+    // webOS TV. HOME_RAIL_CAP fills the viewport (~9 cards at 1080p) with comfortable
+    // scroll beyond it, and nothing is lost: on the web every rail's "See all" opens the
+    // full browse grid, and on TV the card at the end of the row lengthens it in place
+    // from the same catalogue (TvHomeRow). Invisible on screen — the first ~9 cards are
+    // unchanged, which is all a rest-state view or a screenshot ever shows.
+    const list = rowLists[row.cat];
+    if (list) stripRows.push({ cat: row.cat, title: t(row.key), items: list });
+  }
+
   return (
     <section className="page active" id="browse" aria-label="Browse catalog">
       <div id="home">
@@ -151,33 +237,19 @@ export default function Home() {
           : <UpcomingMarquee movies={upMovies ?? []} series={upSeries ?? []} onSelect={onSelect} onSeeAll={onSeeAll} />)}
         <ContinueRow onSelect={onSelect} />
         <div id="strips">
-          {HOME_ROWS.map((row) => {
-            if (!rowVisible(row.cat)) return null; // add-on gating (Heart core / JS fallback)
-            // Cap each home rail. The API returns ~20 per row and Row renders every one as a
-            // live poster tile, so ~13 rows put ~260 decoded bitmaps on the home screen —
-            // the largest passive memory load in the app and a real out-of-memory risk on a
-            // webOS TV. HOME_RAIL_CAP fills the viewport (~9 cards at 1080p) with comfortable
-            // scroll beyond it, and nothing is lost: on the web every rail's "See all" opens the
-            // full browse grid, and on TV the card at the end of the row lengthens it in place
-            // from the same catalogue (TvHomeRow). Invisible on screen — the first ~9 cards are
-            // unchanged, which is all a rest-state view or a screenshot ever shows.
-            const list = rowLists[row.cat];
-            if (!list) return null;
-            return (
-              <Row
-                key={row.cat}
-                cat={row.cat}
-                title={t(row.key)}
-                items={list}
-                onSelect={onSelect}
-                onSeeAll={onSeeAll}
-              />
-            );
-          })}
-          {/* Studios logo row — after the category/provider rows, as in the vanilla layout */}
-          {studiosVisible && <StudioRow onOpen={(key) => nav(`/browse/studio:${key}`)} />}
-          {/* rows supplied by installed community catalog add-ons */}
-          <AddonRows onSelect={onSelect} />
+          <StagedStrips
+            rows={stripRows}
+            onSelect={onSelect}
+            onSeeAll={onSeeAll}
+            tail={(
+              <>
+                {/* Studios logo row — after the category/provider rows, as in the vanilla layout */}
+                {studiosVisible && <StudioRow onOpen={(key) => nav(`/browse/studio:${key}`)} />}
+                {/* rows supplied by installed community catalog add-ons */}
+                <AddonRows onSelect={onSelect} />
+              </>
+            )}
+          />
         </div>
       </div>
     </section>

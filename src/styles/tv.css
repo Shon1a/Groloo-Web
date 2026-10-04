@@ -485,8 +485,8 @@
    clears 2.39:1 and holds to about 2.66:1 before a band could show again.
 
    Flat rather than per-genre like the rows, whose card is close enough to 16:9 that cropping an
-   already-16:9 animation trailer would magnify it for nothing. Keep it in step with `cropScale` in
-   TvHero — that number also sizes the rendition. */
+   already-16:9 animation trailer would magnify it for nothing. The number lives in ONE place now,
+   `cropScale` in TvHero: the engine lays the crop out from it and sizes the rendition with it. */
 .tv-hero-trailer-slot {
   position: absolute; inset: 0;
   overflow: hidden;
@@ -497,8 +497,9 @@
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
-  transform: scale(1.2);
-  transform-origin: center;
+  /* NO TRANSFORM: the 1.2 is laid out by the engine — the element is sized to the cropped box and the
+     slot clips it (`place` in useVideoTrailer). `transform: scale(1.2)` here is what left the bands
+     on the set. */
   border: 0;
   background: #000;
   opacity: 0;
@@ -759,7 +760,11 @@
   margin: 0 0 var(--sp-title-gap);
   font-size: var(--sp-title); font-weight: 700;
   color: rgba(255,255,255,0.55);
-  transition: color .22s ease;
+  /* NO TRANSITION ON THE COLOUR. A colour is not a compositor property, so a 220ms fade here was a
+     main-thread animation: a style recalculation and a repaint of the whole 1920x6780 page layer
+     on every frame of it, on both the row being left and the row being arrived at, in the middle
+     of a vertical move. Measured, that was ~110 recalcs and ~36 root repaints per press on the
+     desktop with the CPU slowed to the set. The heading simply switches. */
 }
 .tv-spot.is-open .tv-spot-rowtitle { color: #fff; }
 
@@ -961,6 +966,13 @@
   display: block;
   width: 100%;
   height: 100%;
+  /* A DIV PAINTED AS A BACKGROUND, NOT AN <img>: setting an image's `src` is a synchronous resource
+     lookup on the press path, a few hundred microseconds each on a desktop and a millisecond or
+     more on the television, and the peek changes two of them per press. A background is a style
+     write. `cover` plus `background-position` is the same crop `object-fit: cover` plus
+     `object-position` was. */
+  background-size: cover;
+  background-repeat: no-repeat;
   object-fit: cover;
   /* NO FADE. The peek's change is carried entirely by the slide, exactly as in the reference,
      where the band is textured on every frame of the press. A 220ms opacity ramp here fought the
@@ -1358,22 +1370,23 @@
    1.000 from 67ms onward at 0.99 correlation. A 3.5% drift would still read ~5px at 133ms; the
    capture shows 0.28px. The billboard cross-dissolves IN PLACE — every horizontal movement on that
    screen belongs to the poster strip. */
+/* ---- ONE ANIMATION, ON THE INCOMING LAYER, OVER A LAYER THAT STAYS PUT -----------------------
+   Everything above is the reference's dissolve as measured: two layers on their own clocks, the
+   outgoing one collapsing and the incoming one rising, passing through a dark trough. It cost two
+   transitions and a drift per press, and every animation costs the main thread a burst of recalcs
+   and commits at its start and again at its end (lib/tvRowStage.ts has the arithmetic). It is one
+   animation now, written by the stage with the Web Animations API: the INCOMING layer (`.on`) is
+   on top and fades in — with the drift in the same call — while the OUTGOING one stays fully opaque
+   beneath it (`.holding`) until that has finished, then is dropped. There is deliberately no CSS
+   transition on either: a second clock is what the layers used to disagree about. A cut (a page
+   change, reduced motion) simply flips the class and the new layer is there. */
 .tv-spot-layer {
   position: absolute; inset: 0;
-  /* Stable A/B nodes are required for the outgoing transition to survive. The departing layer
-     sits above the incoming one; the scrim is later in DOM order at the same stack level, so it
-     still remains above both photographs. */
-  z-index: 1;
-  opacity: 0;
-  /* LEAVING — collapses in its first two frames, then a long faint tail */
-  transition: opacity var(--sp-layer-out, 210ms) cubic-bezier(.33, 1, .68, 1);
-}
-.tv-spot-layer.on {
   z-index: 0;
-  opacity: 1;
-  /* ARRIVING — even, and slower off the mark than the out, which is what leaves the trough */
-  transition: opacity var(--sp-layer-fade, 190ms) linear;
+  opacity: 0;
 }
+.tv-spot-layer.on { z-index: 1; opacity: 1; }
+.tv-spot-layer.holding { opacity: 1; }
 
 /* THE WORDMARK FOLLOWS THE PICTURE RATHER THAN ARRIVING WITH IT. It is the second step of the
    cascade, and it is what stops the billboard from reading as one flat swap: the photograph
@@ -1467,12 +1480,11 @@
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
-  /* Set per TITLE by TvSpotlight, from its genre — 1.35 for live action, which is usually scope and
-     arrives with black bands baked in, and 1 for animation, which is usually 16:9 already and has
-     nothing to crop off. The fallback is the live-action case because most of the catalogue is.
-     Keep this in step with TRAILER_CROP_* there; the same number also sizes the rendition. */
-  transform: scale(var(--sp-trailer-crop, 1.35));
-  transform-origin: center;
+  /* NO TRANSFORM. The crop — 1.35 for live action, which is usually scope with black bands baked into
+     a 16:9 file, 1 for animation (TRAILER_CROP_* in TvSpotlight) — is laid out by the engine instead:
+     it sizes this element to the cropped box inline and the slot clips it (`place` in
+     useVideoTrailer). A `transform: scale()` here left the bands on the set. The rules above are only
+     what the element has before the engine has measured it. */
   border: 0;
   background: #000;
   opacity: 0;
@@ -1734,7 +1746,9 @@
   height: var(--sp-info-h);
   overflow: hidden;
   opacity: 0;
-  transition: opacity .25s ease;
+  /* The LEAVING row's panel is cut, not faded: there is no transition here, only the arrival
+     animation on `.is-open` below. A fade-out is a second animation per vertical press for text that
+     is scrolling off the screen anyway. */
 
   /* ---- ROOM FOR THE SLIDE TO ARRIVE FROM, ON BOTH SIDES ------------------------------------
    * THE DEFECT: press LEFT and the copy arrived with its first letters sliced off — "Action"
@@ -1767,7 +1781,14 @@
   top: 0; bottom: 0;
   left: var(--sp-copy-bleed, 0px);
   right: var(--sp-copy-bleed, 0px);
+  /* TWO BLOCKS TRADE PLACES, like the billboard's layers (lib/tvRowStage.ts): the next one is built
+     ahead of the press, hidden, and a press flips `.on` between them. The leaving block is CUT — it
+     loses `.on` and is gone that frame, which is what the reference's copy does — and the arriving
+     one is animated by the stage (opacity and a slide, in one WAAPI call). No CSS transition on
+     either: a second clock is exactly what put the copy and the picture out of step before. */
+  opacity: 0;
 }
+.tv-spot-infoblk.on { opacity: 1; }
 /* `backwards`, NEVER `both`, ON ANYTHING THAT STAYS ON THE HOME SCREEN. A finished animation with
    `forwards`/`both` fill is still "active" to the compositor for as long as the element exists, and
    Chromium cannot bound an active transform/opacity animation — so it ASSUMES OVERLAP with everything
@@ -1780,6 +1801,11 @@
   opacity: 1;
   animation: tvSpotFade .42s cubic-bezier(.2, .7, .2, 1) backwards;   /* fades with the billboard */
 }
+/* NO COPY WHILE THE KEY IS HELD. At three cards a second a synopsis cannot be read, and writing it is the
+   dearest thing a step does (see `show` in lib/tvRowStage.ts), so a hold leaves the block alone and this
+   hides it. Letting go writes the right words FIRST and drops `is-fast` after, in one task. Declared after
+   the rule above on purpose: equal specificity, later wins. */
+.tv-spot.is-fast .tv-spot-info { opacity: 0; }
 .tv-spot-meta {
   display: flex; align-items: center; flex-wrap: wrap;
   font-size: var(--sp-meta); font-weight: 600; color: #d6d6d6;

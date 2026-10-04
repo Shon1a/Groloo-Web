@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
-import { imgW } from '../../lib/img';
+import { imgW, rasterLogo } from '../../lib/img';
 import { epLabel } from '../../lib/utils';
 import { langName, sourceNote, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
@@ -715,7 +715,7 @@ export default function TvDetail(p: TvDetailProps) {
                 ? (
                   <img
                     className={logoShown ? 'title-logo rdy' : 'title-logo'}
-                    src={titleLogo}
+                    src={rasterLogo(titleLogo, 'original')}
                     alt={title}
                     decoding="async"
                     ref={(el) => { if (el?.complete && !logoShown) setLogoShown(true); }}

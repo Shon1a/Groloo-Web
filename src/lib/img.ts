@@ -12,10 +12,34 @@
  *  the rendition it always did and this rewrites whichever of the two forms it got. */
 export function imgW(url: string | undefined, size: string): string {
   return typeof url === 'string'
-    ? url
+    ? rasterLogo(url
         .replace(/\/t\/p\/(?:w\d+|original)\//, `/t/p/${size}/`)
-        .replace(/\/(img|logo)\/(?:w\d+|original)\//, `/$1/${size}/`)
+        .replace(/\/(img|logo)\/(?:w\d+|original)\//, `/$1/${size}/`))
     : (url ?? '');
+}
+
+/* ---- AN SVG WORDMARK IS FETCHED AS A PNG ON THE TELEVISION ----------------------------------
+ * Some TMDB title logos are SVGs, and for an SVG the size segment does nothing: `/t/p/w300/x.svg`
+ * is the vector original whatever width is asked for — 256KB for one measured wordmark. Worse than
+ * the bytes, an <img> of an SVG is not decoded off-thread like a raster: the engine builds a whole
+ * isolated document for it on the MAIN thread. Traced at the set's speed, one wordmark arriving cost
+ * a 160ms task ~240ms into a vertical press — the longest frames that axis had (150-200ms against a
+ * 67ms worst without one). TMDB serves the same file as a PNG at any of its widths (that wordmark:
+ * 50KB at w500), which decodes off the main thread like every other picture here.
+ *
+ * THE RASTER IS NEVER SMALLER THAN WHAT THE VECTOR DREW. An SVG was sharp at any size and the set
+ * renders at devicePixelRatio 2, so the stand-in is taken at `size`, w500 by default: the row's
+ * wordmarks (201px billboard, the tile marks) want ~400 device pixels, which w300 would upscale. The
+ * big ones — the home hero (up to 168px tall, ~750 wide) and the detail screen — ask for `original`
+ * (2000px across for the measured one, 150KB: still under the SVG, and decoded off-thread).
+ *
+ * TELEVISION ONLY. A desktop can afford the vector, and is not walking a row at a tenth of the speed. */
+const SVG_AS_PNG = import.meta.env.MODE === 'tv';
+const TMDB_SVG = /^https:\/\/image\.tmdb\.org\/t\/p\/(?:w\d+|original)\/([^/?#]+)\.svg$/i;
+export function rasterLogo(url: string, size = 'w500'): string {
+  if (!SVG_AS_PNG || !url) return url;
+  const m = TMDB_SVG.exec(url);
+  return m ? `https://image.tmdb.org/t/p/${size}/${m[1]}.png` : url;
 }
 
 /** rating badge colour by score: red <5 · yellow 5–6.9 · green 7–8.4 · blue 8.5+ */

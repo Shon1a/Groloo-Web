@@ -25,12 +25,17 @@
 
 const rows = new Set<HTMLElement>();
 let ordered: HTMLElement[] | null = null;
+/** Bumped whenever a row mounts or unmounts, so anything that cached where a row sits on the page
+ *  (TvSpatialNav's scroll targets) knows the page has changed shape under it. */
+let rowsEpoch = 0;
+export const getRowsEpoch = (): number => rowsEpoch;
 
 /** Register a row root (`.tv-spot`). Returns its own unregister, for a React effect cleanup. */
 export function registerTvRow(el: HTMLElement): () => void {
   rows.add(el);
   ordered = null;
-  return () => { rows.delete(el); ordered = null; };
+  rowsEpoch++;
+  return () => { rows.delete(el); ordered = null; rowsEpoch++; };
 }
 
 function list(): HTMLElement[] {
@@ -43,6 +48,20 @@ function list(): HTMLElement[] {
     a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
   ));
   return ordered;
+}
+
+/* ---- ROWS THAT HAVE NOT BEEN MOUNTED YET -----------------------------------------------------------
+ * Home mounts its rows in stages on a television (StagedStrips in routes/Home.tsx): the first screen at
+ * once, the rest one row per commit over the following seconds, because mounting all of them in one task
+ * is a second and a half of a dead remote. A Down that reaches the last row mounted SO FAR must not be
+ * a press that is lost to that, and must not wait for a timer either, so Home registers a function here
+ * that mounts the next row immediately (returns false when there is nothing left to mount) and
+ * `stepRow` calls it — only when focus is already on a row and the row below is past the end of the list.
+ * It is deliberately NOT asked for any other press: Down from the featured hero is not "off the end". */
+let mountNextRow: (() => boolean) | null = null;
+export function registerRowStager(fn: (() => boolean) | null): () => void {
+  mountNextRow = fn;
+  return () => { if (mountNextRow === fn) mountNextRow = null; };
 }
 
 /** What the remote actually lands on inside a row: its billboard. */
@@ -67,10 +86,37 @@ export function stepRow(from: HTMLElement | null, delta: 1 | -1): HTMLElement | 
   const at = all.indexOf(row);
   if (at < 0) return null;
   const to = at + delta;
-  if (to < 0 || to >= all.length) return null;
+  if (to < 0) return null;
+  if (to >= all.length) {
+    /* Past the last row MOUNTED is not past the last row while Home is still staging them in. The rows
+     * register in a passive effect, which React runs before a synchronous render returns. */
+    if (delta === 1 && mountNextRow && mountNextRow()) {
+      const grown = list();
+      if (to < grown.length) return focusTarget(grown[to]);
+    }
+    return null;
+  }
   return focusTarget(all[to]);
 }
 
+
+/**
+ * The first row below the featured hero, for a Down pressed ON the hero — the one vertical press that is
+ * not row to row, and so the one that still paid for the geometric search: every focusable on the page
+ * collected and measured (~107ms of script at the set's speed, against ~25 for a row-to-row press), on the
+ * first press most people make after the app opens. The answer is the same one the search gives — the
+ * first billboard below, full width — read off the tree instead. Null for anything not inside the hero,
+ * and when no row follows it yet (the rows mount in stages); the caller then falls through to the search.
+ */
+export function rowBelowHero(from: HTMLElement | null): HTMLElement | null {
+  if (!from) return null;
+  const hero = from.closest<HTMLElement>('.tv-hero');
+  if (!hero) return null;
+  for (const row of list()) {
+    if (hero.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) return focusTarget(row);
+  }
+  return null;
+}
 
 /** Where a row sits in document order, or -1 if the element is not inside a registered row. Used by
  *  the window experiment so a row can ask how far it is from the focused one without any component

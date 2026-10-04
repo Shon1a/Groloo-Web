@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
-import { imgW } from '../lib/img';
+import { imgW, rasterLogo } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
 import { useImdbTrailer, useMeta, apiIdOf } from '../lib/queries';
@@ -289,11 +289,13 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
        * trailer would visibly magnify it for nothing, whereas here every source is being cropped by
        * the box regardless. */
       cropScale: 1.2,
-      /* 720p. The rendition ladder is chosen from the box's WIDTH, and this card is the width of the
-       * screen, so left uncapped it would always pull the 1080p file — and a preview that starts
-       * sooner beats a preview that is sharper, on the one surface a viewer is sitting waiting on.
-       * Same ceiling as the row billboard, for the same reason. */
-      maxRenditionPx: 1280,
+      /* 1080p WHEN IMDb HAS IT. This was capped at 720p on the row billboard's reasoning — a preview
+       * that starts sooner beats a sharper one — but this is not a sub-1000px box: the card is the
+       * width of the screen and the crop magnifies it 1.2x more, so a 1280-wide file was being drawn
+       * ~2200 wide and read as soft (reported, with a screenshot). The ladder still falls back to the
+       * best there is below 1080p, and the row billboard keeps its own 720p ceiling. The price is a
+       * larger first few seconds to fetch before the picture can appear. */
+      maxRenditionPx: 1920,
       onFail: () => setTrailerFailed(true),
     },
   );
@@ -312,7 +314,8 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     backgroundPosition: heroBgPosition(it),
   });
 
-  const logo = cur.titleLogo || cur.logo;
+  // As a PNG if TMDB has it as an SVG — see `rasterLogo`; full size, this is the largest wordmark on screen.
+  const logo = rasterLogo(cur.titleLogo || cur.logo || '', 'original');
   const showLogo = !!logo && !logoFail[String(cur.id)];
   // type · genre · year · ★rating — the reference's "Show · Fantasy · 2022 · TV-14" line.
   const metaBits = [

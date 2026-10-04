@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { pageY, pageMax, setPageY, beginPageMove, endPageMove } from '../lib/tvPageScroll';
-import { stepRow, prepareRowWindow, rowIndexOf } from '../lib/tvRowRegistry';
+import { pageY, pageMax, setPageY, beginPageMove, endPageMove, usingTransformScroll } from '../lib/tvPageScroll';
+import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch } from '../lib/tvRowRegistry';
 import { setActiveRowIndex } from '../lib/tvRowWindow';
 
 /* REMOTE / D-PAD NAVIGATION — mounted only in the `--mode tv` build. A TV has no pointer, so
@@ -379,16 +379,102 @@ function unreachable(el: HTMLElement, r: DOMRect, curBox: Scrollable, boundary: 
   return r.bottom <= b.top + 1 || r.top >= b.bottom - 1 || r.right <= b.left + 1 || r.left >= b.right - 1;
 }
 
+/* ---- WHERE THINGS ARE ON THE PAGE, REMEMBERED UNTIL THE PAGE CHANGES SHAPE --------------------------
+ *
+ * A row's position on the page, the clearance its billboard asks for and how far the page can travel
+ * are facts about the LAYOUT, and the layout of the TV home does not change when a remote moves: rows
+ * are a fixed height, and what moves is a transform on a strip inside one. They were nonetheless read
+ * afresh on every vertical press — `getBoundingClientRect`, `getComputedStyle` and `scrollHeight`, each
+ * of which flushes pending style and layout — and on a press that has just moved focus (which dirties
+ * style) that flush is a synchronous recalculation inside the key handler: measured on the set at
+ * ~12ms, for three numbers that were the same as last time.
+ *
+ * So each is cached, with the epoch it was measured in. The epoch moves when the page can have
+ * changed shape: the viewport resized, the document's own box changed size (a row appeared above, an
+ * add-on finished loading — a ResizeObserver on <body>), or a row mounted or unmounted. A miss simply
+ * measures again, which is the old cost and no worse. */
+let geoEpoch = 0;
+const topCache = new WeakMap<HTMLElement, { top: number; e: number; r: number }>();
+const marginCache = new WeakMap<HTMLElement, number>();
+let maxCache: { v: number; e: number; r: number } | null = null;
+const bumpGeometry = () => { geoEpoch++; };
+
+/** An element's top edge in PAGE coordinates (independent of where the page is scrolled now). */
+function pageTopOf(el: HTMLElement): number {
+  const hit = topCache.get(el);
+  const r = getRowsEpoch();
+  if (hit && hit.e === geoEpoch && hit.r === r) return hit.top;
+  const top = el.getBoundingClientRect().top + pageY();
+  topCache.set(el, { top, e: geoEpoch, r });
+  return top;
+}
+
+/** Where the page must be scrolled to park `el` just under the top bar. */
+function parkTarget(el: HTMLElement): number {
+  return pageTopOf(el) - scrollMarginTop(el);
+}
+
+/** How far the page can travel, cached. */
+function pageMaxCached(): number {
+  const r = getRowsEpoch();
+  if (maxCache && maxCache.e === geoEpoch && maxCache.r === r) return maxCache.v;
+  const v = pageMax();
+  maxCache = { v, e: geoEpoch, r };
+  return v;
+}
+
+/* ---- THE PAGE MOVES ON THE COMPOSITOR, NOT ON A rAF LOOP ------------------------------------
+ *
+ * Moving row to row used to be: a requestAnimationFrame loop that, once per frame for ~280ms, worked
+ * out where the page should be and called `window.scrollTo`. Every one of those frames is main-thread
+ * work — the callback, the scroll write (which invalidates scroll-linked state across a page of
+ * rows), a paint, a commit — and the animation is only as smooth as the main thread is idle. On the
+ * television the main thread is not idle during a move, so the glide was paced by the thing least
+ * able to pace it. Profiled on the set the scroll write alone was ~37ms of the ~71ms of JavaScript
+ * a vertical press cost.
+ *
+ * `window.scrollTo({ behavior: 'smooth' })` is run by the browser's compositor thread: no callback,
+ * no per-frame JavaScript, nothing for the main thread to miss. A press that arrives mid-glide
+ * re-targets it with the velocity it already has, so a held key is ONE continuous glide rather than
+ * a series of arrivals — which is exactly what the linear-while-held curve below was written to fake.
+ *
+ * WHAT IT COSTS, STATED PLAINLY. The curve is the browser's, not ours: ease-in-out, ~445ms for one
+ * 780px row and a little under 300ms for half of that, against the 280ms ease-out this replaces. It
+ * leaves the first ~25ms nearly still and spends its last third settling. That is the trade — a move
+ * that is a few tens of milliseconds slower to arrive and cannot stutter — and the JS path below is
+ * still here, one localStorage key away (groloo.tvnativescroll = off), for a set that disagrees.
+ *
+ * VERIFIED AT RUNTIME, because a webview can be configured to scroll instantly whatever is asked of
+ * it: the first long move checks that the page had NOT already arrived two frames later, and if it
+ * had, every later move uses the JS path. */
+let nativeSmooth: boolean | null = null;
+function nativeScrollAllowed(): boolean {
+  if (nativeSmooth !== null) return nativeSmooth;
+  nativeSmooth = true;
+  try { if (localStorage.getItem('groloo.tvnativescroll') === 'off') nativeSmooth = false; } catch { /* default stands */ }
+  return nativeSmooth;
+}
+let nativeVerified = false;
+
 function makeScroller() {
   let raf = 0;
   let guard = 0;
   let running = false;
   let box: Scrollable = null;
+  /** When a native move was last started, so `stop` knows whether there may be one to cancel. */
+  let nativeAt = 0;
 
   const stop = () => {
     if (raf) cancelAnimationFrame(raf);
     if (guard) window.clearTimeout(guard);
     raf = 0; guard = 0; running = false;
+    /* A native glide is cancelled by scrolling to where the page is now, instantly. Only worth doing
+     * while one can still be running — a scroll to the current offset is otherwise a no-op, but it is
+     * not free. */
+    if (nativeAt && performance.now() - nativeAt < 900) {
+      nativeAt = 0;
+      window.scrollTo({ top: window.scrollY, behavior: 'auto' });
+    }
     /* Drop the compositor promotion the moment the page stops. Exactly one surface is promoted and
      * only while it is actually moving — a `will-change` left on permanently would pin a layer the
      * height of the entire home page on a set with 1-1.5GB of RAM. No-op on the web. */
@@ -398,8 +484,24 @@ function makeScroller() {
   const to = (container: Scrollable, y: number, instant: boolean, held = false) => {
     // Switching surfaces mid-flight would interpolate one container's position onto another.
     if (container !== box) { stop(); box = container; }
-    const target = Math.max(0, Math.min(scrollMax(container), y));
+    const target = Math.max(0, Math.min(container ? scrollMax(container) : pageMaxCached(), y));
     if (instant) { stop(); box = container; scrollSet(container, target); return; }
+    /* THE PAGE, NATIVELY. No `scrollPos` read first: it would flush layout to learn a number the
+     * browser works out itself, and scrolling to where the page already is is a no-op. */
+    if (container === null && !usingTransformScroll() && nativeScrollAllowed()) {
+      if (raf) cancelAnimationFrame(raf);
+      if (guard) window.clearTimeout(guard);
+      raf = 0; guard = 0; running = false;
+      nativeAt = performance.now();
+      window.scrollTo({ top: target, behavior: 'smooth' });
+      if (!nativeVerified && Math.abs(target - window.scrollY) > 120) {
+        nativeVerified = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (Math.abs(window.scrollY - target) < 2) nativeSmooth = false;   // it jumped: not animating
+        }));
+      }
+      return;
+    }
     const from = scrollPos(container);
     if (Math.abs(target - from) < 1) { stop(); return; }
     /* Held: constant velocity and a duration that outlives the pace, so consecutive presses chain
@@ -431,10 +533,16 @@ function makeScroller() {
   return { to, stop };
 }
 
-/** px of clearance the element asks for above itself when parked at the top of the screen */
+/** px of clearance the element asks for above itself when parked at the top of the screen. Cached per
+ *  element: it is a stylesheet value that does not change while the page is open, and reading it is a
+ *  `getComputedStyle` — a style flush. */
 function scrollMarginTop(el: HTMLElement) {
+  const hit = marginCache.get(el);
+  if (hit !== undefined) return hit;
   const v = parseFloat(getComputedStyle(el).scrollMarginTop);
-  return Number.isFinite(v) ? v : 0;
+  const out = Number.isFinite(v) ? v : 0;
+  marginCache.set(el, out);
+  return out;
 }
 
 /* THE SAME QUESTION FOR THE OTHER EDGE, AND IT WAS BEING ANSWERED WITH A CONSTANT.
@@ -465,6 +573,11 @@ export default function TvSpatialNav() {
      * a style resolve on the hot path. */
     const smoothScroll = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     const scroller = makeScroller();
+    /* The geometry cache above is only as good as its invalidation: the viewport changing size, or
+     * the document's own box changing (a row appears or finishes loading above the ones cached). */
+    window.addEventListener('resize', bumpGeometry);
+    const bodyRo = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(bumpGeometry) : null;
+    bodyRo?.observe(document.body);
     /* A real touch/drag always wins — never fight the user for the scroll position. The WHEEL used
      * to be in here for the same reason; it is now a navigation input instead (see THE REMOTE'S
      * WHEEL), because on a TV a wheel is part of the remote rather than a pointer gesture. */
@@ -651,6 +764,30 @@ export default function TvSpatialNav() {
      * the parking rules would drift, and the parking is the half that decides whether a move
      * feels deliberate or arbitrary — every line below was arrived at against the television. */
     const land = (next: HTMLElement, dir: Dir, held: boolean): boolean => {
+        /* READS FIRST, THEN WRITES. Every number this move needs — where the row sits on the page,
+         * how much clearance it asks for, how far the page can travel — is taken (from a cache
+         * that is valid unless the page has changed shape) BEFORE the first DOM write below. A
+         * layout read after `focus()` had been the whole of a vertical press's keydown cost: focus
+         * dirties style, so the next `getBoundingClientRect` / `scrollY` / `scrollHeight` forced a
+         * synchronous style + layout pass inside the key handler — 12ms of recalc on the set — to
+         * discover a position that has not changed since the page was laid out. */
+        const vertical = dir === 'up' || dir === 'down';
+        /* What to PARK, which is not always what took focus. A row billboard parks itself. The
+         * featured hero parks its whole SECTION — its focusable parts are two 54px buttons at
+         * the very bottom of a 670px card, so parking the button would leave the billboard
+         * almost entirely above the top of the screen. Coming up out of the first row should
+         * restore the hero exactly as it looks when the page is at rest. */
+        const park: HTMLElement | null = next.classList.contains('tv-spot-hero')
+          ? next
+          : next.closest<HTMLElement>('.tv-hero');
+        const toBar = vertical && !!next.closest('.tv-topnav');
+        /* The row-to-row move — the one that is nearly every vertical press — is answered entirely
+         * from the cache. The nudge below (a control that is not a row: a studio card, an add-on,
+         * the footer) keeps reading AFTER focus, as it always did, because its margins are
+         * `:focus`-dependent in the stylesheet and the focused element asks for more clearance than
+         * the same element unfocused; it is also rare, so its one flush is not what this is about. */
+        const parked = vertical && !toBar && park ? parkTarget(park) : null;
+
         /* preventScroll IS THE WHOLE REASON UP FELT WORSE THAN DOWN.
          *
          * focus() scrolls the element into view by itself, synchronously, with no animation —
@@ -685,33 +822,30 @@ export default function TvSpatialNav() {
          *
          * Everything else stays 'nearest', including every LEFT/RIGHT move — walking a row must
          * never scroll the page vertically. */
-        const vertical = dir === 'up' || dir === 'down';
-        /* What to PARK, which is not always what took focus. A row billboard parks itself. The
-         * featured hero parks its whole SECTION — its focusable parts are two 54px buttons at
-         * the very bottom of a 670px card, so parking the button would leave the billboard
-         * almost entirely above the top of the screen. Coming up out of the first row should
-         * restore the hero exactly as it looks when the page is at rest. */
-        const park: HTMLElement | null = next.classList.contains('tv-spot-hero')
-          ? next
-          : next.closest<HTMLElement>('.tv-hero');
-        const r = next.getBoundingClientRect();
-        if (vertical && next.closest('.tv-topnav')) {
+        if (toBar) {
           // The bar is fixed, so nothing would scroll — but reaching it means "take me to the
           // top", and leaving the page half way down behind a menu is not that.
           scroller.to(null, 0, !smoothScroll);
-        } else if (vertical && park) {
-          const pr = park === next ? r : park.getBoundingClientRect();
-          scroller.to(null, pageY() + pr.top - scrollMarginTop(park), !smoothScroll, held);
+        } else if (parked !== null) {
+          scroller.to(null, parked, !smoothScroll, held);
         } else {
           // Nudge-into-view only, and on the same easing so it never feels like a different app.
           // Both edges read the element's own scroll-margin now — see scrollMarginBottom for the
           // half of that which used to be a constant.
+          const r = next.getBoundingClientRect();
           const overTop = r.top - scrollMarginTop(next);
           const overBottom = r.bottom + scrollMarginBottom(next) - window.innerHeight;
-          if (overTop < 0) scroller.to(null, pageY() + overTop, !smoothScroll, held);
-          else if (overBottom > 0) scroller.to(null, pageY() + overBottom, !smoothScroll, held);
-          // horizontal clipping (a rail scrolled sideways) is still the browser's job
+          const y0 = pageY();
+          /* HORIZONTAL CLIPPING (a rail scrolled sideways) is still the browser's job, and
+           * `scrollIntoView` does both axes at once and instantly. Run BEFORE the page's own move,
+           * with the vertical half put straight back: left to run after, it would cancel a native
+           * glide that had just been started and land the page wherever 'nearest' puts it, not where
+           * the parking rules above want it (15px off, at the foot of the home screen). The JS ease
+           * used to hide this by rewriting the position from its own start on the next frame. */
           next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          if (window.scrollY !== y0) window.scrollTo({ top: y0, behavior: 'auto' });
+          if (overTop < 0) scroller.to(null, y0 + overTop, !smoothScroll, held);
+          else if (overBottom > 0) scroller.to(null, y0 + overBottom, !smoothScroll, held);
         }
       return true;
     };
@@ -736,7 +870,7 @@ export default function TvSpatialNav() {
        * is what keeps the irregular screens (settings, the detail sheet, the player's control bar)
        * working exactly as they did. The landing is shared, so a fast move parks identically. */
       if (!layer && (dir === 'up' || dir === 'down')) {
-        const stepped = stepRow(ae, dir === 'down' ? 1 : -1);
+        const stepped = stepRow(ae, dir === 'down' ? 1 : -1) ?? (dir === 'down' ? rowBelowHero(ae) : null);
         if (stepped) return land(stepped, dir, held);
       }
 
@@ -1022,6 +1156,8 @@ export default function TvSpatialNav() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('touchstart', onUserScroll);
+      window.removeEventListener('resize', bumpGeometry);
+      bodyRo?.disconnect();
       scroller.stop();
     };
   }, []);

@@ -45,6 +45,13 @@ const PREVIEWS = arg('previews', 'off');
 const OUT = arg('out', 'perf-results/local');
 const CACHE = arg('cache', join(tmpdir(), 'groloo-imgcache'));
 const HEADLESS = flag('headless');
+/* `--exe=<path>` — the browser binary to launch instead of installed Chrome. POINT IT AT PLAYWRIGHT'S
+ * chrome-headless-shell to measure at 60Hz, which is what the set's panel runs at. Installed Chrome,
+ * headless or not, follows the monitor's refresh — 240Hz on this desk's display (rAF every 4.2ms) — so
+ * the main thread is asked for four frames for every one the television draws, and at --throttle=14
+ * that baseline alone fills most of it: the press-to-press differences being measured are buried under
+ * frames the set never produces. Verify with the idle block's p50 (16.7 = 60Hz, 4.2 = 240Hz). */
+const EXE = arg('exe', '');
 const SNAP = flag('snap');
 const COMPARE = arg('compare', '');
 const DPR = Number(arg('dpr', '2'));
@@ -194,7 +201,7 @@ const VISIBLE = `(() => {
     visible.push({ x: Math.round(r.left), w: Math.round(r.width), src: img ? (img.getAttribute('src') || img.dataset.src || '') : (t.classList.contains('is-seeall') ? 'END' : ''), label: t.getAttribute('aria-label') || '' });
   }
   const on = row.querySelector('.tv-spot-layer.on .art-photo');
-  const peek = [...row.querySelectorAll('.tv-spot-previmg')].map((i) => i.getAttribute('src').split('/').pop());
+  const peek = [...row.querySelectorAll('.tv-spot-previmg')].map((i) => (i.getAttribute('src') || (i.style.backgroundImage || '').replace(/^url\\(["']?|["']?\\)$/g, '')).split('/').pop());
   return {
     stripTransform: getComputedStyle(strip).transform,
     visible,
@@ -420,7 +427,7 @@ async function soakRun(browser) {
 }
 
 /* ---- main ---------------------------------------------------------------------------------------- */
-const browser = await chromium.launch({ channel: 'chrome', headless: HEADLESS });
+const browser = await chromium.launch(EXE ? { executablePath: EXE, headless: true } : { channel: 'chrome', headless: HEADLESS });
 await mkdir(join(ROOT, OUT), { recursive: true });
 try {
   if (SOAK) {

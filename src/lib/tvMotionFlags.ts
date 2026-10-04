@@ -24,9 +24,9 @@ const read = (key: string): string => {
 };
 
 let parallax: boolean | null = null;
-/** The artwork drift, which is now a HELD key's only — a deliberate press has none, because the
- *  reference has none (the correlation series is at the head of TvSpotlight). This still turns off
- *  what remains: see BILLBOARD_PARALLAX_HELD there. */
+/** The artwork drift: every arrival on the billboard — a deliberate press and each step of a held
+ *  key alike — slides the incoming picture 3.46% in from the direction of travel, in the same
+ *  animation as its fade (`arrive` in lib/tvRowStage.ts). 'off' leaves the fade alone. */
 export function parallaxEnabled(): boolean {
   if (parallax === null) parallax = read('groloo.tvparallax') !== 'off';
   return parallax;

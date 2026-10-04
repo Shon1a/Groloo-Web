@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
+import { memo, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW, artW, artPosition } from '../lib/img';
@@ -10,12 +10,12 @@ import { retainImage, isDecoded } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { registerTvRow, rowIndexOf, prepareRowWindow, ROW_PREPARE_EVENT } from '../lib/tvRowRegistry';
-import { parallaxEnabled, springEnabled, tileFadeAlways } from '../lib/tvMotionFlags';
+import { tileFadeAlways } from '../lib/tvMotionFlags';
 import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '../lib/tvRowWindow';
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
-import { FadeBg, FadeImg } from './FadeArt';
 import { prefetchArt } from '../lib/artPrefetch';
+import { TvRowStage, SLIDE_MS, PRESS_SETTLED_MS, type StageSlot, type StagePeek } from '../lib/tvRowStage';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
  * whenever MODE === 'tv', so home rows, Upcoming and add-on catalogues all get it).
@@ -294,10 +294,8 @@ function isAnimated(it: MediaItem | null | undefined): boolean {
  * LINEAR, for the reason the strip is linear while held (see HELD_SLIDE_MS): a decelerating curve
  * makes a hold read as a sequence of little arrivals. The strip glides at constant velocity during
  * a hold and the artwork glides with it. */
-const BILLBOARD_PARALLAX_HELD = '1.6%';
-const HELD_PARALLAX_MS = 180;
-const BILLBOARD_PARALLAX_PRESS = '3.2%';
-const PRESS_PARALLAX_MS = 300;
+/* (THE DRIFT'S DISTANCES AND DURATIONS — 3.2% over 300ms for a press, 1.6% over 180ms linear for a hold —
+ * LIVE WITH THE CODE THAT RUNS THEM NOW: lib/tvRowStage.ts.) */
 
 /* ---- HOW LONG THE STRIP TAKES TO MOVE ONE CARD. Reasoning is at `step`. -------------------- */
 /** A deliberate press. MEASURED OFF A CLEAN 1080p30 CAPTURE, three presses identical to the frame:
@@ -307,7 +305,7 @@ const PRESS_PARALLAX_MS = 300;
  *  values that shipped before this one (430ms quadratic, then 230ms quintic), is on the strip's
  *  `transition` in tv.css. MOVE THE TWO TOGETHER — a duration without its curve is how the last
  *  pair went wrong. */
-const SLIDE_MS = 267;
+/* SLIDE_MS and HELD_SLIDE_MS are imported from lib/tvRowStage.ts, where the press that uses them runs. */
 
 /* ---- THE TWO ART LAYERS DO NOT TRADE PLACES SYMMETRICALLY ------------------------------------
  * The outgoing picture collapses in its first two frames and keeps a long tail; the incoming one
@@ -318,7 +316,11 @@ const SLIDE_MS = 267;
  *
  * A HELD KEY GETS NEITHER — it gets a symmetric 90ms, for the reason ART_FADE_MS_CHAINED exists:
  * neither duration fits inside the 300ms of a held press, and a trough repeated four times a
- * second is a flicker rather than a beat. Written to `--sp-layer-out` and `--sp-layer-fade`. */
+ * second is a flicker rather than a beat.
+ *
+ * (SUPERSEDED: the pair of layers no longer fade against each other at all — see the stage's
+ * LAYER_IN_MS and the `.tv-spot-layer` note in tv.css. What is recorded here is why the asymmetric
+ * pair existed; the cost of keeping it is why it does not.) */
 /* ---- THE SPRING ARM'S TWO CONSTANTS ----------------------------------------------------------
  * Critically damped: c = 2*sqrt(k), so the strip settles without ever crossing its target. A row
  * that overshoots and comes back is the one thing a poster strip must not do — the card under the
@@ -330,15 +332,12 @@ const SLIDE_MS = 267;
  * reference's measured 53ms — close, and closer than any of the curves suggested for it.
  *
  * Only read when `springEnabled()`; the shipped transition arm ignores both. */
-const SPRING_K = 620;
-const SPRING_C = 50;
+/* (THE SPRING ARM IS GONE. It was an experiment, off by default, that drove the strip from a rAF loop;
+ * a main-thread write per frame is the one thing the press path no longer does. The measurement that
+ * ruled it out is the paragraph above, and `springEnabled` is still exported from tvMotionFlags.) */
 
 /* A genuine overlap: the previous billboard remains readable while the next one rises through it.
  * Equal clocks avoid the hold-then-cut produced by the old asymmetric pair. */
-const LAYER_OUT_MS = 210;
-const LAYER_FADE_MS = 190;
-const LAYER_OUT_MS_CHAINED = 150;
-const LAYER_FADE_MS_CHAINED = 150;
 /* SLIDE_MS_CHAINED IS GONE, and what replaced it is the point. It was 320ms of the same
  * decelerating curve — "roughly half, so a hold keeps up without the curve losing its shape". The
  * curve was the problem: keeping its shape is what made a hold read as a sequence of arrivals
@@ -421,7 +420,7 @@ const HELD_STEP_MIN_MS = 300;
  * re-targeted while still in flight and never completes and stalls. Constant velocity, no arrival,
  * no relaunch: one glide for as long as the button is down. Let go and the last step lands on the
  * deliberate curve, so the row still settles rather than stopping dead. */
-const HELD_SLIDE_MS = 340;   // a little LONGER than the 300ms pace, per the note above
+/* HELD_SLIDE_MS (340ms — a little LONGER than the 300ms pace, per the note above) is in lib/tvRowStage.ts. */
 
 /* How long the focus state waits before committing — see `setOpenNow`.
  *
@@ -487,9 +486,8 @@ const TAP_STEP_MIN_MS = HELD_STEP_MIN_MS;
  * A deliberate press keeps the full 450ms, which is the settle the reference has and what makes a
  * single press feel like weight rather than a cut. A chained press gets a fade that FITS INSIDE
  * one press, so every card you fly past is a picture at full strength instead of a fifth of one. */
-const ART_FADE_MS = 110;
-/** Comfortably inside the ~120ms of a held key, so each card completes before the next arrives. */
-const ART_FADE_MS_CHAINED = 90;
+/* ART_FADE_MS (110) and ART_FADE_MS_CHAINED (90 — comfortably inside the ~120ms of a held key, so each
+ * card completes before the next arrives) are in lib/tvRowStage.ts. */
 
 /* Elements the warm-ahead has already asked to decode. It used to be a Set of URLS that latched
  * for the life of the page — which, once the warm started RETAINING into a 10-entry LRU, meant a
@@ -860,6 +858,45 @@ export interface TvSpotlightProps {
  * card, and both the cross-dissolve and the strip have to be able to hold either. */
 type Slot = MediaItem | 'end';
 
+/** What the stage shows for a stop that is not there (no title, no end card). */
+const NO_SLOT: StageSlot = {
+  key: 'none', kind: 'none', bgUrl: '', fallback: '', bgPos: '50% 50%', logoUrl: '', title: '',
+  progress: 0, endLabel: '', endIcon: '', heading: '', meta: [], plot: '',
+};
+/* A SYNOPSIS WITHOUT PICTOGRAPHS. An emoji is not in the page's typeface, so the first time one is laid out
+ * the engine goes looking for a font that has it and loads that — and a colour-emoji font is the largest
+ * thing on a television's system: measured on the desktop at the set's speed, ONE synopsis with two emoji
+ * in it cost ~290ms of layout, in the frame the card arrived, against ~10ms for the same length of plain
+ * text. They are decoration in a paragraph read from three metres away, so the billboard's copy leaves
+ * them out. (`Emoji_Presentation` is the set that draws as a picture by default — it deliberately does not
+ * include ™ © ® or the other marks that are ordinary text. The expression is built at run time so an engine
+ * without Unicode property escapes keeps the text as it is instead of failing to parse this file.) */
+let PICTOGRAPH: RegExp | null = null;
+try { PICTOGRAPH = new RegExp('[\\p{Emoji_Presentation}\\u{FE0F}\\u{200D}\\u{20E3}]+', 'gu'); } catch { /* left as it is */ }
+const plain = (s: string): string => (PICTOGRAPH && s ? s.replace(PICTOGRAPH, '').replace(/\s{2,}/g, ' ').trim() : s);
+
+/** How long the walk must be still before React is told where it has got to. See `scheduleSync`.
+ *  AFTER THE PRESS HAS FINISHED MOVING, not partway through it. This was 260ms, which was "as the
+ *  animations end" when the strip's 267ms slide was the longest of them; the copy's arrival runs to
+ *  395ms, so the render and commit landed in the last third of every deliberate press — traced at the
+ *  television's speed as two of the three late frames a single press had. (`endChain`, SLIDE_CHAIN_WINDOW
+ *  after the press, also hands React the walk; whichever comes first does it, and both are now past
+ *  the last animation.) */
+const SYNC_SETTLE_MS = PRESS_SETTLED_MS + 20;
+/** The same for a hold, whose steps are ~300ms apart. */
+const SYNC_SETTLE_HELD_MS = 700;
+/** The walk may get this far ahead of the mounted window before React is made to catch up at once:
+ *  the window carries TILES_AHEAD (9) tiles beyond the strip and the strip shows ~6. */
+const SYNC_AHEAD = 3;
+/** And this far back: TILES_BEHIND (2) tiles are mounted behind the billboard. */
+const SYNC_BEHIND = 2;
+/** How long after a press the next card is built, and how long the walk must have been still. */
+const PREFILL_AFTER_MS = 420;
+const PREFILL_QUIET_MS = 380;
+/** And during a hold: a beat after each step, with only a beat of stillness required. */
+const PREFILL_AFTER_HELD_MS = 120;
+const PREFILL_QUIET_HELD_MS = 80;
+
 export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, resumeOf, enrich, max, onMore, moreBusy, onOpen }: TvSpotlightProps) {
   const t = useT();
   const genre = useGenre();
@@ -950,11 +987,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const el = sectionRef.current;
     return el ? registerTvRow(el) : undefined;
   }, []);
-  // Two billboard layers that swap which is on top, so a change cross-dissolves rather than cuts.
-  const [xfade, setXfade] = useState<{ a: Slot; b: Slot | null; front: 'a' | 'b' }>(
-    () => ({ a: list[0], b: null, front: 'a' }),
-  );
-  const firstRun = useRef(true);
   const trackRef = useRef<HTMLDivElement>(null);
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
    *  Up here with the other refs because `step` is defined past an early return. */
@@ -986,119 +1018,59 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const lastDir = useRef(1);
   /** Clears `is-cut` after a catalogue change; held so a second change cannot leave it stuck on. */
   const cutId = useRef(0);
-  /* ---- THE PEEK'S OUTGOING CARD, CARRIED ONE RENDER FORWARD --------------------------------
-   * The two-tile peek needs the poster it is REPLACING as well as the new one. These live up here
-   * rather than beside the markup that uses them because there is an `if (!n) return null` between
-   * the two, and a hook below an early return does not run on an empty row — the rules-of-hooks
-   * trap this file's shape sets, and which it already warns about at the `--active` layout effect.
-   *
-   * The effect carries no dependency array on purpose: it runs after every commit and simply moves
-   * "current" into "previous", so the render below always sees the value from the commit before it.
-   * Writing `peekSrcRef` during render is the same thing `liveActive` already does here. */
-  const prevOutRef = useRef<PeekArt>(EMPTY_PEEK);
-  const peekSrcRef = useRef<PeekArt>(EMPTY_PEEK);
-
-  /* ---- THE PEEK SLIDES BY `animate()`, NOT BY REMOUNTING ------------------------------------
-   * IT WAS A KEYED REMOUNT, and that is what made the peek go blank for the whole slide. A CSS
-   * animation only restarts if the element is new, so the track was keyed on the incoming poster —
-   * which remounted BOTH `FadeImg`s with it. Each one then began at `opacity: 0`, re-ran
-   * `useImageReady` from scratch and faded up over 220ms, so the cards were invisible during
-   * exactly the movement they were supposed to be performing.
-   *
-   * MEASURED, recording the built page and running the reference's own pipeline over it: the peek
-   * band held mean 8.7 / sd 1.1 — a flat colour with no texture, which is the container's gradient
-   * showing through two transparent images — for 280ms, and the poster only appeared at 320ms,
-   * after the slide had finished. The reference never drops below sd ~9 and is textured throughout.
-   *
-   * `Element.animate` needs no remount, so the images keep their decoded bitmaps and their opacity.
-   * Keyed on the incoming poster, which is what "the peek changed" means; the resting transform
-   * stays in CSS, so when the animation releases there is nothing to snap back to. */
+  /* ---- THE STAGE'S NODES ---------------------------------------------------------------------
+   * The two billboard layers and their plates, the copy block and the peek are EMPTY CONTAINERS as
+   * far as React is concerned — it renders them once and never their children — and lib/tvRowStage.ts
+   * fills them and flips them. These refs are how it finds them. They live up here rather than
+   * beside the markup because there is an `if (!n) return null` between the two, and a hook below
+   * an early return does not run on an empty row. */
+  const stageRef = useRef<TvRowStage | null>(null);
+  const layerARef = useRef<HTMLDivElement>(null);
+  const layerBRef = useRef<HTMLDivElement>(null);
+  const plateARef = useRef<HTMLDivElement>(null);
+  const plateBRef = useRef<HTMLDivElement>(null);
+  const infoARef = useRef<HTMLDivElement>(null);
+  const infoBRef = useRef<HTMLDivElement>(null);
+  const prevRef = useRef<HTMLDivElement>(null);
   const prevTrackRef = useRef<HTMLDivElement>(null);
-  const peekAnim = useRef<Animation | null>(null);
-  const peekFirst = useRef(true);
-  /** The peek's tile pitch, measured once and reused — see the note in the effect. 0 = not yet. */
-  const peekStride = useRef(0);
-  useEffect(() => {
-    const drop = () => { peekStride.current = 0; };
-    window.addEventListener('resize', drop);
-    return () => window.removeEventListener('resize', drop);
+  /** The walk index whose slot is on the front layer — what `refresh` repaints, and what a swap
+   *  still waiting on a decode has not yet replaced. */
+  const shownAt = useRef(0);
+  /** A swap waiting on a decode: the token that tells a stale one, and the timer that caps it. */
+  const gate = useRef({ id: 0, timer: 0 });
+  /** Whether the stage is on the held-key timings, so they are written when they change and not on
+   *  every press. */
+  const paceHeld = useRef(false);
+  /** A commit is owed to React: the walk is ahead of `active` / `pos`. `syncId` is its coalescing
+   *  timer. See `syncNow`. */
+  const syncOwed = useRef(false);
+  const syncId = useRef(0);
+  /** The prefill's timer, and how long the walk must have been still for it to run. */
+  const prefillTimer = useRef(0);
+  const prefillQuiet = useRef(PREFILL_QUIET_MS);
+  /* Latest-render closures, for the timers and callbacks that outlive the render that made them. */
+  const endChainRef = useRef<() => void>(() => {});
+  const syncLatest = useRef<() => void>(() => {});
+  const describeLatest = useRef<(s: Slot | undefined) => StageSlot>(() => NO_SLOT);
+  const peekLatest = useRef<(at: number) => StagePeek>(() => ({ art: null, gradient: '' }));
+  /** The committed state, mirrored, so `syncNow` can tell whether a commit would change anything. */
+  const activeLatest = useRef(0);
+  const posLatest = useRef(0);
+  const dweltRef = useRef<MediaItem | null>(null);
+  useEffect(() => () => {
+    window.clearTimeout(syncId.current);
+    window.clearTimeout(gate.current.timer);
+    window.clearTimeout(prefillTimer.current);
+    gate.current.id++;
+    if (cutId.current) window.clearTimeout(cutId.current);
   }, []);
-  useEffect(() => () => { peekAnim.current?.cancel(); if (cutId.current) window.clearTimeout(cutId.current); }, []);
-  useEffect(() => {
-    if (peekFirst.current) { peekFirst.current = false; return; }
-    const el = prevTrackRef.current, root = sectionRef.current;
-    if (!el || !root || reduceMotion) return;
-    /* `lastDir`, not `getComputedStyle(root)` — the same number `step` wrote to `--sp-dir`, read
-     * from where it already is in JS. Reading it back off the node forced a full style
-     * recalculation of a freshly-committed row on every press, before the frame's own. */
-    const dir = lastDir.current;
-    /* ---- THE STRIDE IS MEASURED, NOT READ OFF A CUSTOM PROPERTY -----------------------------
-     * `--sp-wp` and `--sp-gap` are UNREGISTERED, so their computed value is the token stream they
-     * were written as — `calc(clamp(240px, …) * 0.615)` — and `parseFloat` of that is NaN. The
-     * guard below then swallowed it and the slide silently never ran: probed in the browser,
-     * `getAnimations()` returned 0 and the track sat at its resting -329px through every press.
-     * The distance between the two tiles is the same number, already resolved, and costs one
-     * layout read per deliberate press. */
-    /* MEASURED ONCE, NOT PER PRESS. Two `getBoundingClientRect` calls here forced a synchronous
-     * layout of the just-committed row on every press, for a pitch that only changes when the
-     * viewport does — cached, and dropped on resize. */
-    const tiles = el.children;
-    if (tiles.length < 2) return;
-    if (!(peekStride.current > 0)) {
-      peekStride.current = tiles[1].getBoundingClientRect().left - tiles[0].getBoundingClientRect().left;
-    }
-    const stride = peekStride.current;
-    if (!Number.isFinite(stride) || stride <= 0) { peekStride.current = 0; return; }
-    const end = dir > 0 ? -stride : 0;
 
-    /* ---- A HELD KEY GLIDES, IT DOES NOT RE-RUN --------------------------------------------
-     * THE DEFECT: holding a direction made the up-next posters glide while the peek stepped, since
-     * this effect used to bail on `is-fast` entirely. It is the same rail; it has to move like one.
-     *
-     * WHY IT CANNOT SIMPLY REPLAY. A held press arrives every 300ms (HELD_STEP_MIN_MS) into a
-     * 260ms glide, so the previous run is ~85% done when the next begins. Restarting from the
-     * nominal start would throw the content backwards by the missing 15% — the stutter this row
-     * spent a whole pass removing from the strip itself.
-     *
-     * THE SWAP IS WHAT MAKES CONTINUING EXACT. When the pair advances, the outgoing tile takes the
-     * incoming one's place, so the SAME picture that was at track position x is now at x - stride.
-     * Adding one stride to wherever the transform actually is therefore names the identical frame
-     * under the new pair, and the glide carries on from precisely where it was rather than from
-     * where it would have been. The extra distance is real and wanted: the walk owes it.
-     *
-     * Read BEFORE cancelling — cancelling reverts the computed transform to the resting value, and
-     * then there is nothing left to continue from. That is also why the animation is held in a ref
-     * and torn down on unmount rather than in this effect's cleanup, which runs first. */
-    const held = root.classList.contains('is-fast');
-    const prev = peekAnim.current;
-    let from = end + dir * stride;
-    if (prev && prev.playState === 'running') {
-      from = new DOMMatrixReadOnly(getComputedStyle(el).transform).e + dir * stride;
-      prev.cancel();
-    }
-    /* Linear while held, for the reason the strip is (see HELD_SLIDE_MS): a decelerating curve
-     * re-aimed four times a second reads as a sequence of little arrivals rather than one move. */
-    peekAnim.current = el.animate(
-      [{ transform: `translateX(${from}px)` }, { transform: `translateX(${end}px)` }],
-      held
-        ? { duration: HELD_SLIDE_MS, easing: 'linear' }
-        : { duration: SLIDE_MS, easing: 'cubic-bezier(.33, 1, .68, 1)' },
-    );
-    /* KEYED ON `active`, NOT ON THE POSTER URL. `peekSrcRef` is assigned in the render body BELOW
-     * this hook, so reading it as a dependency captures the value from the PREVIOUS render and the
-     * slide fires a press late — measured as a peek band frozen at mean 69.3 / sd 17.1 for the
-     * whole press while the strip travelled underneath it. `active` is state declared above, it
-     * changes exactly when the peek's card does, and it is already what every other press-driven
-     * effect in this file hangs off. */
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-  /* ---- WHERE THE WALK ACTUALLY IS, WHILE THE KEY IS HELD -------------------------------------
-   * A chained press no longer calls setActive (see `step`), so for the length of a hold the React
-   * state is stale on purpose and THIS is the truth. `chaining` says a commit is owed; `endChain`
-   * pays it when the remote lets go. Everything that must not lag behind a hold — OK opening a
-   * title, chiefly — reads `liveActive` rather than `active`. */
+  /* ---- WHERE THE WALK ACTUALLY IS ------------------------------------------------------------
+   * The walk's truth is these two refs, not the React state: a press writes the nodes and moves
+   * them, and the state follows in a transition a few tens of milliseconds later (`syncNow`).
+   * Everything that must not lag the remote — OK opening a title, chiefly — reads `liveActive`
+   * rather than `active`. */
   const liveActive = useRef(0);
-  const chaining = useRef(false);
   /** The dwell timer, hoisted out of its effect so a held key can cancel it without a re-render. */
   const dwellId = useRef(0);
   /** One in-flight tile promotion at a time — see `promoteSoon`. */
@@ -1180,142 +1152,31 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * feature the set will stutter through. See lib/tvPreviewPolicy.ts for how a set is classed and
    * why the test errs toward leaving the feature ON. */
   const rowTrailers = previewsAllowed(useSettings((s) => s.settings.tvRowTrailers));
-  /* ---- THE BILLBOARD'S PARALLAX, MEASURED ---------------------------------------------------
+  /* ---- THE BILLBOARD'S PARALLAX, MEASURED — and where it runs now -------------------------------
    *
-   * The reference clip was pulled apart frame by frame and then correlated numerically — a single
-   * row of pixels out of the billboard, matched against the settled frame for the best (scale,
-   * offset) at each step. Eyeballing contact sheets got this wrong twice, in both directions, and
-   * the numbers are worth writing down so nobody has to guess a third time:
+   * The reference clip was pulled apart frame by frame and correlated numerically against the
+   * settled frame. SCALE = 1.000, every frame: no zoom, no Ken Burns. OFFSET decays +24px -> 0
+   * across frames 10-23 at 30fps (24, 22, 18, 15, 12, 9, 7, 5, 4, 3, 2, 1, 1, 0) — 3.2% of a 753px
+   * card, arriving from the side the press came from; the strip decays at the same ratio, one curve
+   * and one duration with two distances. At 3.2% it is invisible in a downscaled contact sheet,
+   * which is exactly why reading the tiles said "nothing moves"; in motion it is the whole feel.
    *
-   *   SCALE = 1.000, every frame. There is no zoom, no Ken Burns, no card growing out of the
-   *   strip. Whatever it looks like, the picture is never resized.
+   * THE PICTURE MOVES, NOT THE LAYER: the layer also carries the title plate, and the reference
+   * holds that still — drifting it would make the billboard slide as one panel, the opposite of
+   * parallax. `.tv-spot-art` is the photograph alone, overscanned in tv.css so the drift never pulls
+   * an edge into frame. The incoming picture only: the leaving one is fading out in its first two
+   * frames, where 1.6-3.2% of movement cannot be seen.
    *
-   *   OFFSET decays +24px → 0 across frames 10-23 at 30fps: 24, 22, 18, 15, 12, 9, 7, 5, 4, 3, 2,
-   *   1, 1, 0. So the incoming artwork DOES drift — 24px on a 753px card, 3.2% — arriving from the
-   *   side the press came from and easing into place. At 3.2% it is invisible in a downscaled
-   *   contact sheet, which is exactly why reading the tiles said "nothing moves"; in motion it is
-   *   the whole feel.
+   * THE COPY MOVES WITH THE PICTURE, NOT AFTER IT. The genre/year/rating line and the synopsis change
+   * in the same frame as the billboard and arrive with the same motion, so picture and text read as
+   * one card changing. A deliberate press gets the reference's own copy motion (quartic ease-out,
+   * 41.5px, 395ms; quadratic fade, 365ms); a hold gets the picture's short linear drift, because a
+   * 395ms arrival cannot finish inside a 300ms walking pace.
    *
-   *   THE STRIP DECAYS AT THE SAME RATE — measured 57, 47, 38, 31, 24, 19, 14, 10, 7, 5 — a ratio
-   *   of ~0.82 per frame, identical to the artwork's. One curve, one duration, two distances. That
-   *   ratio is an exponential settle with a ~170ms time constant, which is why the easing below is
-   *   an expo-style ease-out and not the ease-in-out an earlier pass used: the movement is fastest
-   *   at the very first frame and spends most of its life almost stopped.
-   *
-   * DRIVEN RATHER THAN DECLARED for the reason it always was: the two layers alternate, so the one
-   * element that is not-front has to mean "about to enter" before the swap and "just left" after
-   * it — one class, two opposite offsets, impossible in a stylesheet. `Element.animate` restarts
-   * cleanly per press, needs no remount, and composites. */
-  useEffect(() => {
-    const root = sectionRef.current;
-    if (!root || reduceMotion) return;
-    /* MEASUREMENT SWITCH, default on. Two `Element.animate()` calls per press are two compositor
-     * animations, and `Layerize` appears in the traced bad frames — so this needs to be separable
-     * from everything else the press does. See lib/tvMotionFlags.ts. */
-    const drift = parallaxEnabled();
-    const held = root.classList.contains('is-fast');
-    /* `lastDir`, not `getComputedStyle(root).getPropertyValue('--sp-dir')`: that read forced a full
-     * style recalculation of the freshly-committed row on every press, ahead of the frame's own.
-     * `--sp-dir` is still unset until a press has happened, which is what the guard below checked;
-     * the node's inline style answers that without resolving anything. */
-    if (!root.style.getPropertyValue('--sp-dir')) return;   // not reached by a press; nothing to explain
-    const dir = lastDir.current;
-    /* NOT `--sp-slide`. The strip's held duration (HELD_SLIDE_MS, 260ms) is deliberately LONGER
-     * than the press pace so that it never completes and never stalls — and a drift built to the
-     * same number would inherit exactly the overlap this is arranged to avoid. */
-    const slide = held ? HELD_PARALLAX_MS : PRESS_PARALLAX_MS;
-    const distance = held ? BILLBOARD_PARALLAX_HELD : BILLBOARD_PARALLAX_PRESS;
-    const from = `translateX(calc(${dir} * ${distance}))`;
-    /* THE PICTURE MOVES, NOT THE LAYER. The layer also carries the title plate, and the reference
-     * holds that still — drifting it would make the billboard slide as one panel, which is the
-     * opposite of parallax. `.tv-spot-art` is the photograph alone, and it is overscanned in
-     * tv.css so the drift never pulls an edge into frame. */
-    /* THE INCOMING PICTURE ONLY. The leaving one used to drift `away` as well — a second
-     * compositor animation per press for a layer that is fading out in its first two frames
-     * (LAYER_OUT_MS is fast-out), where 1.6-3.2% of movement cannot be seen. One drift per press. */
-    const timing = { duration: slide, easing: held ? 'linear' : 'cubic-bezier(.22, 1, .36, 1)' };
-    const anims = drift
-      ? Array.from(root.querySelectorAll<HTMLElement>('.tv-spot-layer.on .tv-spot-art')).map((el) =>
-          el.animate([{ transform: from }, { transform: 'none' }], timing))
-      : [];
-    /* ---- THE COPY MOVES WITH THE PICTURE, NOT AFTER IT --------------------------------------
-     * The user's ask, and what the reference does: the genre/year/rating line and the synopsis
-     * change IN THE SAME FRAME as the billboard and arrive with the SAME motion — same side, same
-     * distance, same duration, same curve — so picture and text read as one card changing.
-     * They are rendered from `xfade`'s front slot, so the text swaps in the commit that swaps the
-     * picture, and this starts both animations in one call site so they cannot drift apart.
-     *
-     * ONE animation on ONE block. The old per-press copy was four transitions on two stacked
-     * blocks (a cross-fade and a slide each) — the costliest thing a press animated on the
-     * 65UT8100. The out is a cut (the block is re-rendered with the new title), which is what the
-     * reference's copy does on the press frame. WAAPI with no `fill`, so it ENDS: a held final
-     * frame would stay "active" and make the compositor promote everything painted after it (see
-     * tv.css `.tv-spot.is-open .tv-spot-info`). With the drift switched off the text still fades in
-     * on the picture's clock rather than cutting. */
-    const copy = root.querySelector<HTMLElement>('.tv-spot-infoblk');
-    if (copy && copy.childElementCount) {
-      if (held) {
-        /* A HOLD keeps the picture's own short linear drift: a 395ms arrival cannot finish inside a
-         * 300ms walking pace, and text still settling when the next title lands is the smear the
-         * reference never shows. */
-        anims.push(copy.animate(
-          drift ? [{ opacity: 0, transform: from }, { opacity: 1, transform: 'none' }] : [{ opacity: 0 }, { opacity: 1 }],
-          timing,
-        ));
-      } else {
-        /* A DELIBERATE PRESS gets the reference's own copy motion, measured off its frames and fitted
-         * with the time base pinned to the press (these were the numbers in tv.css before the copy
-         * was rest-gated; see git history of `.tv-spot-infoblk.on`):
-         *   slide    quartic ease-out, 41.5px (4.6% of the billboard's width), 395ms, RMS 0.057px
-         *   opacity  quadratic ease-out, 365ms, RMS 0.89%
-         * It STARTS on the same frame as the picture (that is the sync) but travels further and
-         * settles later and softer than the art's 3.2% drift — the picture answers the press, the
-         * text glides in under it. Two animations because the two properties have their own
-         * durations and curves; both are on one element and both end (no fill).
-         * `var(--sp-wl)` is the billboard width the reference's 4.6% was measured against. */
-        if (drift) {
-          anims.push(copy.animate(
-            [{ transform: `translateX(calc(${dir} * var(--sp-wl) * 0.046))` }, { transform: 'none' }],
-            { duration: 395, easing: 'cubic-bezier(.25, 1, .5, 1)' },
-          ));
-        }
-        anims.push(copy.animate(
-          [{ opacity: 0 }, { opacity: 1 }],
-          { duration: 365, easing: 'cubic-bezier(.25, .46, .45, .94)' },
-        ));
-      }
-    }
-    /* NOT SEEKED TO THE STRIP'S CLOCK, AND THE ATTEMPT IS WORTH RECORDING so nobody spends the
-     * television time on it twice. The theory was that this effect starts late — it waits for the
-     * swap commit, for the reason below — so the drift should be created and then advanced to
-     * wherever the strip's transition already is. Built, shipped to the set, measured: no change.
-     *
-     * `document.getAnimations()` on the moving row says why. Censused on the first frame the strip
-     * actually moves, the strip's transition is 17ms in and these animations are at 0 — ONE FRAME
-     * apart, not the tenth of a second the earlier reading suggested. There is nothing to seek to,
-     * so the seek never fired and the code was pure weight. The lag that reading appeared to show
-     * came from the metric, not the app: the leaving layer animates none -> away, so its transform
-     * does not differ from its resting value until the animation is already under way, and "when
-     * did it last change" then lands at the post-animation snap back to none.
-     *
-     * What DID matter was the curve. That reasoning belonged to the deliberate drift, which is now
-     * gone; a held drift is linear and has nothing to be in step with but the pace. */
-    return () => anims.forEach((a) => a.cancel());
-    /* KEYED ON `xfade.front`, NOT ON `active`, AND THAT IS A BUG FIX RATHER THAN A TIDY-UP.
-     *
-     * Which layer is entering is read off the DOM (`.on`), so this has to run AFTER the swap has
-     * been committed. `active` changes one commit EARLIER — the cross-fade slots are updated by
-     * their own effect, which is state, so it lands a commit later. Keyed on `active`, this ran
-     * while the OLD layer still carried `.on`: it gave the outgoing picture the entering
-     * animation, gave the incoming one nothing, and the drift was on the wrong element and in the
-     * wrong direction.
-     *
-     * It was invisible by inspection and obvious the moment the running page was measured — the
-     * front layer's transform went 0 → -23px and then snapped back, which is the "leaving"
-     * keyframe playing on the arriving card. `xfade.front` is the signal that means "the swap has
-     * happened", so it is the one to hang this on. */
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [xfade.front]);
+   * It used to be an effect keyed on which layer was in front, which could only run a commit AFTER
+   * the swap; it is one call inside the stage's `show` now (lib/tvRowStage.ts `arrive`), made in the
+   * same task as the swap, so the picture and its copy cannot drift apart. The localStorage switch
+   * is unchanged (lib/tvMotionFlags.ts `parallaxEnabled`). */
   /* Selected field by field rather than as one object: every row on the screen subscribes to
    * this store, and a selector returning `{on, toggle}` would build a new object per render and
    * re-render all dozen of them on any state change anywhere. */
@@ -1381,12 +1242,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /* Per TITLE, not per row: an Animation entry sitting in a mixed row still wants its own framing,
    * and the row a thing appears in says nothing about how it was shot. See the crop constants. */
   const trailerCrop = isAnimated(dwelt) ? TRAILER_CROP_NATIVE : TRAILER_CROP_LETTERBOXED;
-  /* Written to the node rather than held in state, and set on the SECTION so it inherits down to
-   * the slot: this changes at most once per dwell, long after the keypress it followed, and a
-   * re-render of the whole row to carry one number would be work the shelf cannot afford. */
-  useEffect(() => {
-    sectionRef.current?.style.setProperty('--sp-trailer-crop', String(trailerCrop));
-  }, [trailerCrop]);
   /* LATCHED, AND THE LATCH IS WHAT KEEPS THIS FROM OSCILLATING. Most cards carry their IMDb id,
    * but the ungated feeds (Upcoming, the Featured Hero) do not, and without one there is nothing
    * to ask /api/imdb-trailer with. Reading the id straight off `trailerMeta` would spin: an id
@@ -1437,9 +1292,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * playing the one the backend guessed at. The crop is the magnification in tv.css, and it
        * belongs in this number: a video blown up 1.35x is sampled at 1.35x its box. */
       renditions: imdbTrailer.data?.urls,
-      /* MUST BE THE SAME NUMBER THE STYLESHEET IS SCALING BY — it tells the engine how much CSS
-       * magnifies the video over its box, so a preview cropped 1.35x is sampled at 1.35x. The one
-       * value drives both, through `--sp-trailer-crop` below. */
+      /* THE CROP ITSELF, applied by the engine: it lays the <video> out this much larger than the
+       * billboard, centred, and the slot clips the rest (see `place` in useVideoTrailer — a CSS
+       * transform did not reach the picture on the set). It also sizes the rendition, since a
+       * preview cropped 1.35x is sampled at 1.35x its box. */
       cropScale: trailerCrop,
       /* 720p AND NO HIGHER, because on this shelf a preview that starts sooner beats a preview
        * that is sharper. The billboard was pulling the 1080p file on every rest — roughly twice
@@ -1734,181 +1590,133 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * Down. Opening a row prepares around it. */
   useEffect(() => { if (open) prepareRowWindow(sectionRef.current); }, [open]);
 
-  /* Drive the cross-dissolve off `active`: load the focused title into the hidden layer and flip
-   * it to the front.
+  /* ---- THE STAGE — what the billboard, its plate, the copy and the peek show -------------------
+   * Written by lib/tvRowStage.ts, driven from here. These four functions are the whole interface
+   * between this component's data (items, artwork the row has been allowed, what `enrich` found, the
+   * resume bar) and the nodes the stage owns: they turn a stop of the walk into plain strings.
    *
-   * ALSO OFF `n`, which is what makes the "load more" card work. Pressing OK on it does not move
-   * the walk — the position it is standing on simply stops being the end card and becomes the
-   * first title of the batch that just arrived. Without the length in here nothing would tell the
-   * billboard that, and it would go on showing a "+" card until the next press. */
-  /* ---- THE SWAP WAITS FOR A PICTURE TO SWAP TO ----------------------------------------------
-   * THE DEFECT: the billboard blinked through black on every press, briefly and unmistakably.
-   *
-   * It was the two fades disagreeing about what they were for. The LAYER cross-dissolves in 90ms
-   * (tv.css) — deliberately, it is a reaction and not a journey — but the PHOTOGRAPH inside it is
-   * held at zero until `decode()` resolves and then takes 450ms to arrive (FadeBg). So the layers
-   * traded places long before the incoming layer had anything in it, and for the gap between them
-   * the billboard was showing the only thing that layer HAD: `heroFallbackGradient`, which is
-   * hsl(0 0% 14%) → hsl(0 0% 6%). That gradient is doing its real job on a cold row, where it
-   * holds the frame while the first picture loads. Mid-walk it is just black.
-   *
-   * FadeBg could not have fixed this from the inside. It guarantees a picture arrives WHOLE, which
-   * it does — the banding is gone. It cannot know that the thing underneath it is a layer being
-   * dissolved to, and nothing at that level can: the decision "is there anything to dissolve to
-   * yet" belongs to whoever owns both layers, which is here.
-   *
-   * So the press now holds the swap until the incoming bitmap is decoded, and the cross-dissolve
-   * goes picture → picture the way it always read as intending to. The gradient stays exactly
-   * where it was for the case it was written for and is never seen on a walk.
-   *
-   * THE ROW IS NOT HELD WITH IT. The strip slides off `active` and moves on the press frame
-   * regardless, so the press is always answered instantly — it is the artwork that arrives on the
-   * beat rather than early and empty, which is also what the reference does.
-   *
-   * WARM, THIS COSTS NOTHING AND IS THE NORMAL CASE: `complete && naturalWidth` is checked first,
-   * so a neighbour the effect below already fetched flips synchronously, with no wait at all and
-   * not a frame's delay against the old behaviour. */
-  /* What the walk is currently pointing AT, as a stable string. `end` is its own value because the
-   * end card is a real stop with no id of its own. */
-  /* The committed state is the source of truth whenever React DOES commit; `liveActive` only runs
-   * ahead of it during a hold. Re-syncing here keeps a deliberate press, a catalogue change and the
-   * load-more reset from leaving the two disagreeing. */
-  /* Both halves of the anchor, together: `pos` is committed beside `active` on every press, so
-   * the two refs can never disagree with the two states here. There is no longer anything to haul
-   * back when a hold ends — the strip's position IS where the walk is, in a coordinate that does
-   * not wrap — so the silent hop this used to arm exists only for the two cases that genuinely
-   * teleport the strip (a catalogue cut, the rare rebase), and they set `silentHop` themselves. */
-  if (!chaining.current) { liveActive.current = active; stripPos.current = pos; }
+   * THEY READ THE LATEST RENDER THROUGH A REF (`describeLatest`, `peekLatest`), because the stage is
+   * called from key handlers, timers and decode callbacks created in earlier renders — a closure
+   * from then would describe the row as it was, not as it is. */
+  /* AT THE SIZE IT IS PAINTED, which for a wordmark on the billboard is 201px wide at most (62% of
+   * the card, capped at 84px tall — see tv.css). The URL arrives as w500 and was used as it came,
+   * so every logo on the screen was a 2.5x oversample: fetched, decoded and held at four times the
+   * pixels it can show. w300 is the next step TMDB offers and still leaves headroom on a HiDPI
+   * panel. Non-TMDB URLs pass through imgW untouched. */
+  const logoOf = (it: MediaItem) => imgW(it.titleLogo || it.logo || '', LOGO_RENDITION) || undefined;
 
-  const activeSlot = slotAt(active);
-  const activeKey = activeSlot === 'end' ? 'end' : String(activeSlot?.id ?? '');
-
-  /* ---- A NEW CATALOGUE IS A NEW ROW ---------------------------------------------------------
-   * The three top-level pages share one component instance (see the note on `activeKey` in the
-   * effect below), so nothing about a route change resets this row on its own: the walk stays
-   * where it was on the previous page and the cross-fade layers still hold its artwork. Landing
-   * on Anime at card nine of Movies is not a state anyone asked for.
-   *
-   * DETECTED FROM THE HEAD OF THE LIST rather than from a `cat` prop, because these rows are not
-   * given one — TvCatalogRow passes items and nothing else. The first title's id is the cheapest
-   * thing that changes when the catalogue does and stays put when it does not: appending a page
-   * of results does not touch it, and neither does `enrich` filling artwork into a card already
-   * on screen.
-   *
-   * THE BILLBOARD IS CUT, NOT DISSOLVED. Both layers are rewritten in one go rather than left to
-   * the swap effect: a cross-fade means "this row moved to its neighbour", and a whole page
-   * changing underneath is not that. Dissolving Movies' billboard into Anime's would read as one
-   * row walking sideways across a page boundary. */
-  const headId = list.length ? String(list[0].id) : '';
-  const prevHead = useRef(headId);
-  useEffect(() => {
-    if (prevHead.current === headId) return;
-    prevHead.current = headId;
-    /* ---- A CATALOGUE CHANGE IS A CUT, AND THIS IS WHAT ENFORCES IT ---------------------------
-     * Rearranging the slots is not enough. A new catalogue also changes `activeKey` — the id of
-     * the title under the walk — so the SWAP effect below fires on the same change and dissolves
-     * the billboard and slides the copy, which is the walk animation playing itself on a page
-     * change. Measured: opening Series from Movies gave 36 frames of copy slide and 21 of
-     * cross-fade, and it moved around as the page order changed, because which slot was in front
-     * decided whether the two effects happened to cancel.
-     *
-     * So the row is marked for the length of the change and the stylesheet takes every transition
-     * off (`.tv-spot.is-cut`, beside the `is-fast` block it is modelled on). Whatever the slots do,
-     * nothing animates.
-     *
-     * THE TIMER OUTLASTS `SWAP_WAIT_CAP` deliberately: the swap can be held up to 200ms waiting on
-     * the incoming bitmap to decode, so a class dropped on the next frame would be gone before the
-     * flip it exists to silence. 260ms is that cap plus a frame, and the only thing it can wrongly
-     * catch is a walk begun inside a quarter second of arriving on a new page. */
-    const cutEl = sectionRef.current;
-    cutEl?.classList.add('is-cut');
-    if (cutId.current) window.clearTimeout(cutId.current);
-    cutId.current = window.setTimeout(() => {
-      cutId.current = 0;
-      cutEl?.classList.remove('is-cut');
-    }, SWAP_WAIT_CAP + 60);
-    /* The strip goes back to its origin with the walk, and it must not be seen travelling there:
-     * `is-cut` silences the billboard's transitions but the strip's own is a separate rule, so the
-     * hop is flagged for the layout effect that writes `--active`. The refs move now, because the
-     * render this commit triggers re-syncs them from state and the two must already agree. */
-    liveActive.current = 0;
-    stripPos.current = 0;
-    silentHop.current = true;
-    setActive(0);
-    setPos(0);
-    /* ---- THE CUT KEEPS WHICHEVER LAYER IS ALREADY IN FRONT ----------------------------------
-     * This wrote `{ a: list[0], b: null, front: 'a' }`, which is a cut in every respect except
-     * one: it MOVES `front`. If the row had been walked an odd number of times, front was 'b', so
-     * forcing it to 'a' handed `.on` to the other pair of elements — and both of them animate when
-     * they receive it. The copy slid in from the side and the billboard cross-dissolved, on a page
-     * change, which is precisely the "the row plays its walk animation on its own" this whole pass
-     * is about.
-     *
-     * MEASURED: opening Series from Movies gave 24 frames of copy slide and 14 of cross-fade, and
-     * ONLY on that transition — because the first reset leaves front at 'a', so every later page
-     * change already matched and moved nothing. An intermittent fault with a one-shot cause.
-     *
-     * Writing the new title into the slot that is ALREADY front keeps `.on` where it is, so
-     * nothing transitions and the change is the hard cut it was always meant to be. */
-    setXfade((s) => (s.front === 'a'
-      ? { a: list[0], b: null, front: 'a' }
-      /* `a` is left as it was rather than nulled — it is the BACK layer here, so it is already at
-         opacity 0 and invisible, and the slot is not nullable anyway. */
-      : { ...s, b: list[0] }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [headId]);
-
-  useEffect(() => {
-    if (firstRun.current) { firstRun.current = false; return; }
-    /* `?? list[0]` because `active` can outlive the list it indexes. The reset above puts it back
-     * to 0, but that is state and lands a commit later — so for one render after a new category
-     * arrives, a walk that had reached card twelve of a twenty-card row is indexing a six-card
-     * one. Falling back to the head rather than reading `undefined` keeps that frame on the first
-     * title of what actually arrived instead of throwing inside `withArt`. */
-    const slot = slotAt(active) ?? list[0] ?? 'end';
-    let spent = false;
-    const flip = () => {
-      if (spent) return;
-      spent = true;
-      setXfade((s) => {
-        const back: 'a' | 'b' = s.front === 'a' ? 'b' : 'a';
-        return { ...s, [back]: slot, front: back };
-      });
+  const describeSlot = (slot: Slot | undefined): StageSlot => {
+    if (!slot) return NO_SLOT;
+    if (slot === 'end') {
+      return { ...NO_SLOT, key: `end|${endLabel}|${endIcon}|${heading}`, kind: 'end', endLabel, endIcon, heading };
+    }
+    const a = withArt(slot);
+    const res = resumeOf?.(slot);
+    /* THROUGH `billboardUrl`, never built here — the warm-ahead and the swap gate both target this
+     * exact string, and a second copy of the rendition logic is how they would silently stop
+     * matching it. Until the row is near the viewport it is '' and the layer keeps the branded
+     * gradient, requesting no bitmap at all. */
+    const bgUrl = billboardUrl(a);
+    const logoUrl = logoOf(a) || '';
+    const bgPos = heroBgPosition(a);
+    const progress = res?.pct ?? 0;
+    return {
+      key: `t|${slot.id}|${bgUrl}|${bgPos}|${logoUrl}|${a.title}|${progress.toFixed(3)}`,
+      kind: 'title',
+      bgUrl,
+      fallback: heroFallbackGradient(a),
+      bgPos,
+      logoUrl,
+      title: a.title || '',
+      progress,
+      endLabel: '',
+      endIcon: '',
+      heading: '',
+      /* [S2:E4 ·] genre · year · rating. The episode leads when there is one, because on a resume
+       * row it is the most specific thing the line can say. The see-all card has no facts. */
+      meta: [
+        res?.note || '',
+        genre(a.genre || (a.genres && a.genres[0]) || ''),
+        a.year ? String(a.year) : '',
+        a.rating ? `★ ${a.rating}` : '',
+      ].filter(Boolean),
+      plot: plain(a.overview || ''),
     };
-    /* ---- THE WORDMARK IS PART OF THE SWAP, NOT SOMETHING THAT CATCHES UP WITH IT --------------
-     * THE DEFECT: the picture arrived whole and the title did not. The gate below waited on the
-     * BACKDROP only, so a press flipped the layers the moment the photograph was decoded and the
-     * plate began its rise 110ms later with whatever the logo happened to be — which for a cold
-     * card is nothing at all. The wordmark then faded in on its own clock a few hundred
-     * milliseconds after the card it belongs to, and on a walk it read as the billboard changing
-     * twice: first the photograph, then, separately, the name of what you are looking at.
-     *
-     * The cascade this row is built around is picture → wordmark → copy, and that is a matter of
-     * TIMING, not of readiness: each beat is deliberate and each one is supposed to be complete
-     * when it starts. A logo that is merely late is not the third beat arriving, it is the second
-     * beat failing.
-     *
-     * So both pictures are decoded before the layers trade places. They are asked for together
-     * rather than in sequence — a wordmark is a ~20KB PNG against a 780px JPEG, so it is almost
-     * never the one being waited on, and serialising them would add its round trip to the
-     * backdrop's for no reason. The cap below covers the pair exactly as it covered the one.
-     *
-     * The end card has no artwork by design, and an `enrich` row whose detail has not landed yet
-     * has none to wait for either — both dissolve immediately, exactly as before. */
-    const art = slot === 'end' ? null : withArt(slot);
-    const urls = art ? [billboardUrl(art), logoOf(art) || ''].filter(Boolean) : [];
-    if (!urls.length) { flip(); return; }
+  };
 
+  /* ---- THE FIRST CARD HAS NOTHING BEFORE IT --------------------------------------------------
+   * Standing on the first title nothing has been walked past, so there is nothing to leave at the
+   * screen edge — the reference shows an empty band at the head of a row. (This used to wrap, and
+   * parked the LAST title there as though the walk had come from it.) The END card keeps its peek:
+   * standing past the last title, the last title IS the thing just walked off. The picture is the
+   * one the tile would show, chosen the same way (the shared backdrop cropped around the focal
+   * point, else the pre-cut slice, else the poster) — no wordmark, since only a trailing sliver is
+   * ever visible. */
+  const peekFor = (at: number): StagePeek => {
+    const previous = at >= n ? list[n - 1] : (at > 0 ? list[at - 1] : undefined);
+    if (!previous) return { art: null, gradient: '' };
+    return { art: artOn ? peekArtOf(previous) : EMPTY_PEEK, gradient: heroFallbackGradient(previous) };
+  };
+  describeLatest.current = describeSlot;
+  peekLatest.current = peekFor;
+  activeLatest.current = active;
+  posLatest.current = pos;
+  dweltRef.current = dwelt;
+
+  /* ---- THE SWAP WAITS FOR A PICTURE TO SWAP TO ----------------------------------------------
+   * THE DEFECT THIS GATE REMOVED: the billboard blinked through black on every press. The layers
+   * traded places before the incoming one had anything in it, and for the gap between them the
+   * billboard showed the only thing that layer HAD — `heroFallbackGradient`, which mid-walk is just
+   * black. That gradient is doing its real job on a cold row, holding the frame while the first
+   * picture loads; it must never be seen on a walk.
+   *
+   * So a press holds the SWAP — not the strip, which moves on the press frame regardless, so the
+   * press is always answered instantly — until the incoming photograph AND wordmark are decoded, and
+   * the dissolve goes picture to picture. Both are asked for together rather than in sequence (a
+   * wordmark is a ~20KB PNG against a 780px JPEG, so it is almost never the one waited on).
+   *
+   * WARM, THIS COSTS NOTHING AND IS THE NORMAL CASE: `isDecoded` is checked first, and the warm-ahead
+   * has usually retained both, so the whole swap — fill, flip, animations — runs synchronously
+   * inside the key handler, in the same frame the strip starts to move.
+   *
+   * THE CAP KEEPS A GATE FROM BECOMING A STALL: past SWAP_WAIT_CAP the swap happens anyway and the
+   * gradient-then-photo path takes over — a worse frame but never a stuck one. A newer press
+   * supersedes a pending swap rather than queueing behind it: holding a direction walks to where
+   * the remote actually is, not through every card on the way. */
+  const showSlot = (at: number, dir: 1 | -1, chained: boolean) => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const g = gate.current;
+    const token = ++g.id;
+    window.clearTimeout(g.timer);
+    g.timer = 0;
+    const slot = slotAt(at) ?? list[0] ?? 'end';
+    const info = describeSlot(slot);
+    const peek = peekFor(at);
+    /* THE BILLBOARD'S NAME MOVES WITH THE PRESS, not with the lazy React sync: the hero is the
+     * focused element, so its label is what webOS audio guidance reads. Same string the JSX renders,
+     * so the later commit writes an identical value. */
+    const btn = heroBtnRef.current;
+    const label = info.kind === 'end' ? `${heading} — ${endLabel}` : info.title;
+    if (btn && btn.getAttribute('aria-label') !== label) btn.setAttribute('aria-label', label);
+    let spent = false;
+    const go = () => {
+      if (spent || gate.current.id !== token) return;
+      spent = true;
+      window.clearTimeout(gate.current.timer);
+      gate.current.timer = 0;
+      shownAt.current = at;
+      stage.show(info, peek, { dir, held: chained, animate: !reduceMotion });
+      prefillSoon(chained);
+    };
+    const urls = [info.bgUrl, info.logoUrl].filter(Boolean);
     let left = urls.length;
-    // Only the LAST of the two releases the swap; either failing still counts, because a missing
-    // wordmark is a card that falls back to type and must not hold the picture behind it.
-    const done = () => { if (--left <= 0) flip(); };
+    if (!left) { go(); return; }
+    const done = () => { if (--left <= 0) go(); };
     for (const url of urls) {
-      /* THROUGH THE RETAINED CACHE, not a fresh Image per press. This gate, the warm-ahead below
-       * and FadeBg's `useImageReady` all used to build their own element for the same URL, so one
-       * press could ask the engine to decode one backdrop three times over — ~130ms per press of
-       * decoding on a warm row, measured. They now share one element, so the warm-ahead's decode
-       * IS this gate's decode, and the common case here is the synchronous hit below. */
+      /* THROUGH THE RETAINED CACHE, not a fresh Image per press: this gate, the warm-ahead and the
+       * stage's own decode check share one element per URL, so the warm-ahead's decode IS this
+       * gate's decode. */
       const img = retainImage(url);
       if (isDecoded(img)) { done(); continue; }
       if (typeof img.decode === 'function') img.decode().then(done, done);
@@ -1920,52 +1728,177 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         img.addEventListener('error', off);
       }
     }
-    /* THE CAP IS WHAT KEEPS A GATE FROM BECOMING A STALL. A cold row on a slow set must not leave
-     * the billboard on the title you just walked off — past this the swap happens anyway and the
-     * old behaviour takes over (gradient, then the photo fading in when it lands), which is a
-     * worse frame but never a stuck one. Under half of SLIDE_MS on purpose: even at the cap the
-     * artwork changes while the strip is still travelling, so the press stays one gesture.
-     *
-     * A chained press cancels a pending flip through the cleanup rather than queueing behind it —
-     * holding a direction walks to where the remote actually is, not through every card on the
-     * way. */
-    const capId = window.setTimeout(flip, SWAP_WAIT_CAP);
-    return () => { spent = true; window.clearTimeout(capId); };
-    /* `activeKey` IS IN HERE BECAUSE THE INDEX IS NOT THE PICTURE.
-     *
-     * Keyed on `[active, n]` alone this asked "has the walk moved, or has the row got longer" —
-     * and missed the third way the billboard goes stale: the same index now points at a different
-     * title. That is exactly what a page change does. Series, Movies and Anime are one `Browse`
-     * component in one position of the tree, so React keeps its state across the route change and
-     * hands it a new `items` array; `active` is still 0 and, for two catalogues that happen to be
-     * the same length, `n` is unchanged too. Neither dependency moved, the effect never ran, and
-     * the billboard kept showing the title from the page you had just left.
-     *
-     * The id of whatever sits under the walk is the honest dependency: it changes whenever the
-     * artwork should, and does not change when a row merely lengthens (load-more appends past
-     * `active`) or when `enrich` fills a logo into the card already showing. */
-    /* ---- `n` IS NOT A DEPENDENCY, AND REMOVING IT IS THE FIX FOR A SPURIOUS WALK -------------
-     * It was here for the load-more card, on the reasoning that pressing OK on it does not move
-     * the walk — the position simply stops being the end card and becomes a real title — so the
-     * length was the only thing that changed and the billboard had to be told. That case is real.
-     * The dependency is not: `activeKey` ALREADY covers it, because standing on the end card it
-     * reads 'end' and becomes the new title's id the moment the batch lands.
-     *
-     * What the length dependency did instead was fire on EVERY change of it, including the one
-     * that has nothing to do with the walk: a row fetches its full catalogue the first time the
-     * remote settles on it (see `onOpen`), so arriving from ABOVE grew the list from the seeded
-     * ~20 to 40 and ran a cross-dissolve plus the copy's slide for a title that had not changed.
-     *
-     * MEASURED, both in the capture and in the browser. In a 60fps recording of a Down press the
-     * synopsis jumped +42px right and eased back to 0 — and 42px is `--sp-copy-slide` exactly
-     * (--sp-wl x 0.046 = 41.6px at 1080p), which is the horizontal WALK animation running on a
-     * VERTICAL press. Traced live it is unmistakable: row "Trending Movies", tiles 81 (i.e. it had
-     * just grown to 40 titles), copy transform 41.6 -> 38.8 -> 36 -> … -> 0 with no press but Down.
-     *
-     * Keyed on what is SHOWN rather than on how much there is to show, the row can grow underneath
-     * a settled billboard without disturbing it. */
+    if (!spent) g.timer = window.setTimeout(go, SWAP_WAIT_CAP);
+  };
+
+  /* ---- REACT CATCHES UP, IN A TRANSITION, AFTER THE PRESS ---------------------------------------
+   * The mirror (`active` / `pos`) feeds the window of mounted tiles, the preview dwell and the
+   * prefetches — none of which anyone can perceive a few tens of milliseconds late, and all of which
+   * cost a render. It is committed as a TRANSITION, so React slices the render into small pieces
+   * between frames instead of running it as one task, and it is coalesced: a run of presses commits
+   * the position the walk has actually reached, once. `endChain` flushes it when the remote lets go.
+   *
+   * If the state already agrees (a hold that wrapped exactly back to where it started) there is no
+   * render and so no effect re-run — the preview dwell is armed by hand in that case, because the
+   * effect that normally arms it is keyed on the resting title's id and that id has not moved. */
+  function syncNow() {
+    if (syncId.current) { window.clearTimeout(syncId.current); syncId.current = 0; }
+    if (!syncOwed.current) return;
+    syncOwed.current = false;
+    const at = liveActive.current;
+    const sp = stripPos.current;
+    if (at === activeLatest.current && sp === posLatest.current) {
+      const rest = at < n ? list[at] : undefined;
+      /* `openRef`, not `open` — a hold can end before the focus commit has landed, and the state
+       * would still say the row is not focused when it plainly is. */
+      if (rowTrailers && openRef.current && rest && !dwellId.current && !dweltRef.current) {
+        dwellId.current = window.setTimeout(() => { dwellId.current = 0; setDwelt(rest); }, previewDwellMs());
+      }
+      return;
+    }
+    startTransition(() => { setActive(at); setPos(sp); });
+  }
+  syncLatest.current = syncNow;
+  /* WHEN: AT A LULL, NOT ON A CLOCK. The commit is debounced — every press pushes it back — so a run
+   * of presses commits once, after the remote has paused, instead of landing mid-glide; and it is
+   * forced early only when the walk is about to outrun the window of mounted tiles (more than
+   * SYNC_AHEAD positions forward, where the strip would show a gap on the right, or SYNC_BEHIND
+   * back). A single deliberate press therefore commits ~SYNC_SETTLE_MS after it, which is just as
+   * its animations end and well before the next one. */
+  const scheduleSync = (held: boolean) => {
+    window.clearTimeout(syncId.current);
+    const lead = stripPos.current - posLatest.current;
+    const urgent = lead >= SYNC_AHEAD || -lead >= SYNC_BEHIND;
+    /* A hold waits longer: its steps are ~300ms apart, so a settle shorter than that would commit
+     * between every pair of them — a React render in the middle of each glide — where the guard
+     * above already commits every third step, which is as often as the window needs it. */
+    syncId.current = window.setTimeout(() => syncLatest.current(), urgent ? 0 : held ? SYNC_SETTLE_HELD_MS : SYNC_SETTLE_MS);
+  };
+
+  /* ---- THE NEXT CARD IS BUILT BEFORE IT IS ASKED FOR ------------------------------------------
+   * Once a press has settled, and the walk has been still for a moment, the card the remote is
+   * most likely to go to next — one more in the direction it was last going — is built on the card
+   * that is not showing (stage.prefill): nodes created, the wordmark's <img> given its src, three
+   * lines of synopsis laid out. The next press then flips to it instead of building it, which moves
+   * ~all of the main-thread cost of a press to a moment nothing is happening. An idle callback with
+   * a timeout, so it never lands inside a press and is never starved either. Cheap when it has
+   * nothing to do: the stage compares keys and returns. */
+  const prefillNow = () => {
+    const stage = stageRef.current;
+    if (!stage || stops < 2 || !artOn || gate.current.timer) return;
+    if (performance.now() - lastStepAt.current < prefillQuiet.current) { prefillSoon(paceHeld.current); return; }
+    stage.prefill(describeLatest.current(slotAt(mod(liveActive.current + lastDir.current, stops))), !paceHeld.current);
+  };
+  const prefillLatest = useRef(prefillNow);
+  prefillLatest.current = prefillNow;
+  function prefillSoon(held = false) {
+    window.clearTimeout(prefillTimer.current);
+    /* During a hold there is no "quiet" to wait for — steps arrive every ~300ms for as long as the key
+     * is down — so the next card is built a beat after each step instead, in the gap before the one
+     * after it, which is where the same work used to happen inside the key handler. */
+    prefillQuiet.current = held ? PREFILL_QUIET_HELD_MS : PREFILL_QUIET_MS;
+    /* A TIMER, NOT requestIdleCallback. On the television the main thread has no idle periods for a
+     * good half second after a press (the animations keep it producing frames), and an idle callback
+     * with a timeout is simply starved until the timeout — measured: the card was built ~800ms late
+     * and the next press, a second after the last, found it unbuilt. The timer fires between frames
+     * like any task, and the quiet-period check in `prefillNow` is what keeps it out of a walk. */
+    prefillTimer.current = window.setTimeout(() => {
+      prefillTimer.current = 0;
+      prefillLatest.current();
+    }, held ? PREFILL_AFTER_HELD_MS : PREFILL_AFTER_MS);
+  }
+
+  /* THE STAGE ITSELF: built once the row has titles, torn down if it loses them. A layout effect so
+   * the first paint already has a billboard on it. */
+  const hasRow = n > 0;
+  useLayoutEffect(() => {
+    const hero = heroBtnRef.current, strip = trackRef.current;
+    const a = layerARef.current, b = layerBRef.current, pa = plateARef.current, pb = plateBRef.current;
+    const ia = infoARef.current, ib = infoBRef.current;
+    const prev = prevRef.current, prevTrack = prevTrackRef.current;
+    if (!hasRow || !hero || !strip || !a || !b || !pa || !pb || !ia || !ib || !prev || !prevTrack) return;
+    const stage = new TvRowStage({ hero, strip, layers: [a, b], plates: [pa, pb], infos: [ia, ib], prev, prevTrack });
+    stageRef.current = stage;
+    shownAt.current = liveActive.current;
+    stage.cut(describeLatest.current(slotAt(shownAt.current)), peekLatest.current(shownAt.current));
+    prefillSoon();
+    return () => { stage.destroy(); if (stageRef.current === stage) stageRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, activeKey]);
+  }, [hasRow]);
+
+  /* THE FRONT CARD, KEPT TRUE WHILE THE WALK STANDS STILL. What is on the billboard changes without
+   * a press when the row is first allowed its artwork, when `enrich` finds a backdrop or a synopsis
+   * a card arrived without, when the end card's label flips to "loading", or when the language
+   * changes. The signature is everything the stage would paint, so an unrelated render — a dwell
+   * firing, a query settling — compares equal and does nothing. */
+  const frontDesc = describeSlot(slotAt(shownAt.current));
+  const frontPeek = peekFor(shownAt.current);
+  const stageSig = `${frontDesc.key}|${frontDesc.meta.join('\u0001')}|${frontDesc.plot}|${frontPeek.art ? `${frontPeek.art.src}|${frontPeek.art.pos}` : '-'}`;
+  useEffect(() => {
+    const changed = stageRef.current?.refresh(describeLatest.current(slotAt(shownAt.current)), peekLatest.current(shownAt.current));
+    /* NOT ON EVERY COMMIT. After a walk this effect runs because React has caught up with a card the
+     * stage is already showing — nothing changed — and re-arming the prefill then pushed the next card's
+     * build to ~800ms after the press, past the moment a person tapping at an ordinary pace presses
+     * again, so that press built the card (synopsis layout and all) inside its own key handler. A
+     * prefill the press already scheduled is left where it is; one that has run is re-armed, which is a
+     * key comparison if the next card is unchanged and a rebuild if its facts have moved — AT THE WALK'S
+     * PACE: a hold's catch-up re-arming at the deliberate 420ms is what pushed every other held step's
+     * card past the next step (traced: prefilled, built-in-the-press, prefilled, built-in-the-press…). */
+    if (changed || !prefillTimer.current) prefillSoon(paceHeld.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageSig]);
+
+  /* ---- A NEW CATALOGUE IS A NEW ROW ---------------------------------------------------------
+   * The three top-level pages share one component instance, so nothing about a route change resets
+   * this row on its own: the walk stays where it was on the previous page and the layers still hold
+   * its artwork. Landing on Anime at card nine of Movies is not a state anyone asked for.
+   *
+   * DETECTED FROM THE HEAD OF THE LIST rather than from a `cat` prop, because these rows are not
+   * given one — TvCatalogRow passes items and nothing else. The first title's id is the cheapest
+   * thing that changes when the catalogue does and stays put when it does not: appending a page
+   * of results does not touch it, and neither does `enrich` filling artwork into a card already
+   * on screen.
+   *
+   * THE BILLBOARD IS CUT, NOT DISSOLVED. A cross-fade means "this row moved to its neighbour", and a
+   * whole page changing underneath is not that: dissolving Movies' billboard into Anime's would read
+   * as one row walking sideways across a page boundary. The stage cuts into the layer that is
+   * ALREADY in front, so `.on` never moves and nothing transitions. */
+  const headId = list.length ? String(list[0].id) : '';
+  const prevHead = useRef(headId);
+  useEffect(() => {
+    if (prevHead.current === headId) return;
+    prevHead.current = headId;
+    /* So the row is also marked for the length of the change and the stylesheet takes every
+     * transition off (`.tv-spot.is-cut`, beside the `is-fast` block it is modelled on): whatever the
+     * strip, the plates or the copy would otherwise do, nothing animates. The timer outlasts
+     * `SWAP_WAIT_CAP` deliberately — the only thing it can wrongly catch is a walk begun inside a
+     * quarter second of arriving on a new page. */
+    const cutEl = sectionRef.current;
+    cutEl?.classList.add('is-cut');
+    if (cutId.current) window.clearTimeout(cutId.current);
+    cutId.current = window.setTimeout(() => {
+      cutId.current = 0;
+      cutEl?.classList.remove('is-cut');
+    }, SWAP_WAIT_CAP + 60);
+    /* The strip goes back to its origin with the walk, and it must not be seen travelling there:
+     * `is-cut` silences the billboard's transitions but the strip's own is a separate rule, so the
+     * hop is flagged for the layout effect that writes `--active`. A swap still waiting on a decode
+     * belongs to the catalogue just left. */
+    liveActive.current = 0;
+    stripPos.current = 0;
+    silentHop.current = true;
+    syncOwed.current = false;
+    if (syncId.current) { window.clearTimeout(syncId.current); syncId.current = 0; }
+    gate.current.id++;
+    window.clearTimeout(gate.current.timer);
+    gate.current.timer = 0;
+    shownAt.current = 0;
+    setActive(0);
+    setPos(0);
+    stageRef.current?.cut(describeLatest.current(list[0]), peekLatest.current(0));
+    prefillSoon();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headId]);
 
   /* ---- THE NEXT BILLBOARD IS FETCHED BEFORE IT IS ASKED FOR ---------------------------------
    * The gate above removes the black frame; this is what keeps it from costing anything, and the
@@ -2044,39 +1977,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     else window.clearTimeout(warmId.current);
   }, []);
 
-  /* ---- A JUMP IS NOT SLID, AND ONLY TWO THINGS JUMP -------------------------------------------
-   * Compared in the strip's OWN coordinate. This used to compare the walk index, which wraps — so
-   * stepping off the end card read as a jump of `stops` and the transition was killed on the very
-   * press that is now the point of the endless strip. `pos` moves by exactly one per press, so a
-   * difference of more than one is a genuine teleport: a catalogue cut or a rebase, both of which
-   * also raise `silentHop` for the layout effect that writes `--active`. This is the belt to that
-   * effect's braces — it holds the transition off for two frames after the write so nothing that
-   * lands late can pick the hop up and animate it. No interference while a hold is running, when
-   * `step()` owns the node. */
-  const prevCommitRef = useRef(pos);
-  useEffect(() => {
-    const prev = prevCommitRef.current;
-    prevCommitRef.current = pos;
-    if (chaining.current) return;
-    const track = trackRef.current;
-    if (track && Math.abs(pos - prev) > 1) {
-      track.style.transition = 'none';
-      requestAnimationFrame(() => requestAnimationFrame(() => { track.style.transition = ''; }));
-    }
-  }, [pos]);
-
   /* ---- THE ROW GOT SHORTER UNDER THE WALK ------------------------------------------------------
-   * `active` can outlive the number of stops it indexes: the walk is parked on the "+" card at
-   * position n, the batch it asked for turns out to be empty, and the card is withdrawn — so
-   * `stops` falls to n while `active` still says n. The tile under the billboard already shows
-   * title 0 (positions are counted modulo `stops`); this brings the billboard into agreement with
-   * it. Reducing modulo `stops` rather than clamping keeps every position's title where it is —
-   * the window is counted from `active` and only its value mod `stops` matters — so no tile
-   * remounts. A catalogue change is not this case; it resets both halves itself above. */
+   * The walk can outlive the number of stops it indexes: it is parked on the "+" card at position
+   * n, the batch it asked for turns out to be empty, and the card is withdrawn — so `stops` falls to
+   * n while the walk still says n. The tile under the billboard already shows title 0 (positions
+   * are counted modulo `stops`); this brings the billboard into agreement with it. Reducing modulo
+   * `stops` rather than clamping keeps every position's title where it is — the window is counted
+   * from the anchor and only its value mod `stops` matters — so no tile remounts. A catalogue
+   * change is not this case; it resets both halves itself above. */
   useEffect(() => {
-    if (stops > 0 && active >= stops) {
-      liveActive.current = mod(active, stops);
-      setActive(liveActive.current);
+    if (stops > 0 && liveActive.current >= stops) {
+      liveActive.current = mod(liveActive.current, stops);
+      syncOwed.current = true;
+      syncNow();
+      shownAt.current = liveActive.current;
+      stageRef.current?.refresh(describeLatest.current(slotAt(shownAt.current)), peekLatest.current(shownAt.current));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stops]);
@@ -2085,12 +2000,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * See TILE_KEYS. Armed after the slide has had time to finish and cancelled by the next press
    * (the effect re-runs on `pos`); it only fires on a strip that has genuinely stopped, and it
    * moves the position by a multiple of TILE_KEYS so every key and every title survives. The
-   * layout effect suppresses the transition around the write, and the jump effect above keeps it
-   * suppressed for two frames after. */
+   * layout effect below suppresses the transition around the write. */
   useEffect(() => {
-    if (pos < REBASE_AT || chaining.current) return;
+    if (pos < REBASE_AT || syncOwed.current) return;
     const id = window.setTimeout(() => {
-      if (chaining.current || stripPos.current !== pos) return;   // pressed again since; try later
+      if (syncOwed.current || stripPos.current !== pos) return;   // pressed again since; try later
       const laps = Math.floor(pos / TILE_KEYS) - 1;
       stripPos.current = pos - laps * TILE_KEYS;
       silentHop.current = true;
@@ -2099,63 +2013,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     return () => window.clearTimeout(id);
   }, [pos]);
 
-  /* ---- THE SPRING ARM: ONE WRITER FOR THE STRIP'S POSITION ---------------------------------
-   * Every `--active` write in this component goes through `putActive` so the two arms cannot both
-   * own the transform. With the flag off it is exactly the assignment it replaced.
-   *
-   * THE TARGET IS `stripPos.current` ITSELF, which is what makes retargeting free: `step` already
-   * updates that ref before asking for a write, so a press that lands mid-flight changes where the
-   * loop is heading without touching where it IS or how fast it is going. That is the whole
-   * property a re-aimed CSS transition cannot give — it restarts its curve over the new distance.
-   *
-   * INSTANT WRITES SNAP BOTH. The wrap re-seat and the silent hop are deliberately invisible jumps
-   * between two tiles carrying the same picture; the spring has to be teleported with the node or
-   * it would glide the whole way back, which is the 5264px rewind the note below records. */
-  const springX = useRef(0);
-  const springV = useRef(0);
-  const springRaf = useRef(0);
-  const springAt = useRef(0);
-
-  const springTick = (now: number) => {
-    springRaf.current = 0;
-    const t = trackRef.current;
-    if (!t) return;
-    /* Clamped so a dropped frame or a backgrounded tab cannot fling the strip: at 30fps dt is
-     * ~33ms and w*dt stays at 0.83, comfortably inside semi-implicit Euler's stability limit. */
-    const dt = Math.min(0.034, Math.max(0.001, (now - springAt.current) / 1000));
-    springAt.current = now;
-    const target = stripPos.current;
-    springV.current += (SPRING_K * (target - springX.current) - SPRING_C * springV.current) * dt;
-    springX.current += springV.current * dt;
-    if (Math.abs(target - springX.current) < 0.002 && Math.abs(springV.current) < 0.02) {
-      springX.current = target;
-      springV.current = 0;
-      t.style.setProperty('--active', String(target));
-      return;                                   // settled — the loop stops until the next press
-    }
-    t.style.setProperty('--active', springX.current.toFixed(4));
-    springRaf.current = requestAnimationFrame(springTick);
-  };
-
-  /** `instant` means "this jump must not be seen": snap the spring with the node. */
-  const putActive = (el: HTMLElement, v: number, instant = false) => {
-    if (!springEnabled()) { el.style.setProperty('--active', String(v)); return; }
-    if (instant) {
-      if (springRaf.current) { cancelAnimationFrame(springRaf.current); springRaf.current = 0; }
-      springX.current = v;
-      springV.current = 0;
-      el.style.setProperty('--active', String(v));
-      return;
-    }
-    if (springRaf.current) return;               // already flying; `stripPos` is the new target
-    springAt.current = performance.now();
-    springRaf.current = requestAnimationFrame(springTick);
-  };
-
-  useEffect(() => {
-    sectionRef.current?.classList.toggle('is-spring', springEnabled());
-    return () => { if (springRaf.current) cancelAnimationFrame(springRaf.current); };
-  }, []);
+  /** The one writer of the strip's position: a custom property the stylesheet turns into a transform
+   *  (with a transition, which is the compositor's from there). */
+  const putActive = (el: HTMLElement, v: number) => { el.style.setProperty('--active', String(v)); };
 
   /* ---- THE STRIP'S POSITION IS WRITTEN TO THE NODE, NOT RENDERED --------------------------
    * `--active` used to be an inline style on the strip, which meant moving the row required a
@@ -2185,7 +2045,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       if (silentHop.current) {
         silentHop.current = false;
         t.style.transition = 'none';
-        putActive(t, stripPos.current, true);
+        putActive(t, stripPos.current);
         void t.offsetWidth;
         t.style.transition = '';
       }
@@ -2265,273 +2125,96 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** True while the walk is parked on the end card rather than on a title. */
   const onSeeAllCard = hasEnd && active >= n;
   const cur = list[Math.min(active, n - 1)] || list[0];
-  /* Netflix keeps the immediately previous title parked just beyond the left screen edge. Only
-   * its trailing slice is visible; after a Right press the billboard we just left becomes this
-   * card, preserving spatial continuity instead of simply disappearing behind the billboard. */
-  /* ---- THE FIRST CARD HAS NOTHING BEFORE IT --------------------------------------------------
-   * This used to be `(active - 1 + n) % n`, which WRAPS: standing on the first title it resolved to
-   * the LAST one and parked it at the screen edge as though the walk had come from there. Nothing
-   * has been walked past yet, so there is nothing to leave behind — the reference shows an empty
-   * band at the head of a row (measured: mean 0.0, sd 0.10 before the first press, against 21.8 /
-   * 16.07 once one has been made).
-   *
-   * The END CARD keeps its peek: standing past the last title, the last title IS the thing just
-   * walked off, and it is the one case where `active` is out of the list's range. */
-  const previous = active >= n ? list[n - 1] : (active > 0 ? list[active - 1] : undefined);
-  /* THE SAME PICTURE THE TILE WOULD SHOW, chosen the same way — the pre-cut slice if
-   * there is one, else the shared backdrop cropped to the tile's shape around the same
-   * focal point, else the plain poster.
-   *
-   * It used to prefer `poster` outright, so the card parked at the screen edge was the
-   * one thing in the row still wearing TMDB's own artwork: walking past Reacher left a
-   * sliver of the plain poster beside a strip of cut key art. No wordmark on it — only
-   * a trailing sliver of this card is ever visible, and the lettering would be off
-   * screen anyway. */
-  const previousArt: PeekArt = previous && artOn ? peekArtOf(previous) : EMPTY_PEEK;
 
-  /* ---- THE PEEK IS A TWO-TILE STRIP, NOT ONE PICTURE ---------------------------------------
-   * MEASURED ON THE REFERENCE: that window is never empty. Its contrast runs 9.2 -> 10.1 -> 10.9
-   * -> 22.3 straight through a press and never falls to the floor, because one card is sliding OUT
-   * to the left while the next slides IN from behind the billboard. It is a plain slice of the
-   * rail, and a rail always has a card in it.
+  /* ---- A PRESS: THE NODES FIRST, REACT AFTER ------------------------------------------------
+   * Everything a viewer sees change — the strip sliding, the billboard dissolving, the wordmark, the
+   * copy, the sliver at the screen edge — is written to the DOM from here, inside the key handler,
+   * by the stage (lib/tvRowStage.ts) and one custom-property write. React is told afterwards, in a
+   * transition, so the row's own state (the window of mounted tiles, the preview dwell, the
+   * prefetches) catches up in slices instead of landing in the press frame. The header of the stage
+   * has the measurement: the same press went from 52-61% of frames on time to 98-99%.
    *
-   * A single sliding image cannot reproduce that. Starting one stride to the right puts it wholly
-   * outside its own 297px window, so the first half of every press showed the container's gradient
-   * and the card then refilled it — the peek blinking while everything beside it slid.
+   * THE TRUTH IS `liveActive` / `stripPos`, AND `active` / `pos` ARE A MIRROR THAT LAGS. That is safe
+   * for the strip because a tile's title is a function of (physical position - anchor), and both
+   * halves of the anchor move together on every press: the title at any physical position does not
+   * change while the walk advances, so React only has to MOUNT tiles for positions it has not
+   * reached yet — and the window carries nine of them ahead of a strip that shows six.
    *
-   * So the window holds the OUTGOING and INCOMING cards at the strip's own pitch and the pair is
-   * translated by one stride. The DOM order is the strip's order, which flips with direction:
-   * pressing Right, the card being replaced sits to the LEFT of its replacement; pressing Left it
-   * sits to the right. `lastDir` carries that from `step` into this render. */
-  /* ---- CARRY THE OUTGOING POSTER, AND ONLY WHEN IT ACTUALLY CHANGES ------------------------
-   * This was an effect with no dependency array, which ran after EVERY commit and copied "current"
-   * into "previous". The row re-renders for plenty of reasons that are not a press — the focus
-   * commit at OPEN_COMMIT_MS, a dwell timer, a query settling — so by the time the next press
-   * arrived the ref had already been overwritten with the current value and BOTH tiles rendered
-   * the same poster. Probed in the browser: `Pa5y52cyqWscHR6NnN.jpg` twice, then
-   * `kxn7TTNwKP93Vygx4D.jpg` twice. A two-tile strip showing one picture cannot slide.
-   *
-   * Guarded on the value having moved, it updates exactly once per change however many renders
-   * that change is spread across. */
-  if (peekSrcRef.current.src !== previousArt.src) {
-    prevOutRef.current = peekSrcRef.current;
-    peekSrcRef.current = previousArt;
-  }
-  const outgoingPeek = prevOutRef.current;
-  const peekPair = lastDir.current > 0
-    ? [outgoingPeek, previousArt]
-    : [previousArt, outgoingPeek];
-
-  /* ---- THE SLIDE, AND WHY IT IS NOT ONE DURATION -------------------------------------------
-   *
-   * A row is walked two ways and they want opposite things. A DELIBERATE press is one card, and
-   * it should take its time — a long ease-in-out reads as a shelf with weight on it, which is the
-   * whole feel this row is after. A HELD key is a burst of presses ~120ms apart, and against a
-   * 460ms slide that means every press interrupts a transition three-quarters unfinished: the
-   * strip re-aims from wherever it is toward a target two cards further on, and does it again
-   * before it arrives. The result is a strip that never travels at the speed of the pressing and
-   * lands somewhere behind it — which is exactly what "the scroll feels off" turns out to be.
-   *
-   * So a chained press gets a shorter slide. It is not a different animation: the same curve, run
-   * faster, so holding a direction reads as the shelf ACCELERATING under a continuous push rather
-   * than as a queue of little journeys. Let go and the next press is deliberate again.
-   *
-   * This is the same rule, and the same two numbers, that TvSpatialNav's page scroll already uses
-   * (SCROLL_MS / SCROLL_MS_CHAINED) — one idea about how this build answers a held key.
-   *
-   * WRITTEN STRAIGHT TO THE NODE, not through state. A held key is the one moment this component
-   * must not do more work than it has to, and a re-render per press to change a duration nobody
-   * can name would be exactly that.
-   *
-   * SET ON THE SECTION, NOT ON THE STRIP, because two things move on every press and they have to
-   * agree: the strip slides, and the billboard cross-dissolves to the title it lands on. A custom
-   * property inherits, and the section is the nearest element that is an ancestor of BOTH — put it
-   * on the strip and the dissolve could not see it, so a held key would slide at 260ms while the
-   * artwork took 500ms to catch up, which is stale art under a card that has already moved on. */
+   * A HOLD IS THE SAME CODE WITH A SHORTER SLIDE. `chained` picks the durations, and tv.css's
+   * `.is-fast` picks the linear curve; the reasoning behind each number is in the notes at
+   * HELD_STEP_MIN_MS and SLIDE_CHAIN_WINDOW above and was not changed. Both halves are required
+   * for a hold: recent enough to be one gesture AND the button still down — timing alone cannot tell
+   * a held key from a quick second tap. */
   const step = (delta: number, held = false) => {
     const now = performance.now();
     const since = now - lastStepAt.current;
-    /* BOTH HALVES ARE REQUIRED. Recent enough to be one gesture, and the button still down —
-     * timing alone cannot tell a held key from a quick second tap, and reading it as a hold is
-     * what made the row glide (and swallow presses) under deliberate pressing. */
     const chained = held && since < SLIDE_CHAIN_WINDOW;
     /* A held key repeating faster than the row is allowed to walk — see HELD_STEP_MIN_MS. Dropped
      * outright, and `lastStepAt` deliberately not moved, so the pace is measured from the last
      * step the viewer actually saw rather than from the last repeat the platform sent. */
     if (chained && since < HELD_STEP_MIN_MS) return;
     lastStepAt.current = now;
+    const dir: 1 | -1 = delta > 0 ? 1 : -1;
+    lastDir.current = dir;
+
+    /* ---- A HELD KEY GETS THE SLIDE AND NOTHING ELSE ------------------------------------------
+     * `is-fast` takes the decoration off while the key is held (the plates and the copy cut instead
+     * of dissolving — see tv.css) and is cleared on a timer, so letting go restores the full cascade
+     * for the card you actually stop on. */
     const el = sectionRef.current;
     if (el) {
-      el.style.setProperty('--sp-slide', `${chained ? HELD_SLIDE_MS : SLIDE_MS}ms`);
-      /* The photograph's own rise, on the same test as the slide — the reasoning, and the
-       * measurement that says this is a fade problem rather than the caching problem it looks
-       * like, are at ART_FADE_MS. Set on the SECTION for the reason `--sp-slide` is: it has to
-       * inherit down to both cross-fade layers, and the section is the nearest ancestor of both. */
-      el.style.setProperty('--sp-art-fade', `${chained ? ART_FADE_MS_CHAINED : ART_FADE_MS}ms`);
-      /* The two art layers, on the same test again. A deliberate press gets the measured pair —
-       * fast out, slower in, and the dark trough between them; a hold gets a symmetric 90ms that
-       * fits inside its 220ms pace. Same ancestor, same reason — both layers have to inherit it. */
-      el.style.setProperty('--sp-layer-out', `${chained ? LAYER_OUT_MS_CHAINED : LAYER_OUT_MS}ms`);
-      el.style.setProperty('--sp-layer-fade', `${chained ? LAYER_FADE_MS_CHAINED : LAYER_FADE_MS}ms`);
-      /* WHICH WAY THE PRESS WENT. The artwork's drift needs it — it enters from the side the
-       * remote came from — and CSS cannot work it out, because CSS only ever sees the new state.
-       * +1 is rightward. The COPY does not use it: measured across every frame of the reference,
-       * the text's horizontal offset is exactly 0. */
-      el.style.setProperty('--sp-dir', delta > 0 ? '1' : '-1');
-      /* The peek renders TWO tiles and their DOM order is the strip's order, which depends on
-       * which way the walk went — so the direction has to survive into the next render. The
-       * custom property above is on the node and React cannot read it while rendering. */
-      lastDir.current = delta > 0 ? 1 : -1;
-      /* ---- A HELD KEY GETS THE SLIDE AND NOTHING ELSE -------------------------------------
-       * One press starts ELEVEN animations, measured off `document.getAnimations()` on the
-       * television: the strip's own transform, two parallax drifts on the artwork, two layer
-       * dissolves, two title plates, two synopsis blocks and the info panel. Exactly ONE of those
-       * is the row moving; the other ten decorate it. Turning all of them off was the only arm of
-       * six to escape the noise band — frames over 33ms 75.5% -> 41.0%, median 41.7 -> 16.7ms.
-       *
-       * So they come off WHILE THE KEY IS HELD, which is the only time the lag is felt, and come
-       * straight back for a deliberate press, which is when the cascade is what makes the row feel
-       * like it has weight. Same `chained` test that already picks the slide duration — no new
-       * idea, just applied to the decoration rather than only to its timing.
-       *
-       * The class is cleared on a timer rather than on the next press, so letting go of the button
-       * restores the full effect for the card you actually stop on. */
       el.classList.toggle('is-fast', chained);
       if (fastOff.current) window.clearTimeout(fastOff.current);
-      fastOff.current = window.setTimeout(endChain, SLIDE_CHAIN_WINDOW);
+      fastOff.current = window.setTimeout(() => endChainRef.current(), SLIDE_CHAIN_WINDOW);
     }
+    if (paceHeld.current !== chained) { paceHeld.current = chained; stageRef.current?.setPace(chained); }
 
-    const raw = liveActive.current + delta;
-    const next = mod(raw, stops);
+    const next = mod(liveActive.current + delta, stops);
     liveActive.current = next;
-
-    /* ---- WALKING OFF THE END KEEPS GOING, IT DOES NOT SNAP BACK ---------------------------
-     * Measured, on the strip that rendered its titles twice: `--active` ran 8, 9, 10 (the end
-     * card) and then 0 — ten cards backwards in one press, suppressed to be instant so it did not
-     * rewind the whole strip. Instant or rewound, both read as the row lurching. That strip fixed
-     * it for a HELD key by letting the position run on into the duplicate copy and rebasing when
-     * the copy ran out, which still left one press in sixteen un-animated, and a deliberate press
-     * off the end card still snapped.
-     *
-     * The window has no copy to run out of. The walk wraps (the billboard is title 0 again) and
-     * the strip simply moves one more tile, onto the position that shows title 0 — see
-     * TILES_AHEAD — so every press in either direction is one ordinary tile with its transition
-     * on. Nothing here is ever rebased; the once-per-two-thousand-presses rebase lives in its own
-     * effect and only ever runs on a strip at rest. */
+    /* WALKING OFF THE END KEEPS GOING, IT DOES NOT SNAP BACK. The walk wraps (the billboard is
+     * title 0 again) and the strip simply moves one more tile, onto the position that shows title 0
+     * — see TILES_AHEAD — so every press in either direction is one ordinary tile with its
+     * transition on. */
     const sp = stripPos.current + delta;
     stripPos.current = sp;
+    syncOwed.current = true;
 
-    /* A DELIBERATE PRESS IS UNCHANGED — the same single commit it always made, so everything that
-     * hangs off `active` (the cross-dissolve, the wordmark, the synopsis, the warm-ahead) behaves
-     * exactly as measured; `pos` rides in the same batch so the window moves with it. Only a HELD
-     * key takes the path below. */
-    if (!chained) { setActive(next); setPos(sp); return; }
-
-    /* ---- A HELD PRESS MOVES THE NODE FIRST ---------------------------------------------------
-     * The row moves by writing the property the transform reads, on the press frame, before React
-     * is involved. The commit follows (see below) but the strip is already travelling by then.
-     * The dwell is cancelled by hand because during a hold the effect that owns it is keyed on a
-     * title that is deliberately changing under it every press. */
-    chaining.current = true;
+    /* Whatever was playing belongs to the title just left: it goes the moment focus moves, so one
+     * film's trailer is never under another film's name. Only an ARMED preview costs a render here;
+     * with none, `dweltRef` is null and this is a comparison. */
     if (dwellId.current) { window.clearTimeout(dwellId.current); dwellId.current = 0; }
+    if (dweltRef.current) setDwelt(null);
+
     const track = trackRef.current;
     if (track) putActive(track, sp);
+    showSlot(next, dir, chained);
+    scheduleSync(chained);
     promoteSoon();
-
-    /* ---- AND THE BILLBOARD KEEPS UP -------------------------------------------------------
-     * This deliberately did NOT commit, and that was right when it was written and wrong now.
-     * The artwork, wordmark and synopsis were left frozen for the length of a hold so a held key
-     * did no React work at all — which took it from 52% of frames on time to 97%.
-     *
-     * The cost of that was you could not see what you were scrolling past. The billboard sat on
-     * the title the hold STARTED on and only caught up on release.
-     *
-     * The conditions that justified it are gone. A hold is now paced to ~4.5 presses a second
-     * rather than ~8 (HELD_STEP_MIN_MS), and the ten decorative transitions are already suppressed
-     * while `is-fast` is set — so the commit this used to avoid is a fraction of what it was.
-     * Measured, both arms with the preview off, order reversed: distinct backdrops shown across a
-     * 30-press hold went 6-7 -> 10 of 10, while frames on time were 88.3/83.4% frozen against
-     * 91.0/82.5% tracking and p95 was identical. The picture keeps up and nothing pays for it.
-     *
-     * The window rides on the same commit: one tile mounts at the leading edge, one unmounts at
-     * the trailing edge, and the ten between them are `memo` bail-outs. The strip is still moved
-     * by the node write above, so it starts travelling on the press frame rather than waiting for
-     * React — that half of the decouple is what still earns its keep. */
-    setActive(next);
-    setPos(sp);
+    warmSoon();
   };
 
-  /* ---- PAYING THE COMMIT THE HOLD RAN UP ---------------------------------------------------
-   * Fires SLIDE_CHAIN_WINDOW after the last press, i.e. when the remote has actually let go. It
-   * restores the full cascade (drops `is-fast`, puts the deliberate durations back) and then hands
-   * React the position the walk really reached, which re-arms the artwork, the wordmark, the
-   * synopsis and the dwell for the one card the viewer has stopped on.
-   *
-   * `setActive` with an unchanged value is a React bailout — no render, and therefore no effect
-   * re-run — which happens whenever a hold wraps exactly back to where it started. The dwell is
-   * armed by hand in that case, because the effect that normally does it is keyed on the resting
-   * title's id and that id has not moved. */
+  /* ---- PAYING THE COMMIT THE WALK RAN UP ---------------------------------------------------
+   * Fires SLIDE_CHAIN_WINDOW after the last press, i.e. when the remote has actually let go: it
+   * restores the full cascade (drops `is-fast`, puts the deliberate durations back) and hands React
+   * the position the walk really reached, which re-arms the preview dwell for the one card the
+   * viewer has stopped on. */
   function endChain() {
     /* The chain is over by definition, so whatever we believed about the button is stale. This is
      * the backstop for a platform that drops keyups: without it one missing keyup would make every
      * later press look held. */
     heldKey.current = null;
-    const el = sectionRef.current;
-    if (el) {
-      el.classList.remove('is-fast');
-      el.style.setProperty('--sp-slide', `${SLIDE_MS}ms`);
-      el.style.setProperty('--sp-art-fade', `${ART_FADE_MS}ms`);
-      el.style.setProperty('--sp-layer-out', `${LAYER_OUT_MS}ms`);
-      el.style.setProperty('--sp-layer-fade', `${LAYER_FADE_MS}ms`);
+    fastOff.current = 0;
+    /* The copy a hold left unwritten goes up BEFORE `is-fast` comes off, so the one frame in which the
+     * stylesheet stops hiding it already has the right words in it. */
+    const stage = stageRef.current;
+    if (stage && stops > 0) {
+      stage.settle(describeLatest.current(slotAt(liveActive.current) ?? list[0] ?? 'end'), lastDir.current < 0 ? -1 : 1, !reduceMotion);
     }
-    if (!chaining.current) return;
-    chaining.current = false;
-    const at = mod(liveActive.current, stops);
-    liveActive.current = at;
-    if (at === active && stripPos.current === pos) {
-      const rest = at < n ? list[at] : undefined;
-      /* `openRef`, not `open` — a hold can end before the focus commit has landed, and the state
-       * would still say the row is not focused when it plainly is. */
-      if (rowTrailers && openRef.current && rest && !dwellId.current) {
-        dwellId.current = window.setTimeout(() => { dwellId.current = 0; setDwelt(rest); }, previewDwellMs());
-      }
-      return;
-    }
-    setActive(at);
-    setPos(stripPos.current);
+    sectionRef.current?.classList.remove('is-fast');
+    if (paceHeld.current) { paceHeld.current = false; stageRef.current?.setPace(false); }
+    syncNow();
   }
-
-  /* Until the row is near the viewport the layer keeps the branded gradient and requests no
-   * bitmap at all — see the memory note in the header. */
-  const heroArt = (it: MediaItem) => {
-    /* THROUGH `billboardUrl`, never built here — the warm-ahead and the swap gate both target
-     * this exact string, and a second copy of the rendition logic is how they would silently stop
-     * matching it. The reasoning about which source a row may fall back to is up there with it. */
-    const bg = billboardUrl(it);
-    /* The gradient is no longer an EITHER/OR with the picture — it is what sits underneath one.
-     * See FadeBg: the billboard is the largest bitmap on the home screen, and a 676px-wide JPEG
-     * decoding straight into the document is the "loads top to bottom" band-by-band paint that
-     * this row was the most obvious victim of. It is also no longer seen DURING a walk, which is
-     * a separate defect with its own note on the swap gate. */
-    return {
-      url: bg || undefined,
-      fallback: heroFallbackGradient(it),
-      backgroundPosition: heroBgPosition(it),
-    };
-  };
-  /* AT THE SIZE IT IS PAINTED, which for a wordmark on the billboard is 201px wide at most (62%
-   * of the card, capped at 84px tall — see tv.css). The URL arrives as w500 and was used as it
-   * came, so every logo on the screen was a 2.5x oversample: fetched, decoded and held at four
-   * times the pixels it can show. w300 is the next step TMDB offers and still leaves headroom on
-   * a HiDPI panel. Non-TMDB URLs pass through imgW untouched. */
-  const logoOf = (it: MediaItem) => imgW(it.titleLogo || it.logo || '', LOGO_RENDITION) || undefined;
-
-  /* [S2:E4 ·] genre · year · rating is built PER SLOT now, down in the info block, not once for
-   * `cur`. The two copy blocks cross-fade, so for the length of a press two different titles are
-   * on screen at once and each has to be able to answer for itself — a single line computed from
-   * the current title would have re-written the outgoing block's text under it as it faded. The
-   * episode leads when there is one, because on a resume row it is the most specific thing the
-   * line can say. The see-all card has no metadata of its own and stays blank. */
+  endChainRef.current = endChain;
 
   /** Step now, or — for a tap that came too soon after the last step — once the pace allows. */
   const paced = (delta: number, held: boolean) => {
@@ -2576,6 +2259,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * and every item is dead ahead. The same destination is chosen here rather than bubbling,
        * so the two paths cannot disagree about where "out of the row" goes. */
       if (liveActive.current <= 0) {
+        /* A HELD KEY STOPS AT THE FIRST CARD; only a press made there leaves. Holding Left to rewind
+         * the row used to overshoot: the repeat that arrived as the walk reached the start threw focus
+         * into the nav bar and scrolled the page, mid-hold. Same rule `paced` keeps for a queued tap. */
+        if (held) return;
         const nav = document.querySelector<HTMLElement>('.tv-nav-item.active')
           || document.querySelector<HTMLElement>('.tv-nav-item');
         if (nav) { nav.focus(); return; }
@@ -2592,13 +2279,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * already declined once for the same reason. `useVideoTrailer` accordingly has no `detach` any
    * more: this row owns its preview from the dwell that starts it to the teardown that ends it,
    * and nothing takes it anywhere. */
-  /* READS `liveActive`, NOT `active`, AND THAT IS THE ONE CORRECTNESS BUG THIS CHANGE COULD HAVE
-   * SHIPPED. During a hold the committed state lags on purpose, so OK pressed within
-   * SLIDE_CHAIN_WINDOW of releasing the button would have opened the title the hold STARTED on —
-   * the viewer looking straight at one poster and getting another. The pending commit is flushed
-   * first so the row is left in a consistent state either way. */
+  /* READS `liveActive`, NOT `active`, AND THAT IS THE ONE CORRECTNESS BUG THIS DESIGN COULD HAVE
+   * SHIPPED. The committed state lags the walk on purpose (see `syncNow`), so OK pressed soon after
+   * a press would have opened the title the walk had just LEFT — the viewer looking straight at one
+   * poster and getting another. The pending commit is flushed first so the row is left in a
+   * consistent state either way. */
   const openTitle = () => {
-    if (chaining.current) endChain();
+    if (syncOwed.current) syncNow();
     const at = liveActive.current;
     if (hasEnd && at >= n) { goEnd(); return; }
     onSelect?.(list[Math.min(at, n - 1)] || list[0]);
@@ -2636,32 +2323,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           </div>
         </div>
 
-        {/* Previous title: deliberately outside `.tv-spot-rail`, whose left clip begins at the
-            billboard edge. Its right edge sits one normal card gap left of the billboard, leaving
-            the same narrow screen-edge peek as the Netflix row.
-
-            NOT RENDERED AT THE HEAD OF THE ROW. The element carries a per-title background, so
-            leaving it mounted with no title would put a plain coloured sliver at the screen edge —
-            more conspicuous than the artwork it replaced. */}
-        {previous && (
-        <div
-          className="tv-spot-prev"
-          style={{ background: heroFallbackGradient(previous) }}
-          aria-hidden="true"
-        >
+        {/* THE PREVIOUS CARD, parked just beyond the left screen edge so only its trailing slice
+            shows — outside `.tv-spot-rail`, whose left clip begins at the billboard edge. Hidden at
+            the head of the row, where nothing has been walked past yet. An EMPTY CONTAINER, the
+            stage fills it (see lib/tvRowStage.ts). */}
+        <div className="tv-spot-prev" ref={prevRef} style={{ visibility: 'hidden' }} aria-hidden="true">
           <div className="tv-spot-prevtrack" ref={prevTrackRef}>
-            {/* The SLOT always renders; only the picture is conditional. See `.tv-spot-prevtile`. */}
-            {peekPair.map((art, i) => (
-              <div className="tv-spot-prevtile" key={i}>
-                {art.src
-                  ? <FadeImg className="tv-spot-previmg" src={art.src} alt=""
-                      style={{ objectPosition: art.pos }} />
-                  : null}
-              </div>
-            ))}
+            {/* Two slots, always: the card going out and the card coming in. */}
+            <div className="tv-spot-prevtile" />
+            <div className="tv-spot-prevtile" />
           </div>
         </div>
-        )}
 
         {/* BILLBOARD — pinned left, over the strip, at 16:9 in every state. */}
         <button
@@ -2676,76 +2348,17 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
               artwork away to uncover it — which is what keeps the title plate above the video
               instead of the video swallowing it. See tv.css. */}
           <div className="tv-spot-trailer-slot" ref={trailerSlotRef} aria-hidden="true" />
-          {(['a', 'b'] as const).map((slot) => {
-            const it = xfade[slot];
-            const on = xfade.front === slot;
-            if (!it) return <div key={slot} className="tv-spot-layer" aria-hidden="true" />;
-            /* The end card as the billboard: no artwork to request, so it reads as a hole at the
-               end of the row rather than as another title — which is what tells you the row has
-               ended. Same two layers, so arriving on it dissolves like everything else. */
-            if (it === 'end') {
-              return (
-                <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
-                  <div className="tv-spot-blank">
-                    <span className="tv-spot-blank-ic" aria-hidden="true">{endIcon}</span>
-                  </div>
-                </div>
-              );
-            }
-            return (
-              <div key={slot} className={`tv-spot-layer${on ? ' on' : ''}`} aria-hidden={!on}>
-                <FadeBg className="tv-spot-art" {...heroArt(withArt(it))} />
-              </div>
-            );
-          })}
-
-          {/* The billboard scrim that stood here is gone — no gradient over any picture (tv.css). */}
-
-          {/* THE PLATES CROSS-FADE, THE SCRIM UNDER THEM DOES NOT. Split out of the art layers so
-              the two can keep their own clocks (see the note above): the tag, the wordmark and the
-              resume bar are per-title and must change with the picture, while the black they are
-              legible against belongs to the billboard. */}
-          {(['a', 'b'] as const).map((slot) => {
-            const it = xfade[slot];
-            const on = xfade.front === slot;
-            if (!it) return <div key={slot} className="tv-spot-plate" aria-hidden="true" />;
-            if (it === 'end') {
-              return (
-                <div key={slot} className={`tv-spot-plate${on ? ' on' : ''}`} aria-hidden={!on}>
-                  <div className="tv-spot-card-in">
-                    <span className="tv-spot-tag">{endLabel}</span>
-                    <span className="tv-spot-cardtitle">{heading}</span>
-                  </div>
-                </div>
-              );
-            }
-            const logo = logoOf(withArt(it));
-            const res = resumeOf?.(it);
-            return (
-              <div key={slot} className={`tv-spot-plate${on ? ' on' : ''}`} aria-hidden={!on}>
-                <div className="tv-spot-card-in">
-                  {/* NO "MOVIE" / "SERIES" TAG. It sat above every wordmark saying the one thing
-                      the artwork already says, on a row whose whole job is to show the title —
-                      and on a billboard with a tall logo it was the line that pushed the plate
-                      into the picture. The end card keeps a tag because its label ("see all" /
-                      "load more") is the only thing that card has to say. */}
-                  {/* The wordmark falls back to the plain title, and it must not do BOTH in turn:
-                      text first and a logo a beat later is the same swap the backdrop had. FadeImg
-                      renders the fallback only when there is no logo to wait for. */}
-                  <FadeImg
-                    className="tv-spot-logo"
-                    src={logo || undefined}
-                    alt={it.title}
-                    fallback={<span className="tv-spot-cardtitle">{it.title}</span>}
-                  />
-                </div>
-                {/* Outside the plate's own box and pinned to the card's bottom edge, so it survives
-                    the trailer taking the artwork away — where you are in a title is not a thing
-                    that should blink out because a preview started. */}
-                {!!res && res.pct > 0.01 && <span className="tv-spot-progress" aria-hidden="true"><i style={{ width: `${(Math.min(res.pct, 1) * 100).toFixed(1)}%` }} /></span>}
-              </div>
-            );
-          })}
+          {/* TWO LAYERS AND TWO PLATES, EMPTY. The stage fills them and flips `.on` between them;
+              the constant className below is why React never rewrites it (a prop that does not
+              change is not written), so what the stage sets survives every render. The first layer
+              and plate start `.on` so the first paint has a billboard rather than fading one in. */}
+          <div className="tv-spot-layer on" ref={layerARef} aria-hidden="false" />
+          <div className="tv-spot-layer" ref={layerBRef} aria-hidden="true" />
+          {/* THE PLATES ARE THEIR OWN PAIR, NOT CHILDREN OF THE LAYERS — the tag, the wordmark and
+              the resume bar change with the picture, while the picture dissolves on its own clock
+              underneath (see `.tv-spot-plate` in tv.css). */}
+          <div className="tv-spot-plate on" ref={plateARef} aria-hidden="false" />
+          <div className="tv-spot-plate" ref={plateBRef} aria-hidden="true" />
           {/* THE SOUND BADGE. A speaker, crossed while the preview is muted — the STATE of the
               thing playing, not the action red performs, which is how every player on this screen
               already reads (see the same pair of glyphs in VideoPlayer).
@@ -2761,36 +2374,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         </button>
       </div>
 
-      {/* INFO — TWO SLOTS THAT CROSS-FADE, on the billboard's own `xfade` state and therefore in
-          exact step with the picture they describe.
-          It was one block with a keyed remount, which meant the outgoing copy did not leave: it
-          was destroyed in the frame the new one appeared, so a press replaced a paragraph
-          instantly and then slid the replacement in. Half a transition reads worse than none,
-          because the eye catches the half that cut. Now the old text drifts out and dims while the
-          new drifts in — the same two-layer shape as the artwork above, sharing its slots so the
-          two can never disagree about which title is being shown.
-          Height is still reserved on the container, so opening a row never pushes the rows below
-          it, and the two blocks stack inside that reserved box. */}
+      {/* INFO — two blocks that trade places like the billboard's layers: the stage builds the next
+          one ahead of the press and flips `.on` between them in the same call that swaps the
+          picture it describes, and animates the incoming one there too. Height is reserved on the
+          container, so opening a row never pushes the rows below it. */}
       <div className="tv-spot-info">
-        {(() => {
-          const it = xfade[xfade.front];
-          if (!it || it === 'end') return <div className="tv-spot-infoblk" />;
-          const a = withArt(it);
-          const bits = [
-            resumeOf?.(it)?.note || '',
-            genre(a.genre || (a.genres && a.genres[0]) || ''),
-            a.year ? String(a.year) : '',
-            a.rating ? `★ ${a.rating}` : '',
-          ].filter(Boolean);
-          return (
-            <div className="tv-spot-infoblk">
-              <div className="tv-spot-meta">
-                {bits.map((b, i) => <span key={i}>{b}</span>)}
-              </div>
-              {a.overview && <p className="tv-spot-plot">{a.overview}</p>}
-            </div>
-          );
-        })()}
+        <div className="tv-spot-infoblk on" ref={infoARef} />
+        <div className="tv-spot-infoblk" ref={infoBRef} />
       </div>
     </section>
   );
