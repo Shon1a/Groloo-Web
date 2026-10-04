@@ -16,6 +16,12 @@ export type GridDesc =
  * did not. A server that does not know the flag ignores it and they fall back to
  * text, exactly as before. */
 const LOGOS = import.meta.env.MODE === 'tv' ? '&logos=1' : '';
+/* SEARCH ASKS FOR ONE TMDB PAGE AT A TIME ON THE TV. Every result costs the server a TMDB
+ * round trip before it can answer (the IMDb gate), so the size of the first page is the wait
+ * before anything appears. The website's grid wants sixty at once; the TV row shows the first
+ * twenty the moment they land and pulls the next page itself (TvCatalogRow's `short`). A server
+ * that does not know the flag ignores it and answers sixty, as before. */
+const SEARCH_BUNDLE = import.meta.env.MODE === 'tv' ? '&bundle=1' : '';
 
 export function gridUrl(desc: GridDesc, page: number, lang: string): string {
   if (desc.kind === 'category') {
@@ -26,7 +32,7 @@ export function gridUrl(desc: GridDesc, page: number, lang: string): string {
   }
   if (desc.kind === 'search') {
     const ty = desc.type && desc.type !== 'all' ? `&type=${desc.type}` : '';
-    return `/api/search?q=${encodeURIComponent(desc.query)}&page=${page}&lang=${lang}${ty}${LOGOS}`;
+    return `/api/search?q=${encodeURIComponent(desc.query)}&page=${page}&lang=${lang}${ty}${LOGOS}${SEARCH_BUNDLE}`;
   }
   const sp = new URLSearchParams(desc.filters);
   sp.set('page', String(page));

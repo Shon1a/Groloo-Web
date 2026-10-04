@@ -251,8 +251,10 @@ export default function Explore() {
   // apply the genre but keep the filter panel closed (user asked results-first)
   useEffect(() => { if (seedGenre) { setGenres([seedGenre]); setFilterOpen(false); } }, [seedGenre]);
 
-  // debounce the search box
-  useEffect(() => { const id = setTimeout(() => setQuery(raw.trim()), 300); return () => clearTimeout(id); }, [raw]);
+  /* Debounce the search box. Shorter on the TV: letters come off a remote's on-screen keyboard
+     far slower than off a physical one, so the wait mostly lands AFTER the last letter — pure
+     delay before the results — rather than saving requests between letters. */
+  useEffect(() => { const id = setTimeout(() => setQuery(raw.trim()), IS_TV ? 150 : 300); return () => clearTimeout(id); }, [raw]);
 
   const desc: GridDesc = useMemo(() => {
     if (query) return { kind: 'search', query, type, title: t('explore.results', { q: query }) };
