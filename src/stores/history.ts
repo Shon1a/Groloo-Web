@@ -19,6 +19,11 @@ export interface WatchEntry {
   type?: 'movie' | 'tv' | 'series'; genre?: string; rating?: number;
   ep?: string; key?: string; at: number;
   season?: number | null; episode?: number | null;
+  /** Carried so Continue Watching can reopen and dress an ADD-ON title: its own content type
+   *  (meta/streams live under it), its IMDb id (art lookup), and its backdrop (TV billboard). */
+  imdb?: string;
+  addonType?: string;
+  backdrop?: string;
 }
 export interface Progress { pos: number; dur: number; at: number; lang?: string }
 

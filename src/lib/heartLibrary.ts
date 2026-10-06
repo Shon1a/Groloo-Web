@@ -69,6 +69,32 @@ function fromRaw(raw: RawLibrary): Library {
   };
 }
 
+/* FIELDS THE CORE DOES NOT MODEL survive its calls by being laid back on by id. The core's
+ * LibraryItem is a closed struct, so `imdb`, `addonType` and `backdrop` — what Continue
+ * Watching needs to reopen and dress an add-on title — would be dropped by every record,
+ * merge and normalise. Re-attaching here keeps them without a wasm rebuild; the newest
+ * entry for an id (by `at`) is the one whose extras win. */
+const EXTRAS = ['imdb', 'addonType', 'backdrop'] as const;
+type Extras = Partial<Pick<WatchEntry, typeof EXTRAS[number]>>;
+function extrasOf(...lists: (WatchEntry[] | undefined)[]): Map<string, { at: number; x: Extras }> {
+  const m = new Map<string, { at: number; x: Extras }>();
+  for (const list of lists) for (const e of list || []) {
+    if (!e || e.id == null) continue;
+    const x: Extras = {};
+    for (const k of EXTRAS) if (typeof e[k] === 'string' && e[k]) x[k] = e[k];
+    if (!Object.keys(x).length) continue;
+    const id = String(e.id), prev = m.get(id);
+    if (!prev || (e.at || 0) >= prev.at) m.set(id, { at: e.at || 0, x: { ...prev?.x, ...x } });
+  }
+  return m;
+}
+function withExtras(lib: Library | null, ...from: (WatchEntry[] | undefined)[]): Library | null {
+  if (!lib) return lib;
+  const m = extrasOf(...from);
+  if (!m.size) return lib;
+  return { ...lib, history: lib.history.map((e) => { const x = m.get(String(e.id))?.x; return x ? { ...x, ...e } : e; }) };
+}
+
 /** One boundary call that answers with a Library. Null on anything short of success —
  *  see the header: the caller's own fallback beats the core's degraded value here. */
 function libCall(fn: string, invoke: (c: CoreExports) => string): Library | null {
@@ -82,20 +108,20 @@ export const heartLib = {
   /** Apply caps + ordering + tombstone TTL to whatever came out of localStorage.
    *  Merging against an empty document is the identity merge, which is exactly the
    *  normalisation the old `hydrate()` did as a side effect of loading. */
-  normalize: (cur: Library) => libCall('merge_library', (c) => c.merge_library(toLibJson(cur), '{}', Date.now())),
+  normalize: (cur: Library) => withExtras(libCall('merge_library', (c) => c.merge_library(toLibJson(cur), '{}', Date.now())), cur.history),
 
   record: (cur: Library, item: WatchEntry) =>
-    libCall('library_record_watch', (c) => c.library_record_watch(toLibJson(cur), JSON.stringify(toItem(item)))),
+    withExtras(libCall('library_record_watch', (c) => c.library_record_watch(toLibJson(cur), JSON.stringify(toItem(item)))), cur.history, [item]),
 
   /** Removes the title, tombstones it, and — new in this core — sweeps every `id:S#E#`
    *  progress key belonging to it. The old core removed the bare id only, so every
    *  episode's resume position outlived the series removal forever, counted against the
    *  progress cap, and resurrected the moment the title was re-added. */
   remove: (cur: Library, id: string, now: number) =>
-    libCall('library_remove', (c) => c.library_remove(toLibJson(cur), id, now)),
+    withExtras(libCall('library_remove', (c) => c.library_remove(toLibJson(cur), id, now)), cur.history),
 
   pulled: (cur: Library, remote: Library, now: number) =>
-    libCall('merge_library', (c) => c.merge_library(toLibJson(cur), toLibJson(remote), now)),
+    withExtras(libCall('merge_library', (c) => c.merge_library(toLibJson(cur), toLibJson(remote), now)), cur.history, remote.history),
 
   /** THE HOT PATH — one key, no core call, no linear-memory round trip. See the header.
    *

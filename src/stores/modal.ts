@@ -22,6 +22,8 @@ export interface ModalTarget {
    *  DetailModal. Absent on a deep link and on Continue Watching, both of which fall back
    *  to the old behaviour rather than getting it wrong. */
   imdb?: string;
+  /** the add-on's own content type for a card whose catalog is not movie/series — see MediaItem */
+  addonType?: string;
   /** when reopened from Continue Watching for a series, the episode to resume */
   resumeEp?: { season: number; episode: number };
 }
@@ -49,6 +51,7 @@ export function openItem(item: MediaItem, seed = 0): ModalTarget {
     genre: item.genre,
     poster: item.poster,
     imdb: typeof item.imdb === 'string' ? item.imdb : undefined,
+    addonType: typeof item.addonType === 'string' ? item.addonType : undefined,
     seed,
   };
 }

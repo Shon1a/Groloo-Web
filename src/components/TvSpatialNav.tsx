@@ -567,6 +567,11 @@ function scrollMarginBottom(el: HTMLElement) {
   return Math.max(NUDGE_PAD, Number.isFinite(v) ? v : 0);
 }
 
+/* How long the launch focus seed waits on a page that is still loading (see trySeed). Longer than
+ * the home query's own retries (lib/queries useHome), so a home that fails shows its retry button
+ * — and focuses it — before the seed gives up on it. */
+const SEED_PATIENCE_MS = 10000;
+
 export default function TvSpatialNav() {
   useEffect(() => {
     /* Read once — the query does not change mid-session, and reading it per keypress would force
@@ -585,7 +590,16 @@ export default function TvSpatialNav() {
     window.addEventListener('touchstart', onUserScroll, { passive: true });
 
     // Seed focus so the first arrow press has an anchor (the spotlight if it's up yet).
-    const seed = window.setTimeout(() => {
+    /* A PAGE STILL LOADING IS WAITED FOR, and the bar is the fallback only at the page you are on.
+     * Every bar item opens its page when focus rests on it (TvTopNav, THE PAGES FOLLOW FOCUS), and
+     * the first one is Search — so seeding "any nav item" while Home was still fetching (a backend
+     * waking up, an edge answering 429) carried the app off to Explore before Home had drawn a
+     * thing. While the page shows its loader the seed keeps looking, for up to SEED_PATIENCE_MS;
+     * then it settles on the current page's own item, which goes nowhere. A page that gives up
+     * loading puts focus on its own retry button, which ends the wait too. */
+    const seedFrom = performance.now();
+    let seed = 0;
+    const trySeed = () => {
       if (document.activeElement && document.activeElement !== document.body) return;
       // Prefer the featured billboard, then a row billboard, then any tile, then the nav —
       // checked in that order rather than as one comma-selector, which would just return
@@ -594,10 +608,16 @@ export default function TvSpatialNav() {
       // the hero and opens that row, so the app opened half way down itself.
       const start = document.querySelector<HTMLElement>('.tv-hero-scrim')
         || document.querySelector<HTMLElement>('.tv-spot-hero')
-        || document.querySelector<HTMLElement>('.poster')
-        || document.querySelector<HTMLElement>('.tv-nav-item');
-      start?.focus({ preventScroll: true });
-    }, 600);
+        || document.querySelector<HTMLElement>('.poster');
+      if (start) { start.focus({ preventScroll: true }); return; }
+      if (document.querySelector('.cat-loader') && performance.now() - seedFrom < SEED_PATIENCE_MS) {
+        seed = window.setTimeout(trySeed, 250);
+        return;
+      }
+      (document.querySelector<HTMLElement>('.tv-nav-item.active')
+        || document.querySelector<HTMLElement>('.tv-nav-item'))?.focus({ preventScroll: true });
+    };
+    seed = window.setTimeout(trySeed, 600);
 
     /* ---- OPENING AND CLOSING A LAYER -------------------------------------------------------
      * Two things a remote needs that a mouse never does.
@@ -777,16 +797,27 @@ export default function TvSpatialNav() {
          * the very bottom of a 670px card, so parking the button would leave the billboard
          * almost entirely above the top of the screen. Coming up out of the first row should
          * restore the hero exactly as it looks when the page is at rest. */
+        /* `[data-tv-park]` is the same treatment opted into by a page: a section that holds many
+         * small controls (My Space's Add-ons and Settings) parks as one unit, so Down steps a
+         * whole section the way it steps a home row, and moves inside it do not scroll at all. */
         const park: HTMLElement | null = next.classList.contains('tv-spot-hero')
           ? next
-          : next.closest<HTMLElement>('.tv-hero');
+          : next.closest<HTMLElement>('.tv-hero, [data-tv-park]');
         const toBar = vertical && !!next.closest('.tv-topnav');
         /* The row-to-row move — the one that is nearly every vertical press — is answered entirely
          * from the cache. The nudge below (a control that is not a row: a studio card, an add-on,
          * the footer) keeps reading AFTER focus, as it always did, because its margins are
          * `:focus`-dependent in the stylesheet and the focused element asks for more clearance than
          * the same element unfocused; it is also rare, so its one flush is not what this is about. */
-        const parked = vertical && !toBar && park ? parkTarget(park) : null;
+        let parked = vertical && !toBar && park ? parkTarget(park) : null;
+        /* A parked SECTION taller than the screen must still show the control the remote landed
+         * on: park it, then lift by whatever of that control would sit under the bottom edge.
+         * Sections only — rows and the hero are sized to the screen and keep the cached path. */
+        if (parked !== null && park && park !== next && park.hasAttribute('data-tv-park')) {
+          const bottomAfter = next.getBoundingClientRect().bottom + pageY() - parked;
+          const limit = window.innerHeight - scrollMarginBottom(next);
+          if (bottomAfter > limit) parked += bottomAfter - limit;
+        }
 
         /* preventScroll IS THE WHOLE REASON UP FELT WORSE THAN DOWN.
          *

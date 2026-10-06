@@ -4,6 +4,7 @@ import { useT, useGenre } from '../i18n/i18n';
 import { useGenres } from '../lib/queries';
 import { useModal, openItem } from '../stores/modal';
 import CatalogGrid from '../components/CatalogGrid';
+import AddonSearchRows, { useAddonSearch } from '../components/AddonSearchRows';
 import TvCatalogRow from '../components/TvCatalogRow';
 import TvChipMenu from '../components/DetailModal/TvChipMenu';
 import TvMultiMenu from '../components/TvMultiMenu';
@@ -286,6 +287,8 @@ export default function Explore() {
   }, [query, type, genres, year, yearTo, rating, ratingTo, t, genreT]);
 
   const onSelect = (item: MediaItem) => openModal(openItem(item));
+  // TV only: installed add-ons' search answers, folded into the one results row.
+  const { items: addonHits, searching: addonSearching } = useAddonSearch(IS_TV && desc.kind === 'search' ? desc.query : '');
   const clearAll = () => { setType('all'); setGenres([]); setYear(1970); setYearTo(null); setRating(0); setRatingTo(null); };
   const toggleGenre = (g: string) => setGenres((gs) => (gs.includes(g) ? gs.filter((x) => x !== g) : [...gs, g]));
 
@@ -513,8 +516,9 @@ export default function Explore() {
           <TvCatalogRow
             key={JSON.stringify(desc)}
             desc={desc}
-            title={desc.title}
+            title={addonSearching ? `${desc.title} · ${t('search.addons_searching')}` : desc.title}
             onSelect={onSelect}
+            lead={addonHits}
             emptyMessage={(
               <div className="grid-msg" style={{ color: 'var(--text-muted)', fontSize: 17, padding: '24px 4px' }}>
                 {desc.kind === 'search' ? t('grid.no_results', { q: desc.query }) : t('grid.no_titles')}
@@ -588,6 +592,7 @@ export default function Explore() {
       <div className="explore-body">
         <h2 className="explore-status" id="exploreStatus" aria-live="polite">{desc.title}</h2>
         <CatalogGrid desc={desc} host="explore" onSelect={onSelect} />
+        {desc.kind === 'search' && <AddonSearchRows query={desc.query} onSelect={onSelect} />}
       </div>
     </section>
   );

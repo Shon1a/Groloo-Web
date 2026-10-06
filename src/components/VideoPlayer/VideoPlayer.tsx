@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { usePlayer } from '../../stores/player';
 import { useHistory } from '../../stores/history';
@@ -16,6 +16,14 @@ import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
 import EpisodeRail from './EpisodeRail';
 import TvChipMenu from '../DetailModal/TvChipMenu';
 import { scrollCardToSlot } from './railScroll';
+import { createCreditsDetector, creditsFallback, creditsWatchFrom, type CreditsDetector } from '../../lib/creditsDetect';
+
+/* POST-PLAY IS ITS OWN CHUNK. Most playbacks never reach the credits (a series rolls straight into
+ * the next episode, a film gets closed early), so the screen, its data hooks and its stylesheet are
+ * fetched only once a film is close enough to its end to need them — see `ppArmed` below. */
+const PostPlay = lazy(() => import('../Spotlight/PostPlay'));
+/** How long post-play keeps the credits in their corner before they fade out. */
+const PP_MINI_MS = 10000;
 
 /* THE TWO BUILDS ARE ONE PLAYER WITH TWO INPUTS, and this constant is what splits them.
  * `import.meta.env.MODE` is a Vite compile-time string, so every `IS_TV` branch below is resolved
@@ -394,6 +402,25 @@ export default function VideoPlayer() {
   const [audioOpen, setAudioOpen] = useState(false); // the audio-track popup
   // why in-page demuxing is not driving this source; null when it is
   const [demuxBlocker, setDemuxBlocker] = useState<DemuxBlocker | null>(null);
+
+  /* ---- POST-PLAY: the credits shrink into the corner and the next thing to watch takes over -----
+   * Two states, because the screen has to be READY before it is SHOWN: `ppArmed` mounts it a few
+   * minutes before the end so its recommendations and trailers resolve while the film is still on,
+   * `ppOpen` is the takeover itself. Only for a film, or a series with no next episode to roll
+   * into — an episode with a next one keeps the Next Episode button, as it always did. */
+  const [ppArmed, setPpArmed] = useState(false);
+  const [ppOpen, setPpOpen] = useState(false);
+  const ppOpenRef = useRef(false);
+  /* "Back to credits" was chosen: the viewer wants the names, so post-play stays out of the way
+   * until the film actually ends. */
+  const ppDismissed = useRef(false);
+  /* The film's own `muted`, held while a trailer has the sound — null when nothing is ducked. */
+  const ppDucked = useRef<boolean | null>(null);
+  const detector = useRef<CreditsDetector | null>(null);
+  const detectorBlocked = useRef(false);
+  useEffect(() => { ppOpenRef.current = ppOpen; }, [ppOpen]);
+  /* The credits keep their corner for PP_MINI_MS, then fade away (see the effect by backToCredits). */
+  const [ppMiniGone, setPpMiniGone] = useState(false);
 
   // --- TV remote (see "TEN FEET AWAY" above; all of this is dropped from the web build) ---
   const [tvNav, setTvNav] = useState(false);              // the D-pad is driving the chrome
@@ -838,6 +865,7 @@ export default function VideoPlayer() {
     return () => { alive = false; };
   }, [source?.series]);
 
+
   const bump = useCallback(() => {
     setHideUi(false);
     window.clearTimeout(hideTimer.current);
@@ -864,6 +892,99 @@ export default function VideoPlayer() {
     const v = videoRef.current; if (!v) return;
     if (v.paused) v.play().catch(() => {}); else v.pause();
   }, []);
+
+  /* ---- POST-PLAY: WHEN ---------------------------------------------------------------------------
+   * Eligible: a film, or a series with no next episode to roll into, when the setting is on and the
+   * title is one we can describe. The moment is the start of the credits, from the best source
+   * available — IntroDB's outro marker, then the picture itself (lib/creditsDetect), then a
+   * conservative tail — and failing all of those, the end of the film. */
+  const ppEligible = !!source?.media && settings.postPlay !== false && !(source?.series && source?.next);
+
+  useEffect(() => {
+    setPpArmed(false); setPpOpen(false);
+    ppDismissed.current = false; ppDucked.current = null;
+    detector.current?.dispose(); detector.current = null; detectorBlocked.current = false;
+  }, [source]);
+
+  const openPostPlay = useCallback(() => {
+    if (ppOpenRef.current) return;
+    ppOpenRef.current = true;
+    setPpArmed(true);
+    setPpOpen(true);
+    // Whatever the viewer had open over the film goes with it; the D-pad belongs to post-play now.
+    setMenuOpen(false); setAudioOpen(false); setEpPanelOpen(false); setTvNav(false); setHideUi(false);
+    /* THE FILM COUNTS AS WATCHED from here. Continue Watching should not offer to resume someone
+     * into the credits of a film they finished; the progress writes below stand down while this is
+     * up so the playing credits cannot pull it back under the line. */
+    const v = videoRef.current, m = source?.media;
+    if (v && m?.key && v.duration > 0) putProgress(m.key, v.duration, v.duration, m.lang);
+  }, [source, putProgress]);
+
+  const backToCredits = useCallback(() => {
+    ppDismissed.current = true;
+    ppOpenRef.current = false;
+    setPpOpen(false);
+    const v = videoRef.current;
+    if (v && ppDucked.current !== null) { v.muted = ppDucked.current; ppDucked.current = null; }
+    if (IS_TV) overlayRef.current?.focus({ preventScroll: true });
+    bump();
+  }, [bump]);
+
+  /* THE CORNER IS BRIEF. The credits hold their frame for ten seconds — long enough to see the film
+   * has not been taken away, and to step back into it — and then fade out of the screen, leaving the
+   * trailers alone. Once faded the film is paused: its picture is gone, its music would only fight
+   * the trailers', and on a television its decoder is the one the trailers need. */
+  useEffect(() => {
+    if (!ppOpen) { setPpMiniGone(false); return; }
+    const id = window.setTimeout(() => setPpMiniGone(true), PP_MINI_MS);
+    return () => window.clearTimeout(id);
+  }, [ppOpen]);
+  useEffect(() => {
+    if (!ppMiniGone) return;
+    const id = window.setTimeout(() => { const v = videoRef.current; if (v && !v.paused) v.pause(); }, 900);
+    return () => window.clearTimeout(id);
+  }, [ppMiniGone]);
+
+  /* A post-play trailer with its sound up takes the room's sound: the credits are ducked under it
+   * and given back the moment it stops (the slideshow is silent, so the music returns there). */
+  const onPpAudible = useCallback((audible: boolean) => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (audible) {
+      if (ppDucked.current === null) { ppDucked.current = v.muted; v.muted = true; }
+    } else if (ppDucked.current !== null) {
+      v.muted = ppDucked.current; ppDucked.current = null;
+    }
+  }, []);
+
+  // Arming, and the two answers that do not need the picture: the outro marker and the tail.
+  useEffect(() => {
+    if (!ppEligible || !dur || ppOpen) return;
+    const short = dur < 600;   // a clip, a short: no credits worth detecting — only its end counts
+    if (!ppArmed && cur >= (short ? dur * 0.5 : Math.min(dur - 240, creditsWatchFrom(dur)))) setPpArmed(true);
+    if (ppDismissed.current || short) return;
+    const outro = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro.start : null;
+    /* While the picture can still be read, the tail waits for it — down to the last 25 seconds, for
+     * credits rolled over footage that the detector will never recognise. */
+    const at = outro ?? (detectorBlocked.current ? creditsFallback(dur) : dur - 25);
+    if (cur >= at && dur - cur > 1) openPostPlay();
+  }, [cur, dur, ppEligible, ppArmed, ppOpen, segments, openPostPlay]);
+
+  // The picture: once a second over the last stretch of the film, while it is playing.
+  useEffect(() => {
+    if (!ppEligible || ppOpen || !playing || !dur || dur < 600) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const id = window.setInterval(() => {
+      if (ppDismissed.current || detectorBlocked.current) return;
+      if (v.currentTime < creditsWatchFrom(v.duration || dur)) return;
+      if (!detector.current) detector.current = createCreditsDetector(v);
+      const r = detector.current.sample();
+      if (r.verdict === 'blocked') detectorBlocked.current = true;
+      else if (r.verdict === 'credits') openPostPlay();
+    }, IS_TV ? 1500 : 1000);
+    return () => window.clearInterval(id);
+  }, [ppEligible, ppOpen, playing, dur, openPostPlay]);
 
   /** Tear down the hold ramp. Safe to call when no ramp is running. */
   const stopRamp = useCallback(() => {
@@ -1398,6 +1519,9 @@ export default function VideoPlayer() {
   useEffect(() => {
     if (!source) return;
     const onKey = (e: KeyboardEvent) => {
+      // Post-play answers its own keys (in the capture phase, so they never reach here); Escape
+      // leaves the player from it, as Back does on a remote.
+      if (ppOpenRef.current) { if (e.key === 'Escape') close(); return; }
       /* Escape walks OUT one layer at a time. It used to close the whole player from anywhere,
        * so dismissing the gear menu tore down playback with it — two layers deep, wrong layer
        * closed. (On TV this handler never sees Escape at all: lib/tvKeys.ts resolves Back in the
@@ -1461,6 +1585,13 @@ export default function VideoPlayer() {
     if (!IS_TV || !source) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return;
+      /* POST-PLAY HAS THE REMOTE. This listener was registered first, so it is the one that must
+         step aside: the arrows walk post-play's row, OK opens a title, and nothing here may seek the
+         credits playing in the corner. Stop still means stop. */
+      if (ppOpenRef.current) {
+        if (mediaAction(e) === 'stop') { e.preventDefault(); close(); }
+        return;
+      }
       const consume = () => { e.preventDefault(); e.stopImmediatePropagation(); };
       const v = videoRef.current;
 
@@ -2100,7 +2231,7 @@ export default function VideoPlayer() {
          absent means the arrows are transport and it must stand down. `tv` / `web` are the
          styling hooks for the two builds' own stylesheets; `tv-rail` lifts the bar clear of the
          episode shelf on both. */
-      className={`vp-overlay open${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}`}
+      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}`}
       id="playerOverlay"
       ref={overlayRef}
       /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
@@ -2146,9 +2277,10 @@ export default function VideoPlayer() {
              tick or two — which would undo the seeding in commitSeek and put the recoil straight
              back. `seeking` is false again the moment the new position is real. */
           if (!v.seeking) setCur(v.currentTime);
-          // throttle resume-progress writes to ~once/5s
+          // throttle resume-progress writes to ~once/5s — and none while post-play holds the screen,
+          // which has already marked the film finished (see openPostPlay)
           const now = v.currentTime;
-          if (source.media?.key && v.currentTime > 8 && Math.abs(now - lastProgRef.current) >= 5) {
+          if (source.media?.key && !ppOpenRef.current && v.currentTime > 8 && Math.abs(now - lastProgRef.current) >= 5) {
             lastProgRef.current = now;
             putProgress(source.media.key, v.currentTime, v.duration || 0, source.media.lang);
           }
@@ -2159,7 +2291,7 @@ export default function VideoPlayer() {
           if (!recordedRef.current && source.media) {
             recordedRef.current = true;
             const m = source.media;
-            record({ id: m.id, title: m.title, poster: m.poster, year: m.year, type: m.type, genre: m.genre, rating: m.rating, ep: m.ep, key: m.key, season: m.season, episode: m.episode });
+            record({ id: m.id, title: m.title, poster: m.poster, year: m.year, type: m.type, genre: m.genre, rating: m.rating, ep: m.ep, key: m.key, season: m.season, episode: m.episode, imdb: m.imdb, addonType: m.addonType, backdrop: m.backdrop });
           }
         }}
         onPause={() => { setPlaying(false); setHideUi(false); }}
@@ -2203,7 +2335,13 @@ export default function VideoPlayer() {
           setErrKind((k) => k ?? kind);
         }}
         onVolumeChange={(e) => { setVol(e.currentTarget.volume); setMuted(e.currentTarget.muted); }}
-        onEnded={() => { setPlaying(false); if (settings.autoplayNext && source.next) source.next(); }}
+        onEnded={() => {
+          setPlaying(false);
+          /* The end of a film is post-play's last cue, whatever happened before it — including a
+             viewer who chose to watch the credits, who has now watched them. */
+          if (ppEligible) { ppDismissed.current = false; openPostPlay(); return; }
+          if (settings.autoplayNext && source.next) source.next();
+        }}
       >
         {/* `key` is the blob url so switching tracks REPLACES the element rather than
             mutating its src — a <track> that has already loaded keeps its old cues when
@@ -2401,6 +2539,14 @@ export default function VideoPlayer() {
           `epPanelOpen` by the length of the slide-down so the close can animate. */}
       {source.series && railMounted && (
         <EpisodeRail open={railShown} series={source.series} onClose={() => setEpPanelOpen(false)} />
+      )}
+
+      {/* POST-PLAY — mounted once armed (its data resolves while the film is still on), shown once
+          the credits start. The film's own <video> above is what shrinks into the corner. */}
+      {ppArmed && source.media && (
+        <Suspense fallback={null}>
+          <PostPlay media={source.media} open={ppOpen} miniGone={ppMiniGone} onBackToCredits={backToCredits} onAudible={onPpAudible} />
+        </Suspense>
       )}
     </div>
   );

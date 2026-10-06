@@ -10,6 +10,10 @@ import TvEpisodeDeck, { hasEpisodeDeck } from './TvEpisodeDeck';
 import type { MetaDetail } from '../../lib/types';
 import { currentEp } from '../../lib/episodeNumbering';
 import type { ModalTarget } from '../../stores/modal';
+import Glance from '../glance/Glance';
+import { useIntro } from '../glance/useGlance';
+import RateButtons from '../glance/RateButtons';
+import { GlanceIcon } from '../glance/GlanceIcons';
 
 /* ============================================================================
  * THE TITLE SCREEN ON A TV — a different SHAPE, not a stripped copy of the web modal.
@@ -134,61 +138,15 @@ export interface TvDetailProps {
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
 
-/* ---- THE DISC GLYPHS, AS DRAWN ICONS -------------------------------------------------------
- * `+`, `✓` and `⚑` were typed characters, and that is why they never matched each other: a text
- * glyph's weight belongs to the font, and in this one the plus is a hairline at a size where the
- * flag is a solid shape. No font-weight fixes it — `+` has no bold in most faces, and even
- * where it does it thickens the strokes without squaring the ends.
- *
- * Drawn instead, at the house icon spec (24-unit box, `currentColor`, round caps and joins) but
- * at stroke 3 rather than 2 — the nav icons sit alone at 28px, these sit inside a 44px disc next
- * to a filled glyph, and 2 reads as thin against it.
- *
- * `1em` rather than a pixel size, so they inherit the disc's own `font-size` clamp and keep
- * tracking it across resolutions instead of needing a second set of numbers. */
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="1.14em" height="1.14em" fill="none" stroke="currentColor"
-         strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="1.14em" height="1.14em" fill="none" stroke="currentColor"
-         strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
-  );
-}
-/* THE FLAG WAS THE LAST TYPED GLYPH IN THE ROW, and on the TV it was the one that broke: `⚑`
- * (U+2691) is missing from the system faces most TV browsers ship, so it fell through to the
- * emoji font and came back as a colour bitmap — an orange-and-white pennant in a box, ignoring
- * `color`, so it stayed that way through hover and through the white focus fill where every
- * other glyph flips to dark. Where even the emoji font lacks it the fallback is tofu, a literal
- * square. Drawn, it is the same shape everywhere and inherits `currentColor` like its siblings.
- *
- * Same spec as the two above, and the banner is deliberately open (stroke, not fill) so its
- * visual weight lands beside a stroked `+` rather than beside the solid block the text glyph
- * was. */
-function FlagIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="1.14em" height="1.14em" fill="none" stroke="currentColor"
-         strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M6 21V3.6" />
-      <path d="M6 4.8h12.4L15.3 9.6l3.1 4.8H6" />
-    </svg>
-  );
-}
-function CloseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="1.14em" height="1.14em" fill="none" stroke="currentColor"
-         strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M18 6 6 18M6 6l12 12" />
-    </svg>
-  );
-}
+/* ---- THE DISC ICONS: the Groloo 3D set ------------------------------------------------------
+ * The discs wear the same lit objects as the callouts (components/glance): an azure plus, a tick,
+ * a cobalt flag on a chrome pole, an ice-glass cross. They were drawn strokes, and before that typed
+ * characters that never matched each other; the set is one family by construction — one studio,
+ * one palette — so a disc row reads as a row. Sized in em off the disc's own font-size clamp. */
+function PlusIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="add" /></span>; }
+function CheckIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="added" /></span>; }
+function FlagIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="flag" /></span>; }
+function CloseIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="close" /></span>; }
 
 export default function TvDetail(p: TvDetailProps) {
   const t = useT();
@@ -455,8 +413,11 @@ export default function TvDetail(p: TvDetailProps) {
    * here; what changed is that the veil no longer renders a control to say so.
    *
    * The id is what TvSpatialNav looks for when deciding whether focus is merely parked. */
+  /* The icons play once as the title screen opens (useIntro) — this row is rendered in two places
+   * and rebuilt when the sources menu opens, and it must not replay on every one of those. */
+  const intro = useIntro(target.id);
   const closeBtn = (
-    <button className="tv-det-disc tv-det-close" id="closeModal" type="button"
+    <button className={`tv-det-disc tv-det-close${intro ? ' gl-run' : ''}`} id="closeModal" type="button"
             aria-label={t('modal.close_aria')} onClick={close}>
       <CloseIcon />
     </button>
@@ -473,11 +434,13 @@ export default function TvDetail(p: TvDetailProps) {
    * remote is already in. */
   const actions = (
     <>
-      <div className="tv-det-actions">
+      <div className={`tv-det-actions${intro ? ' gl-run' : ''}`}>
         <button className={`tv-det-disc${added ? ' on' : ''}`} id="mAdd" type="button"
                 aria-pressed={added} aria-label={t(added ? 'mylist.remove' : 'mylist.add')} onClick={onAdd}>
           {added ? <CheckIcon /> : <PlusIcon />}
         </button>
+        {/* The three thumbs, beside Add: what "picked for you" learns from. */}
+        <RateButtons id={target.id} type={target.type} title={title} genres={meta?.genre} className="tv-det-disc" />
         <button className="tv-det-disc" id="mReport" type="button"
                 aria-label={t('report.cta')} title={t('report.cta')} onClick={onReport}>
           <FlagIcon />
@@ -732,6 +695,9 @@ export default function TvDetail(p: TvDetailProps) {
                 {metaBits.map((b, i) => <span key={i} className="tv-det-metabit">{b}</span>)}
               </div>
             )}
+            {/* Info at a glance — the one line that says why: a new season, a top-ten place,
+                an award, a release date, or that it fits what this viewer loves. */}
+            <Glance item={{ id: target.id, type: target.type, year, rating, genre: target.genre }} meta={meta} awards waitForMeta />
 
             <p className="tv-det-plot">{plot}</p>
 

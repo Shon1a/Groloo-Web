@@ -1,5 +1,6 @@
 import { retainImage, isDecoded } from './useImageReady';
 import { parallaxEnabled } from './tvMotionFlags';
+import { glanceIconNode, type GlanceIconName } from '../components/glance/glanceSymbols';
 
 /* THE ROW'S STAGE — everything a press changes on screen, written to the DOM directly.
  *
@@ -151,6 +152,9 @@ export interface StageSlot {
   /** The line of facts and the synopsis beneath. */
   meta: string[];
   plot: string;
+  /** The title's at-a-glance callouts ("New Season", "#2 in Shows This Week"), at most two, for the
+   *  billboard's bottom-right corner — the reference's place for them. */
+  glance?: Array<{ icon: GlanceIconName; text: string; kind: string }>;
 }
 
 /** The card parked at the screen edge: its picture, where to seat it, and the plate behind it. */
@@ -194,6 +198,21 @@ const endFront = (icon: string): HTMLSpanElement => {
   return front;
 };
 const infoKeyOf = (slot: StageSlot): string => (slot.kind === 'title' ? `${slot.meta.join('\u0001')}\u0002${slot.plot}` : '');
+/* THE CALLOUTS HAVE A KEY OF THEIR OWN, apart from the card's: they can arrive LATER than the card
+ * (a title's awards come back after it has come to rest), and a change to them must touch the chips
+ * and nothing else — re-filling the plate for it would re-decode the wordmark under the viewer. */
+const glanceKeyOf = (slot: StageSlot): string => (slot.kind === 'title' && slot.glance?.length
+  ? slot.glance.map((g) => `${g.kind}:${g.text}`).join('\u0001') : '');
+const glanceChips = (list: NonNullable<StageSlot['glance']>): HTMLDivElement => {
+  const box = div('gl-chips tv on-art');
+  for (const g of list) {
+    const chip = document.createElement('span');
+    chip.className = `gl-chip k-${g.kind}`;
+    chip.append(glanceIconNode(g.icon), span('', g.text));
+    box.appendChild(chip);
+  }
+  return box;
+};
 
 export class TvRowStage {
   private p: StageParts;
@@ -204,6 +223,8 @@ export class TvRowStage {
    *  focus ring can go round the stack's front card rather than the whole billboard (tv.css). */
   private endIn: [boolean, boolean] = [false, false];
   private infoKey: [string, string] = ['', ''];
+  /** What each plate's callout chips are showing — see glanceKeyOf. */
+  private glanceKey: [string, string] = ['', ''];
   /** Which copy block is `.on`. It follows `front` on every press but a HELD one, which leaves the copy
    *  alone (the stylesheet hides it while the key is down) and lets `settle` put the right one up. */
   private infoOn: 0 | 1 = 0;
@@ -299,6 +320,7 @@ export class TvRowStage {
     this.layerKey[b] = '';
     this.endIn[b] = false;
     this.infoKey[b] = '';
+    this.glanceKey[b] = '';
     this.fillId[b]++;
     window.clearTimeout(this.plateTimer[b]);
     this.p.layers[b].replaceChildren();
@@ -313,7 +335,17 @@ export class TvRowStage {
   refresh(slot: StageSlot, peek: StagePeek): boolean {
     const f = this.front;
     let changed = false;
-    if (this.layerKey[f] !== slot.key) { this.fillLayer(f, slot); this.fillPlate(f, slot); this.layerKey[f] = slot.key; this.markEnd(); changed = true; }
+    if (this.layerKey[f] !== slot.key) {
+      // The same card can be re-filled in place (its artwork arrived): its callouts only replay if they changed.
+      const was = this.glanceKey[f];
+      this.fillLayer(f, slot); this.fillPlate(f, slot);
+      if (this.glanceKey[f] !== was) this.playChips(f);
+      this.layerKey[f] = slot.key; this.markEnd(); changed = true;
+    }
+    /* THE CARD ON SHOW KEEPS THE CALLOUTS IT CAME UP WITH. Its awards come back a second after it comes
+     * to rest and can outrank what is up — and swapping a chip under the viewer is a blink. Only a card
+     * that had none gets its first ones now (with their arrival); the rest wait for its next showing. */
+    else if (!this.glanceKey[f] && glanceKeyOf(slot)) { this.fillGlance(f, slot); this.playChips(f); changed = true; }
     /* NOT THE COPY WHILE A HOLD HAS LEFT IT FOR `settle`. React catches up with a hold every few steps,
      * and this used to write the synopsis for the card on screen each time — the dearest thing a step
      * can do, under a stylesheet that hides it, and the very work a hold is built to skip. Worse, it
@@ -348,6 +380,7 @@ export class TvRowStage {
       this.letGo(this.holding);
     }
     if (this.layerKey[b] !== slot.key) { this.fillLayer(b, slot); this.fillPlate(b, slot); this.layerKey[b] = slot.key; }
+    else if (this.glanceKey[b] !== glanceKeyOf(slot)) this.fillGlance(b, slot);
     if (!withInfo) return;
     const bi = (1 - this.infoOn) as 0 | 1;
     const ik = infoKeyOf(slot);
@@ -360,8 +393,14 @@ export class TvRowStage {
     this.cancelAnims();
     const b = (1 - this.front) as 0 | 1;
     if (this.layerKey[b] !== slot.key) { this.fillLayer(b, slot); this.fillPlate(b, slot); this.layerKey[b] = slot.key; }
+    else if (this.glanceKey[b] !== glanceKeyOf(slot)) this.fillGlance(b, slot);
     const outgoing = this.front;
     this.flip(b);
+    /* The incoming card's callouts arrive with it (their icons move once). Not on a held walk — three
+     * cards a second is no time to read them; `settle` plays the card the walk stops on. */
+    this.quietChips(outgoing);
+    if (o.held) this.quietChips(b);
+    else this.playChips(b);
     /* A HELD KEY GETS THE SLIDE, THE DISSOLVE AND THE PEEK — AND NO COPY AT ALL. The synopsis under the
      * billboard is three lines of text that nobody can read at three cards a second, and putting it up
      * is the most expensive thing a step does on the television: new nodes, a first shaping of every
@@ -390,6 +429,7 @@ export class TvRowStage {
   settle(slot: StageSlot, dir: 1 | -1, animate: boolean) {
     if (!this.infoStale) return;
     this.infoStale = false;
+    if (animate) this.playChips(this.front);
     const bi = (1 - this.infoOn) as 0 | 1;
     const ik = infoKeyOf(slot);
     if (this.infoKey[bi] !== ik) { this.fillInfo(bi, slot); this.infoKey[bi] = ik; }
@@ -574,6 +614,11 @@ export class TvRowStage {
   }
 
   private fillPlate(i: 0 | 1, slot: StageSlot) {
+    this.fillPlateCard(i, slot);
+    this.fillGlance(i, slot);
+  }
+
+  private fillPlateCard(i: 0 | 1, slot: StageSlot) {
     const plate = this.p.plates[i];
     if (slot.kind === 'none') { plate.replaceChildren(); return; }
     const card = div('tv-spot-card-in');
@@ -611,6 +656,31 @@ export class TvRowStage {
       plate.appendChild(bar);
     }
   }
+
+  /** The callout chips in a plate's bottom-right corner, written over whatever was there. Cheap: a
+   *  handful of nodes, and none at all for the many titles that have no callout. */
+  private fillGlance(i: 0 | 1, slot: StageSlot) {
+    const plate = this.p.plates[i];
+    plate.querySelector(':scope > .gl-chips')?.remove();
+    const k = glanceKeyOf(slot);
+    this.glanceKey[i] = k;
+    if (k && slot.glance) plate.appendChild(glanceChips(slot.glance));
+  }
+
+  /** Plate `i`'s callouts play their arrival — the tab rises, the icon makes its move (glance.css
+   *  `.rise` / `.gl-run`). Taking the classes off and putting them back is what restarts it. */
+  private playChips(i: 0 | 1) {
+    const box = this.p.plates[i].querySelector<HTMLElement>(':scope > .gl-chips');
+    if (!box) return;
+    box.classList.remove('gl-run', 'rise');
+    void box.offsetWidth;
+    box.classList.add('gl-run', 'rise');
+  }
+  private quietChips(i: 0 | 1) {
+    this.p.plates[i].querySelector(':scope > .gl-chips')?.classList.remove('gl-run', 'rise');
+  }
+  /** The row was entered: the card on show plays its callouts' arrival. */
+  playFront() { this.playChips(this.front); }
 
   /* ---- THE COPY ------------------------------------------------------------------------------ */
   private fillInfo(i: 0 | 1, slot: StageSlot) {

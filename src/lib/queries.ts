@@ -1,9 +1,9 @@
 import { useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from './api';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, ApiError } from './api';
 import { homeNetworkFirst } from './homeCache';
 import { collectAddonMeta } from './addonClient';
-import type { HomePayload, MediaItem, MetaDetail, SeasonEpisodes } from './types';
+import type { Awards, HomePayload, MediaItem, MetaDetail, SeasonEpisodes } from './types';
 import { useLang } from '../i18n/i18n';
 import { usePlayer } from '../stores/player';
 
@@ -44,14 +44,15 @@ const HOME_QUERY = IS_TV ? '&logos=1' : '';
  * One request for the whole row, and the cards come back from the same mapMovie the
  * browse rows use, so they are the same kind of thing a catalog tile is.
  *
- * TV only. The website draws these as small posters under a text caption and has no
- * use for the artwork, so it should not pay for it. */
-export function useCards(ids: string[]) {
+ * TV only by default. The website draws these as small posters under a text caption and has
+ * no use for the artwork, so it should not pay for it — except on a surface that DOES draw a
+ * billboard (the post-play screen), which passes `everywhere`. */
+export function useCards(ids: string[], everywhere = false) {
   const { lang } = useLang();
   const key = ids.join(',');
   return useQuery({
     queryKey: ['cards', key, lang],
-    enabled: IS_TV && key.length > 0,
+    enabled: (IS_TV || everywhere) && key.length > 0,
     queryFn: () => api<{ results: MediaItem[] }>(
       `/api/cards?ids=${encodeURIComponent(key)}&lang=${encodeURIComponent(lang)}&logos=1`),
     // Same as the home rows: admin-editable art, so do not hold it long.
@@ -60,16 +61,74 @@ export function useCards(ids: string[]) {
   });
 }
 
+function homeQueryFn(lang: string) {
+  /* Wrapped for the packaged TV build only — see lib/homeCache.ts; elsewhere a pass-through. */
+  return () => homeNetworkFirst(lang, () => api<HomePayload>(`/api/home?lang=${encodeURIComponent(lang)}${HOME_QUERY}`));
+}
+
+/* A FAILURE THAT CLEARS ON ITS OWN: no answer at all (offline, a dropped connection), or an answer
+ * that means "not now" — 408, 429, a 5xx. The free-tier backend answers 502 once or twice while it
+ * wakes, and the edge in front of it (Cloudflare, on Render) answers 429 with a challenge page when
+ * one address has asked too often — a whole household behind one router counts as one address. Any
+ * other 4xx is the request's own fault, and asking again changes nothing. */
+function isTransient(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return true;
+  return err.status === 408 || err.status === 429 || err.status >= 500;
+}
+
+/* How often a home screen that could not load asks again — only while the tab is in front
+ * (refetchIntervalInBackground stays off), and only while the last answer was a failure. */
+const HOME_RETRY_MS = 15 * 1000;
+
 export function useHome() {
   const { lang } = useLang();
   return useQuery({
     queryKey: ['home', lang],
-    /* Wrapped for the packaged TV build only — see lib/homeCache.ts; elsewhere a pass-through. */
-    queryFn: () => homeNetworkFirst(lang, () => api<HomePayload>(`/api/home?lang=${encodeURIComponent(lang)}${HOME_QUERY}`)),
+    queryFn: homeQueryFn(lang),
     // admin-editable content (covers, titles, Featured Hero) — mirror the API's
     // max-age=60 and refresh on tab focus so admin edits appear within ~a minute
     staleTime: 60 * 1000,
     refetchOnWindowFocus: refetchFocusUnlessPlaying,
+    /* The whole app hangs off this one payload, so a blip must not end on the error screen: a
+     * transient failure gets two more tries a second or two apart, and if those fail too the
+     * query keeps asking every HOME_RETRY_MS — so the screen comes back by itself the moment the
+     * server does, instead of waiting for someone to reload. */
+    retry: (n, err) => n < (isTransient(err) ? 2 : 1),
+    retryDelay: (n) => Math.min(1000 * 2 ** n, 8000),
+    refetchInterval: (q) => (q.state.status === 'error' ? HOME_RETRY_MS : false),
+  });
+}
+
+/* THE HOME PAYLOAD IF IT IS ALREADY HERE, AND NEVER A REQUEST FOR IT.
+ *
+ * Several surfaces want to know things only the home rows know — what is in this week's top
+ * ten, what is trending to fill a slideshow — and none of them is worth a fetch of the whole
+ * home screen. A detail sheet opened from search, or the player's post-play screen, reads the
+ * copy the home screen left in the cache and does without when there is none. Subscribed, so a
+ * refetch that lands while one of them is open still reaches it. */
+export function useHomeCached() {
+  const { lang } = useLang();
+  return useQuery({
+    queryKey: ['home', lang],
+    queryFn: homeQueryFn(lang),
+    enabled: false,
+  }).data;
+}
+
+/* WHAT A TITLE HAS WON — /api/awards/:imdb, already cut down to callouts server-side.
+ *
+ * Asked for only where one title is in focus (a billboard at rest, a detail sheet, a post-play
+ * slide), never per tile: a row would be twenty IMDb lookups to decorate one card. Awards move
+ * once a year, so a day is short; failures answer an empty summary rather than an error. */
+export function useAwards(imdb: string | undefined | null) {
+  return useQuery({
+    queryKey: ['awards', imdb],
+    queryFn: () => api<Awards>(`/api/awards/${imdb}`),
+    enabled: !!imdb && /^tt\d+$/.test(imdb),
+    staleTime: 24 * 60 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -104,6 +163,29 @@ export function useMeta(id: string | number | undefined, type?: MediaItem['type'
     ...metaQuery(id, type, lang),
     enabled: id != null && id !== '',
     refetchOnWindowFocus: refetchFocusUnlessPlaying,
+  });
+}
+
+/* /api/meta IF SOMETHING ELSE ALREADY READ IT, and never a request. A billboard rotating past a
+ * title must not cost a detail lookup per rotation, but when the title HAS been described (rested
+ * on, opened, prefetched as a neighbour) its run and awards can dress the callouts for free. */
+export function useMetaCached(id: string | number | undefined, type?: MediaItem['type']) {
+  const { lang } = useLang();
+  return useQuery({ ...metaQuery(id, type, lang), enabled: false }).data;
+}
+
+/* /api/meta for SEVERAL titles at once, under the very keys useMeta uses — so a title read here
+ * is already warm when its own detail sheet opens, and one opened before is free here. For the
+ * few surfaces that describe a handful of titles together (post-play, Top Picks' seeds); never
+ * for a whole row. Answers in input order; a title still loading is undefined. */
+export function useMetaMany(items: Array<Pick<MediaItem, 'id' | 'type'>>) {
+  const { lang } = useLang();
+  return useQueries({
+    queries: items.map((it) => ({
+      ...metaQuery(it.id, it.type, lang),
+      enabled: it.id != null && it.id !== '',
+      refetchOnWindowFocus: false,
+    })),
   });
 }
 
@@ -155,13 +237,14 @@ export function useAddonMeta(
   id: string | number | undefined,
   type: MediaItem['type'],
   apiFailed: boolean,
+  addonType?: string,
 ) {
   const wire: 'movie' | 'series' = type === 'tv' || type === 'series' ? 'series' : 'movie';
   const enabled = id != null && id !== '' && (!isOurId(id) || apiFailed);
   return useQuery({
-    queryKey: ['addon-meta', String(id), wire],
+    queryKey: ['addon-meta', String(id), addonType || wire],
     queryFn: async (): Promise<MetaDetail | null> => {
-      const m = await collectAddonMeta(String(id), wire);
+      const m = await collectAddonMeta(String(id), wire, addonType || wire);
       if (!m) return null;
       /* Mapped to `MetaDetail` HERE rather than at the call site so the modal never has to
        * know which of the two sources answered. The two extra fields are the ones that carry
@@ -264,6 +347,18 @@ export function useImdbTrailer(imdb: string | undefined) {
     // Nothing here reacts to the UI language, and a preview must never be re-fetched (and so
     // restarted) because the window was clicked away from and back.
     refetchOnWindowFocus: false,
+  });
+}
+
+/** The trailers of several titles, for a surface that plays them in turn (post-play). Same
+ *  keys and lifetimes as useImdbTrailer, so the row billboard's answers are reused. */
+export function useImdbTrailerMany(imdbs: Array<string | undefined>) {
+  return useQueries({
+    queries: imdbs.map((imdb) => ({
+      ...imdbTrailerQuery(imdb),
+      enabled: !!imdb,
+      refetchOnWindowFocus: false,
+    })),
   });
 }
 

@@ -169,7 +169,9 @@ function CoreCard() {
   );
 }
 
-export default function Settings() {
+/* `embedded` is My Space's section (routes/Library.tsx): the same grid without its own heading,
+ * which the section draws instead. */
+export default function Settings({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useT();
   const nav = useNavigate();
   const { lang, setLang, languages } = useLang();
@@ -233,10 +235,13 @@ export default function Settings() {
     ? `${-ow}px ${-ow}px 0 ${oc}, ${ow}px ${-ow}px 0 ${oc}, ${-ow}px ${ow}px 0 ${oc}, ${ow}px ${ow}px 0 ${oc}`
     : 'none';
 
+  const Wrap = embedded ? 'div' : 'section';
   return (
-    <section className="page active" id="settings" aria-label={t('settings.title')}>
+    <Wrap className={embedded ? 'msx-embed' : 'page active'} id="settings" aria-label={embedded ? undefined : t('settings.title')}>
+      {!embedded && <>
       <h2 className="section-title display">{t('settings.title')}</h2>
       <p className="section-sub">{t('settings.sub')}</p>
+      </>}
 
       <div className="settings-grid">
         <Card icon={icons.interface} head={t('settings.interface_head')} desc={t('settings.interface_desc')}>
@@ -266,6 +271,12 @@ export default function Settings() {
           <div className="setting-row">
             <label>{t('settings.autoplay_next')}</label>
             <Toggle checked={settings.autoplayNext} onChange={set('autoplayNext')} label={t('settings.autoplay_next')} />
+          </div>
+          {/* Post-play: the credits shrink into the corner and trailers of what to watch next take
+              the screen (components/Spotlight). On by default; this is the way out of it. */}
+          <div className="setting-row">
+            <label>{t('settings.postplay')}</label>
+            <Toggle checked={settings.postPlay} onChange={set('postPlay')} label={t('settings.postplay')} />
           </div>
           <div className="setting-row">
             <label>{t('settings.next_popup')}</label>
@@ -409,10 +420,15 @@ export default function Settings() {
 
           {user && (
             <>
-              <div className="set-note">
-                <svg className="note-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3.5 21 20H3z" /><path d="M12 10v4M12 17h.01" /></svg>
-                <span>{t('settings.delete_what')}</span>
-              </div>
+              {/* What deletion removes is spelled out at the moment it is armed, beside the button
+                  that commits it — the moment it is read. `set-note-keep`: My Space's compact grid
+                  drops the other notes, never this one. */}
+              {confirmDelete && (
+                <div className="set-note set-note-keep">
+                  <svg className="note-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3.5 21 20H3z" /><path d="M12 10v4M12 17h.01" /></svg>
+                  <span>{t('settings.delete_what')}</span>
+                </div>
+              )}
               {deleteErr && <div className="auth-error" role="alert">{deleteErr}</div>}
               {/* .ctl-group, not .set-actions: the latter carries its own 22px side
                   padding because it hangs off the bottom of a card, outside .set-card-body.
@@ -443,6 +459,6 @@ export default function Settings() {
             store-compliance surface further down the column on a phone. */}
         <CoreCard />
       </div>
-    </section>
+    </Wrap>
   );
 }

@@ -29,6 +29,11 @@ export interface PlayMedia {
   episode?: number | null;
   ep?: string; // display label e.g. "S1E1"
   lang?: string; // audio/source language being watched, so resume picks the same one
+  /** Carried so Continue Watching can reopen and dress an ADD-ON title: its own content type
+   *  (meta/streams live under it), its IMDb id (art lookup), and its backdrop (TV billboard). */
+  imdb?: string;
+  addonType?: string;
+  backdrop?: string;
 }
 
 export interface PlaySource {

@@ -9,6 +9,7 @@ import { CATALOG_CATS, PROVIDER_CATS } from '../lib/home';
 import { isOkKey, openTvKeyboard } from '../lib/tvIme';
 import ConfigModal, { type ConfigTarget } from '../components/ConfigModal';
 import PreviewModal from '../components/PreviewModal';
+import InstallAddonModal from '../components/InstallAddonModal';
 
 /* Add-on Catalog — faithful port of the vanilla #addons. The OFFICIAL list is now
  * sourced from the Shon1a/Groloo-official-addons repo via the Groloo-Heart WASM
@@ -81,7 +82,9 @@ const cardActions = (card: HTMLElement) =>
  *  a value written behind React's back would not survive that. */
 const actProps = IS_TV ? { tabIndex: -1 } : {};
 
-function useCardNav() {
+/* `grid` is My Space's compact layout, where the cards sit side by side: there Right has to reach
+ * the NEXT card, so only OK steps in, and Right off the last action leaves for the next card. */
+function useCardNav(grid = false) {
   return (name: string) => {
     if (!IS_TV) return {};
     return {
@@ -97,7 +100,7 @@ function useCardNav() {
          * undone — TvSpatialNav listens on `window`, so without it the same Right would also run
          * a spatial move and overrule the button we just chose. */
         if (e.target === card) {
-          if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'ArrowRight') return;
+          if (e.key !== 'Enter' && e.key !== ' ' && (grid || e.key !== 'ArrowRight')) return;
           e.preventDefault(); e.stopPropagation();
           acts[0].focus();
           return;
@@ -108,6 +111,9 @@ function useCardNav() {
 
         /* INSIDE THE ACTIONS. Left/Right rove; Left off the first one backs out to the card. */
         if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          /* Handed back to the card and NOT consumed, the same trick as Up/Down below: spatial nav
+           * then moves on from the card's own box, to the card beside it. */
+          if (grid && e.key === 'ArrowRight' && i === acts.length - 1) { card.focus(); return; }
           e.preventDefault(); e.stopPropagation();
           const next = e.key === 'ArrowRight'
             ? acts[Math.min(i + 1, acts.length - 1)]
@@ -150,7 +156,9 @@ function PuzzleIcon() {
   );
 }
 
-export default function Addons() {
+/* `embedded` is My Space's pane (routes/Library.tsx): the same page without its own heading,
+ * which the pane draws instead. */
+export default function Addons({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useT();
   const installed = useAddons((s) => s.installed);
   const unlinked = useAddons((s) => s.unlinked);
@@ -179,9 +187,12 @@ export default function Addons() {
    * the app never has to trust this label to route the repair. It is a caption, and a
    * wrong one costs a confusing sentence rather than a mis-installed add-on. */
   const [relink, setRelink] = useState<string | null>(null);
+  /* Off the TV the URL is entered in its own sheet (InstallAddonModal) — see its header for
+   * why. The TV keeps the inline box below, whose remote handling is built around it. */
+  const [installOpen, setInstallOpen] = useState(false);
   const urlRef = useRef<HTMLInputElement>(null);
   const enterRef = useRef<HTMLButtonElement>(null);
-  const cardNav = useCardNav();
+  const cardNav = useCardNav(embedded);
 
   /* ---- THE ONE CONTROL A REMOTE COULD GET STUCK IN ------------------------------------------
    * TvSpatialNav stands down for INPUT/TEXTAREA — it must, or typing in the search box would
@@ -239,6 +250,7 @@ export default function Addons() {
    * caption and sends focus (which on a remote is also the scroll) there. */
   const startRelink = (name: string) => {
     setRelink(name); setErr(''); setUrl('');
+    if (!IS_TV) { setInstallOpen(true); return; }
     // preventScroll first, then scroll: focus() jumps the field into view instantly and
     // would otherwise fight the smooth scroll, landing the caption off-screen above it.
     urlRef.current?.focus({ preventScroll: true });
@@ -271,8 +283,10 @@ export default function Addons() {
   const isOn = (a: OfficialAddon) => (PROTECTED.has(a.id) ? config[a.id as OfficialKey] : (a.defaultInstalled ?? true));
   const officialOn = official.filter(isOn).length;
 
+  const Wrap = embedded ? 'div' : 'section';
   return (
-    <section className="page active" id="addons" aria-label={t('addons.title')}>
+    <Wrap className={embedded ? 'msx-embed' : 'page active'} id="addons" aria-label={embedded ? undefined : t('addons.title')}>
+      {!embedded && <>
       <h2 className="section-title display addons-head">
         <svg className="pzPiece" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
           <defs>
@@ -293,6 +307,7 @@ export default function Addons() {
         <span>{t('addons.sub')}</span>{' '}
         <span className="mono" style={{ color: 'var(--accent)' }}>{t('addons.installed_count', { n: officialOn + installed.length })}</span>
       </p>
+      </>}
 
       {/* Official */}
       <div className="addon-section">
@@ -343,6 +358,11 @@ export default function Addons() {
         <div className="addon-sec-head">
           <h3 className="addon-sec-title">{t('addons.community_head')}</h3>
           <span className="addon-sec-count">{t('addons.count_installed', { n: installed.length, total: installed.length })}</span>
+          {!IS_TV && (
+            <button className="minibtn install addon-install-open" type="button" onClick={() => { setRelink(null); setInstallOpen(true); }}>
+              {t('addons.install_open')}
+            </button>
+          )}
         </div>
         <p className="addon-sec-disclaimer">{t('addons.community_disclaimer')}</p>
         <div className="addon-grid" id="communityAddons">
@@ -420,6 +440,7 @@ export default function Addons() {
         </>
       )}
 
+      {IS_TV && <>
       <h4 style={{ fontSize: 16, letterSpacing: '.18em', color: 'var(--text-muted)', margin: '38px 0 12px' }}>{t('addons.install_head')}</h4>
       {/* The armed-repair caption. role=status so a screen reader hears the field it was
         * just moved to has acquired a subject; the cancel control is a real button so a
@@ -451,9 +472,23 @@ export default function Addons() {
       </div>
       {err && <div style={{ color: '#e66', fontSize: 13, marginTop: 8 }}>{err}</div>}
       <div className="mono" style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>{t('addons.install_eg')}</div>
+      </>}
+
+      {/* Off the TV the old inline box's place keeps an entry point: the page is long, the
+        * header button above scrolls away, and the foot of the list is where people look. */}
+      {!IS_TV && (
+        <div className="addon-install-foot">
+          <h4>{t('addons.install_head')}</h4>
+          <button className="addon-install-cta" type="button" onClick={() => { setRelink(null); setInstallOpen(true); }}>
+            {t('addons.install_open')}
+          </button>
+        </div>
+      )}
+
+      {installOpen && <InstallAddonModal relink={relink} onClose={() => { setInstallOpen(false); setRelink(null); }} />}
 
       {cfg && <ConfigModal target={cfg} onClose={() => setCfg(null)} />}
       {preview && <PreviewModal id={preview.id} name={preview.name} onClose={() => setPreview(null)} />}
-    </section>
+    </Wrap>
   );
 }

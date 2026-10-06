@@ -2,6 +2,7 @@ import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useR
 import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useHome } from '../lib/queries';
+import { ApiError } from '../lib/api';
 import { useT } from '../i18n/i18n';
 import { HOME_ROWS, CATALOG_CATS, PROVIDER_CATS } from '../lib/home';
 import { useHomeConfig, rowOn } from '../stores/homeConfig';
@@ -12,6 +13,7 @@ import TvHero from '../components/TvHero';
 import UpcomingMarquee from '../components/UpcomingMarquee';
 import StudioRow from '../components/StudioRow';
 import ContinueRow from '../components/ContinueRow';
+import PicksRow from '../components/PicksRow';
 import AddonRows from '../components/AddonRows';
 import { useModal, openItem } from '../stores/modal';
 import { useLibrary } from '../stores/library';
@@ -109,7 +111,7 @@ function StagedStrips({ rows, tail, onSelect, onSeeAll }: {
 
 export default function Home() {
   const t = useT();
-  const { data, isLoading, isError, error } = useHome();
+  const { data, isLoading, isError, isFetching, error, refetch } = useHome();
   const openModal = useModal((s) => s.open);
   const nav = useNavigate();
   const toggleList = useLibrary((s) => s.toggle);
@@ -152,6 +154,25 @@ export default function Home() {
       .slice(0, HOME_RAIL_CAP)
     : []), [upMovies, upSeries]);
 
+  /* BACK FROM THE RETRY PANEL ON A TELEVISION. The remote was on its button, and the button has
+   * just gone — which leaves focus on <body>, nowhere the D-pad can start from. Put it where launch
+   * would have (TvSpatialNav's seed): the featured billboard, then a row billboard, then a tile. */
+  const wasDown = useRef(false);
+  const isDown = isError && !data;
+  useEffect(() => {
+    if (!IS_TV) return;
+    if (isDown) { wasDown.current = true; return; }
+    if (!data || !wasDown.current) return;
+    const id = window.setTimeout(() => {
+      wasDown.current = false;
+      if (document.activeElement && document.activeElement !== document.body) return;
+      (document.querySelector<HTMLElement>('.tv-hero-scrim')
+        || document.querySelector<HTMLElement>('.tv-spot-hero')
+        || document.querySelector<HTMLElement>('.poster'))?.focus({ preventScroll: true });
+    }, 600);
+    return () => window.clearTimeout(id);
+  }, [isDown, data]);
+
   // Same gooey metaball the drill-down / Explore grids use (CatalogGrid), so arriving on Home
   // and arriving on TV/Movies look like the same app. .grid-loader centres it in a 52vh box;
   // no gridColumn here — CatalogGrid needs 1/-1 because it renders INSIDE the .grid, this
@@ -165,13 +186,24 @@ export default function Home() {
       </section>
     );
   }
-  if (isError) {
+  /* ONLY WHEN THERE IS NOTHING TO SHOW. A refetch that fails (a tab coming back into focus while
+   * the server is down) leaves the rows it already loaded in `data` — and replacing a working home
+   * screen with an error over a background refresh is how a one-minute block upstream reads as a
+   * broken app. With no rows yet, this panel stands in, and useHome keeps asking behind it. */
+  if (isDown) {
+    const busy = error instanceof ApiError && error.status === 429;
     return (
       <section className="page active" id="browse">
-        <div style={{ padding: 24, color: '#e66' }}>
-          <p>Could not reach /api/home.</p>
-          <pre style={{ color: '#a55', fontSize: 12 }}>{String(error)}</pre>
-          <p style={{ color: '#666', fontSize: 12 }}>Start the backend (or set VITE_API_BASE) — the pipe is wired.</p>
+        <div className="home-down" role="alert">
+          <p className="home-down-title">{t('home.down_title')}</p>
+          <p className="home-down-body">{t(busy ? 'home.down_busy' : 'home.down_body')}</p>
+          {/* Not `disabled` while it asks: a television's remote is ON this button, and disabling the
+              focused element drops focus to the page. A press during a retry is simply ignored. */}
+          <button className="loadmore" type="button" autoFocus={IS_TV} aria-busy={isFetching}
+            onClick={() => { if (!isFetching) void refetch(); }}>
+            {isFetching ? t('grid.loading') : t('home.retry')}
+          </button>
+          {import.meta.env.DEV && <pre className="home-down-detail">{String(error)}</pre>}
         </div>
       </section>
     );
@@ -236,6 +268,9 @@ export default function Home() {
           ))
           : <UpcomingMarquee movies={upMovies ?? []} series={upSeries ?? []} onSelect={onSelect} onSeeAll={onSeeAll} />)}
         <ContinueRow onSelect={onSelect} />
+        {/* Top Picks for You — hidden until the viewer's history or thumbs give it something
+            personal to say; see PicksRow. */}
+        <PicksRow onSelect={onSelect} />
         <div id="strips">
           <StagedStrips
             rows={stripRows}

@@ -4,7 +4,8 @@ import { useT, useGenre } from '../i18n/i18n';
 import { imgW, rasterLogo } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useImdbTrailer, useMeta, apiIdOf } from '../lib/queries';
+import { useImdbTrailer, useMeta, useMetaCached, apiIdOf } from '../lib/queries';
+import Glance from './glance/Glance';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { FadeBg, FadeImg } from './FadeArt';
@@ -300,6 +301,10 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     },
   );
 
+  // The callouts read the title's detail only when something else already fetched it — see
+  // useMetaCached. Declared above the early return so the hook order never changes.
+  const curMeta = useMetaCached(shown ? apiIdOf(shown) : undefined, shown?.type);
+
   if (!n) return null;
   // The SAME record the art layers were handed, so the wordmark and the photograph can never be
   // describing two different titles — see the note on the dissolve above.
@@ -384,6 +389,12 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
           onKeyDown={onCardKey}
           onClick={open}
         />
+
+        {/* INFO AT A GLANCE — "#1 in Movies This Week", "New Season", "Emmy Award Winner" — in the
+            billboard's bottom-right corner, the reference's place for them: the wordmark has the
+            bottom-left. Shown at rest and while a trailer plays; keyed on the slide so they arrive
+            with it. */}
+        <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} className="on-art" />
 
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
         <div className="tv-hero-copy" key={`copy-${active}`}>

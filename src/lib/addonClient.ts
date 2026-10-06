@@ -695,7 +695,8 @@ function mapSourceStream(s: RawStream, addonName: string): AddonStream | null {
  *  relative to each other. */
 export async function collectAddonStreams(
   videoId: string,
-  type: 'movie' | 'series',
+  /** movie | series, or an add-on's own type for its own titles (MediaItem.addonType) */
+  type: string,
   onPartial?: (streams: AddonStream[]) => void,
 ): Promise<AddonStream[]> {
   if (!(await loadCore())) return [];
@@ -863,7 +864,7 @@ export async function collectAddonSubtitles(videoId: string, type: 'movie' | 'se
    * per language) reads exactly as before. */
   const count: Record<string, number> = {};
   return per.flat().map((s) => {
-    const k = s.source + ' ' + s.label;
+    const k = s.source + '\0' + s.label;
     const n = (count[k] = (count[k] || 0) + 1);
     return n > 1 ? { ...s, label: `${s.label} #${n}` } : s;
   });
@@ -1027,11 +1028,11 @@ function mapAddonMeta(raw: RawMeta, fallbackId: string, fallbackType: 'movie' | 
 }
 
 /** Ask the installed add-ons to describe `id`. Null when none of them can. */
-export async function collectAddonMeta(id: string, type: 'movie' | 'series'): Promise<AddonMeta | null> {
+export async function collectAddonMeta(id: string, type: 'movie' | 'series', wireType: string = type): Promise<AddonMeta | null> {
   if (!(await loadCore())) return null;
-  const addons = eligible('meta', type, id);
+  const addons = eligible('meta', wireType, id);
   if (!addons.length) return null;
-  const path = resourcePath('meta', type, id);
+  const path = resourcePath('meta', wireType, id);
   const per = await Promise.all(addons.map(async (a) => {
     try {
       const body = JSON.parse(await fetchAddonText(addonBaseUrl(a.url), path)) as { meta?: RawMeta };
@@ -1085,9 +1086,18 @@ export function listAddonCatalogs(): AddonCatalog[] {
  *  JSON no longer looks like an add-on with nothing to offer: it comes back ok:false and
  *  heart.ts logs it once. */
 export async function fetchAddonCatalog(c: AddonCatalog): Promise<MediaItem[]> {
+  return fetchCatalogPath(c.base, resourcePath('catalog', c.type, c.id), c.type);
+}
+
+/* A catalog type outside the movie/series vocabulary is the add-on's own label, and its meta
+ * and stream resources live under that label too — so the card has to remember it. */
+const STANDARD_TYPES = new Set(['movie', 'series', 'tv', 'show', 'shows', 'tvshow']);
+
+async function fetchCatalogPath(base: string, path: string, catType?: string): Promise<MediaItem[]> {
   if (!(await loadCore())) return [];
+  if (!path) return [];
   try {
-    const body = await fetchAddonText(c.base, resourcePath('catalog', c.type, c.id));
+    const body = await fetchAddonText(base, path);
     const items = callData<MediaItem[]>('catalog_metas', (k) => k.catalog_metas(body)) ?? [];
     /* The core maps a catalog card to `CatalogItem`, which has no `imdb` field, so the
      * add-on's `imdb_id` is dropped on the floor there. Rather than widen the Rust struct
@@ -1098,21 +1108,132 @@ export async function fetchAddonCatalog(c: AddonCatalog): Promise<MediaItem[]> {
      * never claimed to produce, and touches nothing it did. A body that does not parse, or
      * an add-on that sends no `imdb_id`, simply leaves the cards exactly as they are. */
     try {
-      const rows = (JSON.parse(body) as { metas?: Array<{ id?: unknown; imdb_id?: unknown }> })?.metas;
+      const rows = (JSON.parse(body) as { metas?: Array<{ id?: unknown; imdb_id?: unknown; background?: unknown }> })?.metas;
       if (Array.isArray(rows)) {
         const byId = new Map<string, string>();
+        // `background` too, for the same reason: the TV billboard reads `backdrop`, and an
+        // add-on card without one shows as an empty grey panel when it is walked to.
+        const bgById = new Map<string, string>();
         for (const r of rows) {
-          const rid = str(r?.id), imdb = str(r?.imdb_id);
+          const rid = str(r?.id), imdb = str(r?.imdb_id), bg = str(r?.background);
           if (rid && imdb && /^tt\d+$/.test(imdb)) byId.set(rid, imdb);
+          if (rid && bg && /^https?:\/\//.test(bg)) bgById.set(rid, bg);
         }
-        if (byId.size) {
+        if (byId.size || bgById.size) {
           for (const it of items) {
             const imdb = byId.get(String(it.id));
             if (imdb) it.imdb = imdb;
+            const bg = bgById.get(String(it.id));
+            if (bg && !it.backdrop) it.backdrop = bg;
           }
         }
       }
     } catch { /* the cards are still good without it */ }
+    if (catType && !STANDARD_TYPES.has(catType.toLowerCase())) for (const it of items) it.addonType = catType;
     return items;
-  } catch { return []; }
+  } catch (e) {
+    // Origin only — the path of a configured add-on carries the user's keys.
+    let origin = base; try { origin = new URL(base).origin; } catch { /* keep */ }
+    console.warn('[addon catalog] request failed', origin, path.split('/').slice(0, 3).join('/'), e instanceof Error ? e.message : e);
+    return [];
+  }
+}
+
+/* ── search: installed add-ons' searchable catalogs ──────────────────────────── */
+
+/* A catalog answers a search when its declaration says so — `extra: [{ name: 'search' }]`
+ * in the current protocol, `extraSupported: ['search']` in the older one. Read off the
+ * manifest the shell holds (the core's CatalogEntry carries no extras); the server keeps
+ * these fields on the synced copy so an add-on installed elsewhere is searchable here too. */
+interface CatalogDecl { type?: unknown; id?: unknown; extra?: unknown; extraSupported?: unknown }
+const declSearches = (d: CatalogDecl | undefined): boolean => {
+  if (!d) return false;
+  if (Array.isArray(d.extra) && d.extra.some((e) => (e as { name?: unknown })?.name === 'search')) return true;
+  return Array.isArray(d.extraSupported) && d.extraSupported.includes('search');
+};
+
+/* THE MANIFEST THIS DEVICE HOLDS MAY NOT SAY WHETHER A CATALOG SEARCHES. A copy that came
+ * down from the account sync was trimmed by the server to `{ type, id, name }` per catalog
+ * (servers before the sync kept `extra`), so an add-on installed on another device — or before
+ * that change — looks like it has no searchable catalog at all. When a manifest carries no
+ * extra information on ANY catalog, ask the add-on itself for its manifest, once per session.
+ * Client-direct like every other add-on call; a failure falls back to the copy we have. */
+const fullManifests = new Map<string, Promise<AddonRecord['manifest']>>();
+const declaresExtras = (cats: unknown[] | undefined) =>
+  (cats || []).some((d) => Array.isArray((d as CatalogDecl)?.extra) || Array.isArray((d as CatalogDecl)?.extraSupported));
+function manifestWithExtras(a: AddonRecord): Promise<AddonRecord['manifest']> {
+  if (!a.manifest.catalogs?.length || declaresExtras(a.manifest.catalogs)) return Promise.resolve(a.manifest);
+  let p = fullManifests.get(a.url);
+  if (!p) {
+    p = (async () => {
+      try {
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), 15000);
+        try {
+          const r = await fetch(a.url, { headers: { accept: 'application/json' }, signal: ctrl.signal });
+          if (!r.ok) return a.manifest;
+          const m = await r.json() as AddonRecord['manifest'];
+          return Array.isArray(m?.catalogs) ? m : a.manifest;
+        } finally { clearTimeout(to); }
+      } catch { return a.manifest; }
+    })();
+    fullManifests.set(a.url, p);
+  }
+  return p;
+}
+
+/** The installed (and not hidden) catalogs that accept a `search` extra. */
+export async function listSearchCatalogs(): Promise<AddonCatalog[]> {
+  const out: AddonCatalog[] = [];
+  await Promise.all(installed().map(async (a) => {
+    const m = await manifestWithExtras(a);
+    const base = a.url.slice(0, a.url.lastIndexOf('/') + 1);   // core's addon_base_url
+    if (!base) return;
+    for (const d of (m.catalogs || []) as CatalogDecl[]) {
+      if (!declSearches(d) || typeof d.type !== 'string' || typeof d.id !== 'string') continue;
+      const name = (d as { name?: unknown }).name;
+      out.push({ addonId: a.id, addonName: typeof m.name === 'string' ? m.name : '', type: d.type, id: d.id,
+        name: typeof name === 'string' ? name : undefined, base });
+    }
+  }));
+  return out;
+}
+
+const searchesInFlight = new Map<string, Promise<MediaItem[]>>();
+
+/** Best guess at the add-on content type an id was published under, for entries saved before
+ *  cards carried `addonType` (Continue Watching). Only ids that are not ours, only add-ons that
+ *  declare a type outside movie/series. An add-on whose `idPrefixes` match wins outright; with
+ *  no prefixes declared anywhere, a guess is made only when exactly one add-on could own it. */
+export function guessAddonType(id: string): string | undefined {
+  if (!id || /^(\d+|tt\d+)$/.test(id)) return undefined;
+  const loose: string[] = [];
+  for (const a of installed()) {
+    const own = (strList(a.manifest.types) || []).find((t) => !STANDARD_TYPES.has(t.toLowerCase()));
+    if (!own) continue;
+    const prefixes = strList((a.manifest as { idPrefixes?: unknown }).idPrefixes);
+    if (prefixes?.length) { if (prefixes.some((p) => id.startsWith(p))) return own; continue; }
+    loose.push(own);
+  }
+  return loose.length === 1 ? loose[0] : undefined;
+}
+
+/** Search one add-on catalog, directly from the add-on (never via our server). */
+export function searchAddonCatalog(c: AddonCatalog, query: string): Promise<MediaItem[]> {
+  const q = query.trim();
+  const path = resourcePath('catalog', c.type, c.id);
+  if (!q || !path.endsWith('.json')) return Promise.resolve([]);
+  /* One request per identical search while it is in flight. Two callers asking the same thing
+   * at once (React's dev double-effect; the web rows and a remount) would otherwise each fetch,
+   * and Chrome serialises identical URLs behind its cache lock — the second waits for the
+   * first, so a slow add-on reported "still searching" for twice as long as it took. */
+  const full = `${path.slice(0, -5)}/search=${encodeURIComponent(q)}.json`;
+  const key = c.base + full;
+  let p = searchesInFlight.get(key);
+  if (!p) {
+    p = fetchCatalogPath(c.base, full, c.type).finally(() => searchesInFlight.delete(key));
+    searchesInFlight.set(key, p);
+  }
+  // A copy per caller: fetchCatalogPath's items are mutable objects the rows may annotate.
+  return p.then((items) => items.map((it) => ({ ...it })));
 }

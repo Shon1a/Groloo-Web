@@ -6,6 +6,10 @@ import { useT, useGenre } from '../i18n/i18n';
 import {
   HERO_MAX, dedupeFeatured, heroBgUrl, heroBgPosition, heroFallbackGradient, heroThumbUrl,
 } from '../lib/hero';
+import { useMetaCached, apiIdOf } from '../lib/queries';
+import Glance from './glance/Glance';
+import { useIntro } from './glance/useGlance';
+import { GlanceIcon } from './glance/GlanceIcons';
 
 /* Faithful port of the renderHero engine (assets/js/app.js:1043+).
  *
@@ -44,12 +48,15 @@ interface Ctrl {
   go: (rawL: number) => void;
 }
 
-function HeroInner({ item, onPlay, onAdd }: { item: MediaItem; onPlay?: (m: MediaItem) => void; onAdd?: (m: MediaItem) => void }) {
+function HeroInner({ item, onPlay, onAdd, intro }: { item: MediaItem; onPlay?: (m: MediaItem) => void; onAdd?: (m: MediaItem) => void; intro: boolean }) {
   const t = useT();
   const genre = useGenre();
   const [logoFail, setLogoFail] = useState(false);
   const showLogo = !!item.titleLogo && !logoFail;
   const plot = item.overview || t('hero.plot_fallback');
+  // The title's detail only if something already fetched it — a rotating banner must not cost a
+  // lookup per slide (see useMetaCached).
+  const meta = useMetaCached(apiIdOf(item), item.type);
 
   return (
     <div className="hero-inner">
@@ -59,6 +66,8 @@ function HeroInner({ item, onPlay, onAdd }: { item: MediaItem; onPlay?: (m: Medi
             ? <img className="hero-logo" src={item.titleLogo} alt={item.title} onError={() => setLogoFail(true)} />
             : item.title}
         </h2>
+        {/* Info at a glance — "#1 in Movies This Week", "Coming Friday", "New Season". */}
+        <Glance item={item} meta={meta} />
         <div className="hero-desc">
           <div className="hero-desc-in">
             <p className="hero-plot">{plot}</p>
@@ -70,12 +79,12 @@ function HeroInner({ item, onPlay, onAdd }: { item: MediaItem; onPlay?: (m: Medi
           </div>
         </div>
       </div>
-      <div className="hero-actions">
+      <div className={`hero-actions${intro ? ' gl-run' : ''}`}>
         <button className="hero-btn hero-play" type="button" onClick={() => onPlay?.(item)}>
-          <span className="ic" aria-hidden="true">▶</span> {t('hero.play')}
+          <span className="ic3" aria-hidden="true"><GlanceIcon name="play" /></span> {t('hero.play')}
         </button>
         <button className="hero-btn hero-add" type="button" onClick={() => onAdd?.(item)}>
-          <span className="ic" aria-hidden="true">+</span> <span className="hero-add-t">{t('nav.my_list')}</span>
+          <span className="ic3" aria-hidden="true"><GlanceIcon name="add" /></span> <span className="hero-add-t">{t('nav.my_list')}</span>
         </button>
       </div>
     </div>
@@ -99,6 +108,8 @@ export default function Hero({ items, onPlay, onAdd }: HeroProps) {
   // back to opacity 1 with no entrance. The token makes the state object always-new, so the
   // remount (and heroRise) always happens.
   const [shown, setShown] = useState({ i: 0, n: 0 });
+  // The first slide's icons play as the home screen opens; the rotation after that does not replay them.
+  const intro = useIntro();
 
   const rootRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -414,7 +425,7 @@ export default function Hero({ items, onPlay, onAdd }: HeroProps) {
   return (
     <div className="hero" id="hero" ref={rootRef} aria-label={t('ui.featured_title')} style={{ '--hero-delay': `${HERO_DELAY_MS / 1000}s`, '--hero-swap': `${HERO_SWAP_MS}ms` } as CSSProperties}>
       {trackEl}
-      {current && <HeroInner key={shown.n} item={current} onPlay={onPlay} onAdd={onAdd} />}
+      {current && <HeroInner key={shown.n} item={current} onPlay={onPlay} onAdd={onAdd} intro={intro} />}
       {thumbsEl}
     </div>
   );

@@ -72,7 +72,9 @@ const DWELL = 260;
  * new page slides in empty. Same module specifiers as App.tsx's lazy(), so it is the same chunk. */
 const PREFETCH: Record<string, () => Promise<unknown>> = {
   '/explore': () => import('../routes/Explore'),
-  '/library': () => import('../routes/Library'),
+  /* My Space renders Add-ons and Settings as sections, each a lazy chunk of its own
+     (routes/Library.tsx) — fetched with the page rather than one round trip behind it. */
+  '/library': () => Promise.all([import('../routes/Library'), import('../routes/Addons'), import('../routes/Settings')]),
 };
 
 const ITEMS = [
