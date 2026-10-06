@@ -21,7 +21,16 @@ export interface MediaItem {
   type?: MediaType | 'series';
   title?: string;
   year?: string | number;
+  /** Full release / first-air date, `YYYY-MM-DD` — what "Coming Friday" and "New Release" are
+   *  worked out from. Absent from an older server and from add-on cards; callouts then fall back
+   *  to the year or say nothing. */
+  released?: string | null;
   rating?: number;
+  /** How many votes `rating` stands on, and TMDB's popularity right now. What tells a hidden gem
+   *  (well rated, little seen) from a crowd favourite, and a 9.0 from four votes from a real one.
+   *  Absent from an older server: the callouts that need them simply do not fire. */
+  votes?: number;
+  pop?: number;
   genres?: string[];
   poster?: string;
   /** The BAKED poster: the textless key art cropped to portrait around the subject with the
@@ -55,6 +64,10 @@ export interface MediaItem {
    *  fetch its trailer the moment someone rests. Absent on the admin Featured Hero and on the
    *  Upcoming marquee, both of which are exempt from that gate. */
   imdb?: string;
+  /** The add-on's OWN content type, when it is not movie/series (an add-on can publish under
+   *  any label — "porn", "tv-channel", "other"). `type` is normalised to movie/series for the
+   *  UI; meta and stream requests have to go out under this one or the add-on answers nothing. */
+  addonType?: string;
   [k: string]: unknown;
 }
 
@@ -100,6 +113,10 @@ export interface MetaDetail {
   plot?: string;
   rating?: number;
   year?: string | number;
+  /** see MediaItem.released */
+  released?: string | null;
+  /** Series only: where the show is in its run — see `tvAiring` in server.js. */
+  airing?: Airing | null;
   runtime?: string;
   /** Age rating as the board that issued it writes it — "PG-13", "12", "18", "TV-MA". The
    *  viewer's own country when TMDB has it, else US/GB; absent when nobody has rated the title
@@ -134,6 +151,25 @@ export interface MetaDetail {
    *  and episode numbers. Present → the episode chooser reads this instead of /api/tv. */
   addonEpisodes?: AddonEpisodeInfo[];
   [k: string]: unknown;
+}
+
+/** One aired (or scheduled) episode, in TMDB's numbering. `seasonStart` is the air date of the
+ *  season it belongs to — the difference between "New Season" and "New Episode". */
+export interface AiringEpisode { date: string; season: number; episode: number; seasonStart?: string | null }
+export interface Airing {
+  /** TMDB's own word: 'Returning Series', 'Ended', 'Canceled', 'In Production', 'Planned'. */
+  status?: string | null;
+  last?: AiringEpisode | null;
+  next?: AiringEpisode | null;
+}
+
+/** /api/awards/:imdb — reduced server-side to what a callout can say. */
+export interface AwardEvent { id: string; kind: 'award' | 'festival' | 'anime'; name: string; won: boolean; year?: number | null }
+export interface Awards {
+  /** IMDb's own headline award for the title: Oscar for films, Primetime Emmy for series. */
+  prestige: { award: string; wins: number; noms: number } | null;
+  /** Recognised festivals and ceremonies, wins first. */
+  events: AwardEvent[];
 }
 
 /** One episode as an add-on's `meta` resource described it. Mirrors `AddonEpisode` in

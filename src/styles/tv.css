@@ -1158,7 +1158,7 @@
    nearly always is, and it keeps a text tile from reading as a different kind of card. */
 .tv-spot-thumbtitle {
   position: absolute; left: 8%; right: 8%; bottom: 7%;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
   overflow: hidden;
   text-align: center;
   font-size: clamp(13px, calc(var(--spot-h) * 0.055), 34px);
@@ -1884,8 +1884,10 @@
   text-transform: uppercase; color: rgba(255,255,255,0.82);
   margin-bottom: 8px;
 }
+/* 48%, not the 62% it had: the bottom-right corner now carries the at-a-glance callouts on nearly
+   every card (lib/glance.ts), side by side, and a wordmark reaching past the middle ran into them. */
 .tv-spot-logo {
-  display: block; max-width: 62%; max-height: 84px; object-fit: contain;
+  display: block; max-width: 48%; max-height: 84px; object-fit: contain;
   opacity: 0;
   transition: opacity .35s ease;
 }
@@ -1908,8 +1910,12 @@
 
    `pointer-events: none` because it is a readout, not a control — and it sits inside a <button>,
    where anything that swallowed a click would put a dead patch on the card. */
+/* TOP-RIGHT NOW: the bottom-right corner belongs to the at-a-glance callouts (glance.css), which
+   used to have to step aside for this badge whenever a preview started — and stepped straight
+   into the wordmark. Up here it sits on the picture, which its own dark disc and hairline were
+   made to read against anyway. */
 .tv-spot-sound {
-  position: absolute; right: 16px; bottom: 16px; z-index: 4;
+  position: absolute; right: 16px; top: 16px; z-index: 4;
   display: grid; place-items: center;
   width: 38px; height: 38px;
   border-radius: 50%;
@@ -5684,44 +5690,140 @@
 }
 
 /* ---- MY SPACE -------------------------------------------------------------------------------
-   The hub tiles are the page. They were 4 small cards in a 760px column on a 1920px screen with
-   13px descriptions; at viewing distance the icon was doing all the work. */
-.tv-shell #myspace .section-sub { max-width: none; font-size: clamp(15px, 1.8vh, 20px); }
-/* TWO COLUMNS, PINNED. app.css lays these out `auto-fit, minmax(280px, 1fr)`, which at TV width
-   fits all four across — and four narrow columns is worse than two wide ones here, because the
-   tile is mostly its description and 280px broke "Install and manage streaming sources" into four
-   lines while leaving the row half empty. Two columns is also the shape the page already had on a
-   desktop, so the TV is not a third layout to reason about. */
-.tv-shell #myspace .ms-grid {
-  max-width: min(1180px, 92vw);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+   The web page (My List row, then the dock: a tab bar over the section it has open), sized for
+   the sofa and fitted to one screen under the top bar. The dock carries `data-tv-park`, so
+   TvSpatialNav parks it exactly as it parks a home row: Down from My List steps to it, and walking
+   its controls does not scroll. If a section ever outgrows the screen, the park lifts just enough
+   to keep the focused control in view.
+
+   THE TAB BAR IS THE TOP BAR: the group grows a little while the remote is in it, the pill is
+   solid white only then (white means "the remote is here") and glass on the open tab otherwise,
+   and the tabs follow focus after the top bar's dwell. Everything is one-shot: no loops, and
+   entry animations fill BACKWARDS only (PR #31's held-final-frame layer chain). */
+.tv-shell #myspace .msx-list { margin-bottom: clamp(4px, 1vh, 14px); }
+.tv-shell #myspace .msx-list > .msx-empty { margin-bottom: clamp(20px, 3vh, 40px); }
+.tv-shell #myspace .msx-empty { font-size: clamp(16px, 1.9vh, 20px); padding: clamp(16px, 2.2vh, 26px) clamp(20px, 1.6vw, 30px); }
+.tv-shell #myspace .msx-empty-ic { width: clamp(44px, 5vh, 56px); height: clamp(44px, 5vh, 56px); }
+
+.tv-shell #myspace .msx-dock {
+  scroll-margin-top: calc(var(--tv-topnav-h) + clamp(8px, 1.4vh, 20px));
+  /* a screen tall from the park line, so the step down lands on a screen that is all dock */
+  min-height: calc(100vh - var(--tv-topnav-h) - clamp(8px, 1.4vh, 20px));
+  margin-bottom: clamp(24px, 4vh, 56px);
 }
-.tv-shell #myspace .ms-tile {
-  padding: clamp(16px, 2vh, 26px) clamp(18px, 1.6vw, 26px);
+.tv-shell #myspace .msx-bar { gap: 10px clamp(28px, 2.4vw, 48px); margin-bottom: clamp(12px, 1.8vh, 22px); }   /* room for the bar's focus growth */
+.tv-shell #myspace .msx-tabs { padding: clamp(4px, .6vh, 7px); }
+.tv-shell #myspace .msx-tabs.is-focus { transform: scale(1.04); }
+.tv-shell #myspace .msx-pill { top: clamp(4px, .6vh, 7px); bottom: clamp(4px, .6vh, 7px); }
+.tv-shell #myspace .msx-tabs:not(.is-focus) .msx-pill { background: rgba(255, 255, 255, .16); }
+.tv-shell #myspace .msx-tabs:not(.is-focus) .msx-tab.lit { color: #fff; }
+.tv-shell #myspace .msx-tabs:not(.is-focus) .msx-tab.lit .msx-tab-n { background: rgba(255, 255, 255, .2); }
+.tv-shell #myspace .msx-tabs:not(.is-focus) .msx-tab.lit .msx-tab-av { box-shadow: none; }
+.tv-shell #myspace .msx-tab {
+  height: clamp(40px, 5.6vh, 60px);
+  gap: clamp(8px, .7vw, 12px);
+  padding: 0 clamp(16px, 1.4vw, 26px);
+  font-size: clamp(15px, 1.95vh, 22px);
+}
+.tv-shell #myspace .msx-tab:focus-visible { outline: none; }
+.tv-shell #myspace .msx-tab-ic { width: clamp(18px, 2.3vh, 26px); height: clamp(18px, 2.3vh, 26px); }
+.tv-shell #myspace .msx-tab-av { width: clamp(20px, 2.5vh, 28px); height: clamp(20px, 2.5vh, 28px); font-size: clamp(10px, 1.25vh, 14px); }
+.tv-shell #myspace .msx-tab-n {
+  min-width: clamp(20px, 2.4vh, 28px);
+  height: clamp(20px, 2.4vh, 28px);
+  line-height: clamp(20px, 2.4vh, 28px);
+  font-size: clamp(11px, 1.3vh, 14px);
+}
+.tv-shell #myspace .msx-meta { font-size: clamp(14px, 1.65vh, 18px); }
+
+/* Add-ons: each group is a ROW of tiles that walks sideways, like a home row — any number of
+   add-ons fits the same height. The card is still the focus stop (Addons.tsx): OK steps into its
+   buttons, Left/Right move to the next card, and the strip scrolls to it (TvSpatialNav's
+   inline-nearest). The padding gives the focused card's lift room inside the scroller. */
+.tv-shell #myspace #addons .addon-section { margin-bottom: clamp(10px, 1.6vh, 20px); }
+.tv-shell #myspace #addons .addon-sec-head { margin-bottom: clamp(4px, .8vh, 10px); }
+.tv-shell #myspace #addons .addon-sec-title { font-size: clamp(16px, 1.9vh, 21px); }
+.tv-shell #myspace #addons .addon-sec-disclaimer { font-size: clamp(12px, 1.4vh, 15px); padding: clamp(6px, .9vh, 10px) 14px; }
+.tv-shell #myspace #addons .addon-grid {
+  display: flex;
+  flex-flow: row nowrap;   /* app.css stacks the list as a column */
+  gap: clamp(10px, .8vw, 16px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 6px 6px 8px;
+  margin: -6px -6px 0;
+}
+.tv-shell #myspace #addons .addon-grid::-webkit-scrollbar { display: none; }
+.tv-shell #myspace #addons .addon {
+  flex: 0 0 clamp(270px, 23vw, 470px);
+  gap: clamp(8px, 1.1vh, 12px) clamp(10px, .8vw, 14px);
+  padding: clamp(12px, 1.5vh, 18px) clamp(14px, 1vw, 20px);
   border-radius: 14px;
-  background: rgba(255, 255, 255, .045);
-  border-color: rgba(255, 255, 255, .10);
 }
-.tv-shell #myspace .ms-tile-title { font-size: clamp(17px, 2.1vh, 23px); }
-.tv-shell #myspace .ms-tile-desc { font-size: clamp(13px, 1.6vh, 17px); }
-.tv-shell #myspace .ms-tile-ic { width: clamp(44px, 5vh, 58px); height: clamp(44px, 5vh, 58px); border-radius: 12px; }
-/* The tiles and the account actions answer focus the way every other TV surface does. */
-.tv-shell #myspace .ms-tile:focus-visible,
-.tv-shell #myspace .set-action:focus-visible {
-  outline: none;
-  background: #fff;
-  border-color: #fff;
-  color: #0b0b0b;
+.tv-shell #myspace #addons .addon .ic { width: clamp(40px, 4.6vh, 52px); height: clamp(40px, 4.6vh, 52px); border-radius: 12px; }
+.tv-shell #myspace #addons .addon .name { font-size: clamp(16px, 1.9vh, 21px); gap: 4px 10px; }
+.tv-shell #myspace #addons .addon .desc { font-size: clamp(13px, 1.5vh, 16px); line-height: 1.45; }
+.tv-shell #myspace #addons .addon .acts { gap: clamp(6px, .6vw, 10px); }
+.tv-shell #myspace #addons .addon .minibtn {
+  min-width: 0;
+  padding: clamp(7px, 1vh, 11px) clamp(11px, .85vw, 16px);
+  font-size: clamp(12px, 1.35vh, 15px);
+  letter-spacing: .08em;
+  border-radius: 8px;
 }
-.tv-shell #myspace .ms-tile:focus-visible :is(.ms-tile-title, .ms-tile-desc, .ms-tile-arrow) { color: #0b0b0b; }
-.tv-shell #myspace .ms-tile:focus-visible .ms-tile-ic { background: rgba(0, 0, 0, .08); color: #0b0b0b; }
-/* Danger keeps its identity when filled, exactly as REMOVE does on the add-ons page. */
+.tv-shell #myspace #addons .install-box { margin-top: clamp(4px, .8vh, 10px); }
+/* The tile's glass outranks the add-ons page's white focus fill (an id beats classes); restated. */
+.tv-shell #myspace #addons .addon:focus-within { background: #fff; border-color: #fff; }
+
+/* THREE COLUMNS, PLACED RATHER THAN POURED. The subtitles card is the tallest thing here and
+   cannot break, so it takes the middle column alone and everything else is split around it by
+   height — Interface, Auto-play, Advanced on the left; Playback, Account & legal, Core on the right.
+   Poured as CSS columns, the cards fill in source order and the right-hand column collects four of
+   them; a signed-in account (one more row: Delete account) then ran that column off a 720p screen.
+   Placed, the section is as tall as the subtitles card whoever is signed in. The card's section
+   labels (Subtitles / Appearance / Controls) go: they are the tallest spare lines on the screen.
+   KEYED TO SOURCE ORDER in Settings.tsx (1 Interface, 2 Auto-play, 3 Player, 4 Playback,
+   5 Advanced, 6 Account & legal, 7 Core) — reorder the cards there and this has to follow. */
+.tv-shell #myspace #settings .settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: clamp(10px, 1.3vh, 16px) clamp(12px, 1vw, 18px);
+}
+.tv-shell #myspace #settings .set-card { margin: 0; }
+.tv-shell #myspace #settings .set-card:nth-child(1) { grid-area: 1 / 1; }
+.tv-shell #myspace #settings .set-card:nth-child(2) { grid-area: 2 / 1; }
+.tv-shell #myspace #settings .set-card:nth-child(5) { grid-area: 3 / 1; }
+.tv-shell #myspace #settings .set-card:nth-child(3) { grid-area: 1 / 2 / 4 / 3; }
+.tv-shell #myspace #settings .set-card:nth-child(4) { grid-area: 1 / 3; }
+.tv-shell #myspace #settings .set-card:nth-child(6) { grid-area: 2 / 3; }
+.tv-shell #myspace #settings .set-card:nth-child(7) { grid-area: 3 / 3; }
+.tv-shell #myspace #settings .set-subhead { display: none; }
+.tv-shell #myspace #settings .set-card-head { padding: clamp(9px, 1.2vh, 14px) clamp(12px, .9vw, 18px); gap: 12px; }
+.tv-shell #myspace #settings .set-ic { width: clamp(28px, 3.2vh, 36px); height: clamp(28px, 3.2vh, 36px); }
+.tv-shell #myspace #settings .set-card-title { font-size: clamp(12px, 1.45vh, 16px); }
+.tv-shell #myspace #settings .set-card-body { padding: 0 clamp(12px, .9vw, 18px) 4px; }
+.tv-shell #myspace #settings .setting-row { padding: clamp(5px, .8vh, 9px) 0; gap: 6px 10px; }
+.tv-shell #myspace #settings .setting-row > label { flex: 1 1 auto; font-size: clamp(13px, 1.55vh, 17px); }
+.tv-shell #myspace #settings .ctl-group { flex: 0 1 auto; }
+
+.tv-shell #myspace .msx-acct { max-width: min(1100px, 70vw); gap: clamp(14px, 1.8vh, 22px); }
+.tv-shell #myspace .msx-id { padding: clamp(18px, 2.4vh, 28px) clamp(20px, 1.6vw, 30px); }
+.tv-shell #myspace .msx-id-av { width: clamp(52px, 6vh, 70px); height: clamp(52px, 6vh, 70px); font-size: clamp(21px, 2.6vh, 28px); }
+.tv-shell #myspace .msx-id-name { font-size: clamp(18px, 2.2vh, 25px); }
+.tv-shell #myspace .msx-id-sub { font-size: clamp(14px, 1.7vh, 18px); }
+.tv-shell #myspace .msx-status { font-size: clamp(13px, 1.6vh, 17px); }
+.tv-shell #myspace .msx-figures dd { font-size: clamp(24px, 3.1vh, 36px); }
+.tv-shell #myspace .msx-figures dt { font-size: clamp(13px, 1.6vh, 17px); }
+
+/* Buttons answer the remote with this build's white fill. Sign in is NOT white at rest here —
+   white is reserved for where the remote is — and danger keeps its colour when filled, exactly
+   as REMOVE does on the add-on cards. */
+.tv-shell #myspace .set-action:focus-visible,
+.tv-shell #myspace .msx-btn:focus-visible { outline: none; background: #fff; border-color: #fff; color: #0b0b0b; }
+.tv-shell #myspace .set-action-signin { background: rgba(255, 255, 255, .12); border-color: transparent; color: #fff; }
 .tv-shell #myspace .set-action-danger:focus-visible { background: var(--danger); border-color: var(--danger); color: #fff; }
-.tv-shell #myspace .set-action { font-size: clamp(14px, 1.7vh, 18px); padding: clamp(10px, 1.4vh, 15px) clamp(16px, 1.5vw, 24px); }
-/* The row draws its own heading (TvSpotlight's `.tv-spot-rowtitle`), so the rail label above it
-   would be the same words twice. */
-.tv-shell #myspace .ms-list-label { display: none; }
+.tv-shell #myspace .msx-actions .set-action { font-size: clamp(14px, 1.7vh, 18px); padding: clamp(10px, 1.3vh, 14px) clamp(16px, 1.3vw, 24px); }
 
 /* ---- SETTINGS -------------------------------------------------------------------------------
    Three columns of small cards is a desktop layout reading a dense page at arm's length. On a TV

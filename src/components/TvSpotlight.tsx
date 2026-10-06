@@ -5,7 +5,14 @@ import { imgW, artW, artPosition } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { tvRowCards } from '../lib/tvRowSize';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, apiIdOf } from '../lib/queries';
+import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, useAwards, apiIdOf } from '../lib/queries';
+import { useGlanceResolver } from './glance/useGlance';
+import { GlanceIcon } from './glance/GlanceIcons';
+
+/* THE ROW CALLOUT IS AN ARM, like the other per-press costs this file carries: on by default,
+ * `localStorage['groloo.tvglance'] = 'off'` drops it, so its cost can be A/B'd on one build
+ * (scripts/tv-bench-local.mjs --ls=groloo.tvglance=off, or tv-measure.mjs on the set). Read once. */
+const ROW_GLANCE = (() => { try { return localStorage.getItem('groloo.tvglance') !== 'off'; } catch { return true; } })();
 import { retainImage, isDecoded } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
@@ -621,30 +628,21 @@ function billboardSrcOf(it: MediaItem, enrich: boolean): string {
   /* The picture the tile under it is already showing, when there is one — see `sharedArtOf`. */
   const one = sharedArtOf(it);
   if (one) return one.src;
-  const source = enrich ? it.backdrop : (it.backdrop || it.poster);
+  /* `enrich` withholds the poster only while a backdrop could still ARRIVE — and enrichment can
+   * only look up a title by an id our API speaks. An add-on's own title (a Continue Watching
+   * entry from a third-party catalog) has none, so nothing is coming: holding out for a backdrop
+   * left it a permanent grey panel. Its poster is the only picture there is, so it is used. */
+  const waiting = enrich && !!apiIdOf(it);
+  const source = waiting ? it.backdrop : (it.backdrop || it.poster);
   return imgW(source || '', BILLBOARD_RENDITION);
 }
 
-/* THE SOUND BADGE'S TWO GLYPHS, and they are the player's own — same 24-unit box, same filled
- * cone, same 1.8 stroke on the waves and on the cross. Copied rather than imported because the
- * player is a lazily-loaded chunk and a home row must not pull it in for two paths; a private
- * icon that quietly diverged from the one beside it would be the worse outcome, so if either
- * moves, both move (VideoPlayer's IcVolHud / IcVolMuteHud).
- *
- * Sized at 1em so a single font-size in tv.css drives them across both TV resolutions. */
-const IcSoundOn = (
-  <svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden="true">
-    <path d="M4 9v6h4l5 5V4L8 9H4z" />
-    <path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    <path d="M18.5 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-  </svg>
-);
-const IcSoundOff = (
-  <svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden="true">
-    <path d="M4 9v6h4l5 5V4L8 9H4z" />
-    <path d="M16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-  </svg>
-);
+/* THE SOUND BADGE'S TWO ICONS, from the Groloo 3D set (components/glance) — the same cobalt
+ * speaker the title screens and post-play use, its arcs lit when the preview has sound and a violet
+ * cross when it has not. One shared sprite cell each: nothing here draws per frame. Sized in em off
+ * the badge's font-size in tv.css. */
+const IcSoundOn = <span className="ic3"><GlanceIcon name="soundOn" /></span>;
+const IcSoundOff = <span className="ic3"><GlanceIcon name="soundOff" /></span>;
 
 /* ---- ONE POSTER TILE, MEMOISED SO A PRESS TOUCHES ONE OF THEM ----------------------------------
  * The strip used to be one `useMemo` holding every tile, built so a focus change could not rebuild
@@ -1276,6 +1274,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * the dwell. */
   const [metaImdb, setMetaImdb] = useState<string | undefined>(undefined);
   const imdbId = armed ? (dwelt?.imdb || metaImdb) : undefined;
+  /* AWARDS FOR THE CARD THAT HAS COME TO REST, never for one walked past — one small request per
+   * rest, cached for a day, and the facts line picks the callout up when it lands (see glance). */
+  useAwards(dwelt ? (dwelt.imdb || metaImdb) : undefined);
   const imdbTrailer = useImdbTrailer(videoFailed ? undefined : imdbId);
   const videoUrl = videoFailed ? undefined : (imdbTrailer.data?.url || undefined);
   /* /api/meta IS ONLY EVER ASKED FOR AN ID WE DO NOT ALREADY HAVE. It is a whole detail payload
@@ -1635,6 +1636,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * pixels it can show. w300 is the next step TMDB offers and still leaves headroom on a HiDPI
    * panel. Non-TMDB URLs pass through imgW untouched. */
   const logoOf = (it: MediaItem) => imgW(it.titleLogo || it.logo || '', LOGO_RENDITION) || undefined;
+  /* The card's strongest at-a-glance callout, led into the facts line. Read from what is already
+   * cached (home rankings, taste, a detail or awards someone else fetched) — a press never asks the
+   * network for it. See useGlanceResolver. */
+  const glanceFor = useGlanceResolver();
 
   const describeSlot = (slot: Slot | undefined): StageSlot => {
     if (!slot) return NO_SLOT;
@@ -1673,6 +1678,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         a.rating ? `★ ${a.rating}` : '',
       ].filter(Boolean),
       plot: plain(a.overview || ''),
+      glance: ROW_GLANCE ? glanceFor(a).slice(0, 2).map((g) => ({ icon: g.icon, text: g.text, kind: g.kind })) : undefined,
     };
   };
 
@@ -1865,7 +1871,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * firing, a query settling — compares equal and does nothing. */
   const frontDesc = describeSlot(slotAt(shownAt.current));
   const frontPeek = peekFor(shownAt.current);
-  const stageSig = `${frontDesc.key}|${frontDesc.meta.join('\u0001')}|${frontDesc.plot}|${frontPeek.art ? `${frontPeek.art.src}|${frontPeek.art.pos}` : '-'}`;
+  const stageSig = `${frontDesc.key}|${(frontDesc.glance || []).map((g) => g.text).join('\u0001')}|${frontDesc.meta.join('\u0001')}|${frontDesc.plot}|${frontPeek.art ? `${frontPeek.art.src}|${frontPeek.art.pos}` : '-'}`;
   useEffect(() => {
     const changed = stageRef.current?.refresh(describeLatest.current(slotAt(shownAt.current)), peekLatest.current(shownAt.current));
     /* NOT ON EVERY COMMIT. After a walk this effect runs because React has caught up with a card the
@@ -2346,7 +2352,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * land after the scroll instead of during it (see the note in tv.css). */
       className={`tv-spot${open ? ' is-settled' : ''}${reduceMotion ? ' no-anim' : ''}`}
       aria-label={heading}
-      onFocus={() => setOpenNow(true)}
+      onFocus={(e) => {
+        // Entering the row (not moving within it): the card on show plays its callouts' arrival.
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) stageRef.current?.playFront();
+        setOpenNow(true);
+      }}
       onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpenNow(false); }}
     >
       {/* A plain heading. The web rail's "see all" lives here; on a TV it is the card at the end

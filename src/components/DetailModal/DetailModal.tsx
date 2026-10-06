@@ -23,6 +23,10 @@ import { pickWatchServices } from '../../lib/watchProviders';
 import { mediaUrl, syncAddressBar, type MediaAddress } from '../../lib/launchIntent';
 import TvDetail from './TvDetail';
 import { currentEp } from '../../lib/episodeNumbering';
+import Glance from '../glance/Glance';
+import { useIntro } from '../glance/useGlance';
+import RateButtons from '../glance/RateButtons';
+import { GlanceIcon } from '../glance/GlanceIcons';
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
 
@@ -166,16 +170,6 @@ const IS_TV = import.meta.env.MODE === 'tv';
  * renderCast/renderRecs (assets/js/app.js). Seeded from the clicked card for an instant
  * paint, then enriched from /api/meta. */
 
-const SpeakerOff = (
-  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z" /><line x1="22" y1="9" x2="16" y2="15" /><line x1="16" y1="9" x2="22" y2="15" /></svg>
-);
-const LinkIcon = (
-  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
-);
-const SpeakerOn = (
-  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M18.5 5.5a9 9 0 0 1 0 13" /></svg>
-);
-
 function Avatar({ name, profile }: { name?: string; profile?: string }) {
   const [broken, setBroken] = useState(false);
   return (
@@ -262,6 +256,8 @@ export default function DetailModal() {
   const t = useT();
   const genre = useGenre();
   const target = useModal((s) => s.target);
+  // The icons play once as a title opens here, never again on a click (useIntro).
+  const intro = useIntro(target?.id);
   const open = useModal((s) => s.open);
   const close = useModal((s) => s.close);
   const playSource = usePlayer((s) => s.play);
@@ -299,6 +295,7 @@ export default function DetailModal() {
   const [srcTab, setSrcTab] = useState<'services' | 'addons'>('services');
 
   const isTv = target?.type === 'tv' || target?.type === 'series';
+  const addonType = target?.addonType;
   /* TWO SOURCES FOR ONE RECORD, asked in parallel, first usable answer rendered.
    *
    * `/api/meta` describes a TMDB or IMDb id. An add-on catalog card carries the add-on's own
@@ -311,7 +308,7 @@ export default function DetailModal() {
    * two. For an id that IS ours it stays idle unless /api/meta actually fails, in which case
    * it is a free second chance at a title TMDB has never heard of. */
   const { data: apiMeta, isError: metaError } = useMeta(apiIdOf(target), target?.type);
-  const { data: addonMeta, isFetching: addonMetaFetching } = useAddonMeta(target?.id, target?.type, metaError);
+  const { data: addonMeta, isFetching: addonMetaFetching } = useAddonMeta(target?.id, target?.type, metaError, target?.addonType);
   /* BOTH CAN NOW ANSWER AT ONCE, and which field wins depends on what the field is FOR.
    *
    * An add-on card that ships an `imdb_id` — every Kitsu/MAL/AniList one does — reaches
@@ -461,7 +458,10 @@ export default function DetailModal() {
    * it has — and asking add-ons under an id nobody published is how a working catalog ended
    * up with no sources. It sorts last because when a title HAS an IMDb id that is the id the
    * most add-ons will recognise. */
-  const streamBaseId = meta?.imdb || target?.imdb || meta?.addonVideoId;
+  /* Last resort for an add-on's own title (its own type, its own id): when its meta document
+   * did not come back, the card's id is still the handle that add-on publishes streams under. */
+  const streamBaseId = meta?.imdb || target?.imdb || meta?.addonVideoId
+    || (target?.addonType && target.id != null ? String(target.id) : undefined);
 
   /* THE ID FOR ONE EPISODE, which is not `${base}:${season}:${episode}` in general.
    *
@@ -488,7 +488,9 @@ export default function DetailModal() {
   useEffect(() => {
     if (!streamVideoId) { setStreams([]); return; }
     const videoId = streamVideoId;
-    const type = isTv ? 'series' : 'movie';
+    // An add-on's own type (e.g. a catalog published as "porn") goes out as-is: its streams
+    // live under that label, and asking under "movie" is a request it never answers.
+    const type = addonType || (isTv ? 'series' : 'movie');
     let alive = true;
     setStreamsLoading(true); setStreams([]);
     /* Render each add-on's sources AS THEY LAND rather than at the end. The fan-out is only
@@ -501,7 +503,7 @@ export default function DetailModal() {
       .then((s) => { if (alive) setStreams(s); })
       .finally(() => { if (alive) setStreamsLoading(false); });
     return () => { alive = false; };
-  }, [streamVideoId, isTv]);
+  }, [streamVideoId, isTv, addonType]);
 
   /* The last value THIS EFFECT chose, so a default can be told apart from a decision.
    *
@@ -645,7 +647,8 @@ export default function DetailModal() {
   };
   const buildMediaFor = (ep: Ep | null, langTag?: string) => {
     const key = ep ? `${target.id}:S${ep.season}E${ep.ep}` : String(target.id);
-    return { id: target.id, key, title, poster: meta?.poster || target.poster, year, type: target.type, genre: target.genre, rating, ep: ep ? `S${ep.season}E${ep.ep}` : undefined, season: ep?.season ?? null, episode: ep?.ep ?? null, lang: langTag || undefined };
+    return { id: target.id, key, title, poster: meta?.poster || target.poster, year, type: target.type, genre: target.genre, rating, ep: ep ? `S${ep.season}E${ep.ep}` : undefined, season: ep?.season ?? null, episode: ep?.ep ?? null, lang: langTag || undefined,
+      imdb: meta?.imdb || target.imdb, addonType: target.addonType, backdrop: meta?.backdrop || undefined };
   };
   const subsOf = (s: AddonStream) => s.subtitles?.map((x) => ({ lang: x.lang, label: x.lang || 'Subtitle', url: x.url }));
   /* What the player will ask SUBTITLE add-ons for. THE SAME id the stream fan-out uses, via
@@ -851,9 +854,9 @@ export default function DetailModal() {
             </div>
             <div className="m-hero-trailer-slot" id="mTrailerSlot" ref={slotRef} aria-hidden="true" />
             <div className="m-hero-scrim" aria-hidden="true" />
-            <button className="close m-disc" id="closeModal" ref={closeBtnRef} type="button" aria-label={t('modal.close_aria')} onClick={close}>✕</button>
-            <button className="m-mute m-disc" id="mMuteBtn" type="button" aria-pressed={muted} aria-label={t(muted ? 'modal.unmute' : 'modal.mute')} onClick={toggleMute}>
-              <span className="m-mute-ic" aria-hidden="true">{muted ? SpeakerOff : SpeakerOn}</span>
+            <button className={`close m-disc${intro ? ' gl-run' : ''}`} id="closeModal" ref={closeBtnRef} type="button" aria-label={t('modal.close_aria')} onClick={close}><span className="ic3" aria-hidden="true"><GlanceIcon name="close" /></span></button>
+            <button className={`m-mute m-disc${intro ? ' gl-run' : ''}`} id="mMuteBtn" type="button" aria-pressed={muted} aria-label={t(muted ? 'modal.unmute' : 'modal.mute')} onClick={toggleMute}>
+              <span className="m-mute-ic ic3" aria-hidden="true"><GlanceIcon name={muted ? 'soundOff' : 'soundOn'} /></span>
             </button>
             {ready && (
             <div className="m-hero-inner">
@@ -868,28 +871,32 @@ export default function DetailModal() {
                   <span>{[meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }), epTotal ? t('modal.episodes_count', { n: epTotal }) : ''].filter(Boolean).join(' · ')}</span>
                 ) : null}
               </div>
+              {/* Info at a glance: why this title — a new season, a top-ten place, an award. */}
+              <Glance item={{ id: target.id, type: target.type, year, rating, genre: target.genre }} meta={meta} awards waitForMeta />
               <div className="m-genres" id="mGenres">
                 {genreChips.map((g) => <span className="chip" key={g}>{genre(g)}</span>)}
               </div>
-              <div className="m-hero-actions">
+              <div className={`m-hero-actions${intro ? ' gl-run' : ''}`}>
                 <button className={`hero-btn hero-play${resume ? ' has-resume' : ''}`} id="mWatch" type="button" onClick={onWatch}>
-                  <span className="ic" aria-hidden="true">▶</span><span>{watchLabel}{resume ? <span className="hero-resume-at"> · {resumeMin} min</span> : null}</span>
+                  <span className="ic3" aria-hidden="true"><GlanceIcon name="play" /></span><span>{watchLabel}{resume ? <span className="hero-resume-at"> · {resumeMin} min</span> : null}</span>
                   {resume ? <span className="hero-progress" aria-hidden="true"><span className="hero-progress-fill" style={{ width: `${resumePct}%` }} /></span> : null}
                 </button>
-                <button className={`hero-add m-disc${added ? ' on' : ''}`} id="mAdd" type="button" aria-pressed={added} aria-label={t(added ? 'mylist.remove' : 'mylist.add')} onClick={onAdd}>{added ? '✓' : '+'}</button>
+                <button className={`hero-add m-disc${added ? ' on' : ''}`} id="mAdd" type="button" aria-pressed={added} aria-label={t(added ? 'mylist.remove' : 'mylist.add')} onClick={onAdd}><span className="ic3" aria-hidden="true"><GlanceIcon name={added ? 'added' : 'add'} /></span></button>
+                {/* The three thumbs — they are what "picked for you" learns from. */}
+                <RateButtons id={target.id} type={target.type} title={title} genres={meta?.genre} className="hero-add m-disc" />
                 {/* Reporting a title lives here, beside Add — always visible rather than
                   * behind a menu, because Play's UGC policy asks for reporting to be
                   * in-app and findable, and a reviewer with a D-pad has to reach it. It is
                   * a round m-disc to match the chrome and to stay out of Play's way. */}
                 <button className="hero-add m-disc" id="mReport" type="button" aria-label={t('report.cta')} title={t('report.cta')}
-                        onClick={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}>⚑</button>
+                        onClick={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}><span className="ic3" aria-hidden="true"><GlanceIcon name="flag" /></span></button>
                 {/* Copy this title's link. Web only: on TV the clipboard has nowhere to go and
                   * every extra button is one more D-pad stop between the user and Play. */}
                 {import.meta.env.MODE !== 'tv' && (
                   <button className={`hero-add m-disc${copied ? ' on' : ''}`} id="mShare" type="button"
                           aria-label={t(copied ? 'modal.link_copied' : 'modal.copy_link')} title={t(copied ? 'modal.link_copied' : 'modal.copy_link')}
                           onClick={() => { void onShare(); }}>
-                    {copied ? '✓' : <span className="m-share-ic" aria-hidden="true">{LinkIcon}</span>}
+                    <span className="ic3" aria-hidden="true"><GlanceIcon name={copied ? 'added' : 'link'} /></span>
                   </button>
                 )}
               </div>
@@ -934,7 +941,7 @@ export default function DetailModal() {
                     <div className="stream-signin">
                       <div className="demo-note">{t('modal.signin_addon')}</div>
                       <button className="addon-signin-btn" type="button" onClick={() => openAuth()}>
-                        <span className="ic" aria-hidden="true">▶</span><span>{t('auth.signin')}</span>
+                        <span className="ic3" aria-hidden="true"><GlanceIcon name="play" /></span><span>{t('auth.signin')}</span>
                       </button>
                     </div>
                   ) : isTv && !pickedEp ? (

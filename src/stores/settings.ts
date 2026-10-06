@@ -19,6 +19,9 @@ export interface Settings {
   // auto-play
   autoplayNext: boolean;
   nextPopup: number;          // seconds the next-video popup stays up
+  /** When a film (or a series' last episode) reaches its credits, shrink it into the corner and
+   *  play trailers of what to watch next — the post-play screen. */
+  postPlay: boolean;
   // subtitles
   subLang: 'off' | 'en' | 'ka' | 'ru';
   subSize: number;            // % of base subtitle size
@@ -42,6 +45,7 @@ const DEFAULTS: Settings = {
   tvRowTrailers: true,
   autoplayNext: true,
   nextPopup: 15,
+  postPlay: true,
   subLang: 'off',
   subSize: 100,
   subColor: '#ffffff',

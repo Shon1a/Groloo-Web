@@ -256,6 +256,19 @@ const SEED: Record<string, string> = {
   // my space / my list
   'mylist.empty': 'Your list is empty. Add titles with the + button.',
   'myspace.my_list': 'My List',
+  'myspace.nav_account': 'Account',
+  // the film-strip nav's second line under "Settings" — short, it shares a narrow frame
+  'myspace.settings_hint': 'Playback, subtitles, language',
+  'myspace.stat_saved': 'Saved',
+  'myspace.stat_watched': 'Watched',
+  'myspace.stat_addons': 'Add-ons',
+  'myspace.signed_in': 'Signed in',
+  'myspace.browse': 'Discover more',
+  // the sign-in card's row label, beside its button — one short line in a settings column
+  'myspace.sync_hint': 'Sync across your screens',
+  // sentence case on purpose: authctl.signin / authctl.logout are the legacy all-caps strings
+  'myspace.sign_in': 'Sign in',
+  'myspace.sign_out': 'Sign out',
 
   // settings
   'settings.title': 'Settings',
@@ -372,6 +385,13 @@ const SEED: Record<string, string> = {
   'error.title': 'Something went wrong',
   'error.body': 'Groloo hit an unexpected error and stopped drawing this screen.',
   'error.reload': 'RELOAD',
+
+  // Home could not load (routes/Home.tsx). The screen asks again on its own, so the copy
+  // says so — the button is for someone who would rather not wait.
+  'home.down_title': 'Couldn’t load Groloo',
+  'home.down_body': 'The server didn’t answer. Trying again on its own…',
+  'home.down_busy': 'The server is getting too many requests from this network. Trying again on its own…',
+  'home.retry': 'Try again',
 
   // auth
   'auth.kicker': '// sign in to manage add-ons & settings',
@@ -553,6 +573,92 @@ const SEED: Record<string, string> = {
   'addons.unhide': 'Unhide',
   'addons.hidden_tag': 'Hidden',
   'blocks.hidden_note': 'Hidden by you. Its catalogs stay out of Home, Search and Browse until you unhide it.',
+
+  // Install sheet (InstallAddonModal)
+  'addons.install_open': '+ Install add-on',
+  'addons.install_title': 'Install an add-on',
+  'addons.install_kicker': 'Paste the manifest link of a community add-on',
+  'addons.install_url_label': 'Manifest URL',
+  'addons.resp_head': 'Your responsibility',
+  'addons.resp_1': 'Community add-ons are made by independent third parties. GROLOO does not create, host, review or control them.',
+  'addons.resp_2': 'You choose what to install. Whatever an add-on shows or links to is your responsibility — make sure you are allowed to access it where you live.',
+  'addons.resp_3': 'Only install add-ons from sources you trust. A configured link can contain your personal keys — do not share it.',
+  'addons.resp_4': 'GROLOO hosts no video files and stores no media on its servers.',
+  'addons.resp_agree': 'I understand that installing and using this add-on is my own responsibility.',
+  'addons.install_sync_on': 'Installed add-ons sync live to your other signed-in devices.',
+  'addons.install_sync_off': 'Sign in to sync your add-ons across your devices.',
+  // Explore: results from installed add-ons' searchable catalogs
+  'search.from_addons': 'From your add-ons',
+  'search.addons_searching': 'Searching your add-ons…',
+  'search.addons_searching_n': 'Searching your add-ons… {done}/{total}',
+  'search.addons_none': 'No matches in your add-ons.',
+
+  // Info at a glance — the callouts beside a title's name (lib/glance.ts)
+  'glance.coming': 'Coming {when}',
+  'glance.out_today': 'Out Today',
+  'glance.premieres_today': 'Premieres Today',
+  'glance.today': 'Today',
+  'glance.tomorrow': 'Tomorrow',
+  'glance.new_season': 'New Season',
+  'glance.new_season_on': 'New Season {when}',
+  'glance.new_series': 'New Series',
+  'glance.new_episode': 'New Episode',
+  'glance.new_episode_on': 'New Episode {when}',
+  'glance.top10_movies': '#{n} in Movies This Week',
+  'glance.top10_shows': '#{n} in Shows This Week',
+  'glance.oscar_winner': 'Oscar Winner',
+  'glance.oscar_nominee': 'Oscar Nominee',
+  'glance.emmy_winner': 'Emmy Award Winner',
+  'glance.emmy_nominee': 'Emmy Nominee',
+  'glance.award_winner': '{name} Winner',
+  'glance.award_nominee': '{name} Nominee',
+  'glance.love': 'We think you’ll love this',
+  'glance.new_release': 'New Release',
+  'glance.top_rated': 'Top Rated',
+  'glance.top10_anime': '#{n} in Anime This Week',
+  'glance.trending': 'Trending Now',
+  'glance.because_watched': 'Because you watched {title}',
+  'glance.because_liked': 'Because you liked {title}',
+  'glance.fan_favorite': 'Fan Favorite',
+  'glance.hidden_gem': 'Hidden Gem',
+  'glance.classic': 'Timeless Classic',
+  'glance.binge_seasons': '{n} Seasons to Binge',
+  // The mood line: what a title's genre promises, the floor every billboard can stand on.
+  'glance.mood_horror': 'Spine-Chilling',
+  'glance.mood_comedy': 'Laugh-Out-Loud',
+  'glance.mood_romance': 'Swoon-Worthy',
+  'glance.mood_documentary': 'Eye-Opening',
+  'glance.mood_music': 'Music to Your Ears',
+  'glance.mood_western': 'Wild West Adventure',
+  'glance.mood_history': 'Epic Saga',
+  'glance.mood_scifi': 'Mind-Bending Sci-Fi',
+  'glance.mood_fantasy': 'Magical Worlds',
+  'glance.mood_animation': 'Beautifully Animated',
+  'glance.mood_family': 'Fun for Everyone',
+  'glance.mood_mystery': 'Keeps You Guessing',
+  'glance.mood_crime': 'Gripping Crime',
+  'glance.mood_thriller': 'Edge-of-Your-Seat',
+  'glance.mood_action': 'Pulse-Pounding Action',
+  'glance.mood_adventure': 'Epic Adventure',
+  'glance.mood_drama': 'Deeply Moving',
+
+  // The three thumbs (RateButtons)
+  'rate.cta': 'Rate',
+  'rate.down': 'Not for me',
+  'rate.up': 'I like this',
+  'rate.love': 'Love this!',
+  'rate.thanks': 'Thanks — your picks will get better',
+
+  // Picked for you: the home row
+  'sec.top_picks': 'Today’s Top Picks for You',
+
+  // Post-play: the screen that takes over when the credits roll
+  'postplay.label': 'Up next',
+  'postplay.because': 'More like {title}',
+  'postplay.back_to_credits': 'Back to credits',
+  'postplay.watch': 'Watch',
+  'postplay.close': 'Close',
+  'settings.postplay': 'Show trailers and picks when a film ends',
 };
 
 export const EN: Record<string, string> = { ...EN_BASE, ...SEED };

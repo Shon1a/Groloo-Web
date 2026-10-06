@@ -1,11 +1,13 @@
 import { useEffect, lazy, Suspense } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './stores/auth';
+import { startLiveSync } from './lib/liveSync';
 import { useAddons } from './stores/addons';
 import { useBlocks } from './stores/blocks';
 import { useHomeConfig } from './stores/homeConfig';
 import { useHistory } from './stores/history';
 import { useLibrary } from './stores/library';
+import { useRatings } from './stores/ratings';
 import { useOfficial } from './stores/official';
 import { initHeartLibrary } from './lib/heartLibrary';
 import { initHeartCatalog } from './lib/heartCatalog';
@@ -40,8 +42,8 @@ const Categories = import.meta.env.MODE === 'tv'
   ? (() => null)
   : lazy(() => import('./routes/Categories'));
 const Library = lazy(() => import('./routes/Library'));
-const Addons = lazy(() => import('./routes/Addons'));
-const Settings = lazy(() => import('./routes/Settings'));
+/* Add-ons and Settings have no routes of their own any more: they are panes of My Space, which
+ * loads them lazily itself (see routes/Library.tsx). */
 const LinkRoute = lazy(() => import('./routes/Link'));
 const DeleteAccount = lazy(() => import('./routes/DeleteAccount'));
 const Legal = lazy(() => import('./routes/Legal'));
@@ -84,6 +86,8 @@ export default function App() {
   const pullHistory = useHistory((s) => s.pull);
   const reloadLibrary = useLibrary((s) => s.reload);
   const pullLibrary = useLibrary((s) => s.pull);
+  const reloadRatings = useRatings((s) => s.reload);
+  const pullRatings = useRatings((s) => s.pull);
   const loadOfficial = useOfficial((s) => s.load);
   useEffect(() => {
     refresh(); loadConfig(); loadOfficial();
@@ -94,11 +98,13 @@ export default function App() {
   // on sign-in/out the localStorage namespace (per-email) changes → reload, then
   // merge the server-stored add-on collection + watch history when signed in
   useEffect(() => {
-    reloadHistory(); reloadLibrary();
+    reloadHistory(); reloadLibrary(); reloadRatings();
     // homeConfig reloads itself off the auth store (like addons/blocks), so only its PULL
     // belongs here — it reconciles the account's official-add-on toggles across devices.
-    if (user) { pullAddons(); pullBlocks(); pullHomeConfig(); pullHistory(); pullLibrary(); }
-  }, [user, pullAddons, pullBlocks, pullHomeConfig, reloadHistory, pullHistory, reloadLibrary, pullLibrary]);
+    if (user) { pullAddons(); pullBlocks(); pullHomeConfig(); pullHistory(); pullLibrary(); void pullRatings(); }
+    // Live add-on sync: an install or removal on another device arrives without a reload.
+    if (user) return startLiveSync();
+  }, [user, pullAddons, pullBlocks, pullHomeConfig, reloadHistory, pullHistory, reloadLibrary, pullLibrary, reloadRatings, pullRatings]);
 
   return (
     <HashRouter>
@@ -119,8 +125,10 @@ export default function App() {
           <Route path="browse/:cat" element={<Browse />} />
           {/* library / add-ons / settings */}
           <Route path="library" element={<Suspense fallback={routeFallback}><Library /></Suspense>} />
-          <Route path="addons" element={<Suspense fallback={routeFallback}><Addons /></Suspense>} />
-          <Route path="settings" element={<Suspense fallback={routeFallback}><Settings /></Suspense>} />
+          {/* Kept as addresses so a bookmark or a stale history entry still lands somewhere real:
+              My Space, with the pane they named already open. */}
+          <Route path="addons" element={<Navigate to="/library" replace state={{ section: 'addons' }} />} />
+          <Route path="settings" element={<Navigate to="/library" replace state={{ section: 'settings' }} />} />
           {/* Device-link claim page. Deliberately NOT gated in AppShell's GATED list:
               the URL is typed off a TV screen by a user who may not be signed in yet,
               and the route itself has to hold the code they came to enter while the
