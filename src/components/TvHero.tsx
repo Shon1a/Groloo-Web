@@ -409,9 +409,10 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
 
         {/* INFO AT A GLANCE — "#1 in Movies This Week", "New Season", "Emmy Award Winner" — in the
             billboard's bottom-right corner, the reference's place for them: the wordmark has the
-            bottom-left. Shown at rest and while a trailer plays; keyed on the slide so they arrive
-            with it. */}
-        <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} className="on-art" />
+            bottom-left. They keep the copy's hours (tv.css, THE CALLOUTS GO WITH THE COPY): hidden at
+            rest and while a trailer plays, in when the remote arrives — and `rise` only then, so
+            their entrance plays where it can be seen. Keyed on the slide so they change with it. */}
+        <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} rise={focused} className="on-art" />
 
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
         <div className="tv-hero-copy" key={`copy-${active}`}>
