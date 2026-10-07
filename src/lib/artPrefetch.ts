@@ -23,6 +23,7 @@
  * ========================================================================== */
 
 import { bootDone } from './bootGate';
+import { usePlayer } from '../stores/player';
 
 /** Our art worker's urls exactly — the same test as the groloo-art rule in vite.config.ts. */
 const ART_PATH = /^\/(crop|img|logo)\/(w\d+|original)\/(f\d+\/)?[A-Za-z0-9]{8,64}\.webp$/;
@@ -55,6 +56,18 @@ type IdleWindow = Window & {
   requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
 };
 
+/** Resume the queue once the player has closed — subscribed only while there is something waiting. */
+let unsubPlayer: (() => void) | null = null;
+function holdForPlayer(): void {
+  if (unsubPlayer) return;
+  unsubPlayer = usePlayer.subscribe((st) => {
+    if (st.source || !unsubPlayer) return;
+    unsubPlayer();
+    unsubPlayer = null;
+    schedule();
+  });
+}
+
 function schedule(): void {
   if (pumpId || !started) return;
   const w = window as IdleWindow;
@@ -65,6 +78,10 @@ function schedule(): void {
 
 function pump(): void {
   pumpId = 0;
+  /* NOT WHILE SOMETHING IS PLAYING. A film or post-play's trailers are streaming over the same
+   * television's Wi-Fi, and a background download of rows nobody is looking at is the one thing that
+   * can starve them. The queue simply waits; the player closing (a store change) wakes it. */
+  if (usePlayer.getState().source) { holdForPlayer(); return; }
   while (inFlight < CONCURRENCY && queue.length) {
     // Nearest row to the remote wins — read NOW, since the remote has moved since it was queued.
     let best = 0;

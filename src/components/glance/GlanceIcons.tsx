@@ -34,7 +34,7 @@ export function GlanceIcon({ name, className, title }: { name: GlanceIconName; c
  * (`gl-tap`) taken off and put back, which is what restarts a CSS animation; it is removed again once
  * the move is over. Only these buttons: a billboard is a button too, and its callouts must not replay
  * every time the remote lands on it. */
-const HOT = '.m-disc, .tv-det-disc, .hero-btn, .pp-btn, .rate-opt, .pp-close, .pp-sound, .addon-signin-btn';
+const HOT = '.m-disc, .tv-det-disc, .hero-btn, .rate-opt, .pp-close, .pp-sound, .addon-signin-btn';
 if (typeof document !== 'undefined') {
   const timers = new WeakMap<Element, number>();
   const last = new WeakMap<Element, number>();

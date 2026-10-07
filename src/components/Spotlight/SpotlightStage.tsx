@@ -4,7 +4,7 @@ import { imgW, rasterLogo } from '../../lib/img';
 import { useVideoTrailer, trailerStartOffset } from '../DetailModal/useVideoTrailer';
 import { previewsAllowed } from '../../lib/tvPreviewPolicy';
 import { GlanceChips } from '../glance/Glance';
-import { useSettledGlance, useIntro } from '../glance/useGlance';
+import { useSettledGlance } from '../glance/useGlance';
 import { GlanceIcon } from '../glance/GlanceIcons';
 import SlideShow, { type SlidesApi } from './SlideShow';
 import { slideArt, warmPicture } from './slideArt';
@@ -17,12 +17,14 @@ const IS_TV = import.meta.env.MODE === 'tv';
  *
  * Two screens, one after the other, and they are deliberately different layouts:
  *
- *   TRAILERS   A trailer fills the whole screen. Up to five titles take it in turn, each from a moment
- *              past the logos for `clipSeconds`; the title's wordmark, facts and Watch sit bottom-left,
- *              and a row of small posters runs along the foot of the screen — the one whose trailer is
- *              playing lifted 10% and ringed in white, a thin bar under it filling as the clip runs, so
- *              the link between the moving picture and the poster is never in doubt. A title with no
- *              trailer (or one that will not start) holds its picture with a slow push-in instead.
+ *   TRAILERS   A trailer fills the whole screen. Up to ten titles take it in turn, each from a moment
+ *              past the logos for `clipSeconds`, each fading up out of its own still and back down into
+ *              it — picture and sound together; the title's wordmark, facts and callouts sit bottom-left,
+ *              and a row of small posters runs along the foot of the screen, sliding along under the
+ *              remote — the one whose trailer is playing lifted 10% and ringed in white, a thin bar under
+ *              it filling as the clip runs, so the link between the moving picture and the poster is
+ *              never in doubt. OK on a poster opens the title. A title with no trailer (or one that will
+ *              not start) holds its picture with a slow push-in instead.
  *
  *   SLIDESHOW  When the last trailer ends, the screen becomes a slideshow of OTHER titles — series,
  *              films, anime, a few still to come. Each picture fades up out of black and drifts across
@@ -46,6 +48,15 @@ const STILL_SECONDS = 6;
 const TRAILER_PATIENCE = 8000;
 /** Idle time after the viewer last pressed something before the screen carries on by itself. */
 const RESUME_MS = 9000;
+/** A trailer fading up out of its still, picture and sound together. */
+const FADE_IN_MS = 1000;
+/** …and back down into it when it has had its turn, before the next title takes the stage. */
+const FADE_OUT_MS = 1000;
+/** The same fade when the remote moves to another title: short, because the viewer is waiting on it. */
+const SWITCH_FADE_MS = 350;
+/** Posters the row shows whole; past the fourth, it slides along to keep the selected one in view. */
+const ROW_VISIBLE = 7;
+const ROW_LEAD = 3;
 
 export interface SpotlightStageProps {
   spot: SpotItem[];
@@ -64,7 +75,7 @@ export interface SpotlightStageProps {
 }
 
 type Phase = 'trailers' | 'slides';
-type FocusZone = 'main' | 'actions' | 'mini';
+type FocusZone = 'main' | 'mini';
 
 const keyOf = (it: { type?: string; id?: string | number }) => `${it.type}:${it.id}`;
 const art = (it: SpotItem | undefined, size: string) => (it ? imgW(it.backdrop || it.poster || '', size) : '');
@@ -82,7 +93,6 @@ export default function SpotlightStage(props: SpotlightStageProps) {
 
   const rootRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
-  const watchRef = useRef<HTMLButtonElement>(null);
   const miniRef = useRef<HTMLButtonElement>(null);
   const slidesApi = useRef<SlidesApi | null>(null);
   const onSlidesApi = useCallback((api: SlidesApi | null) => { slidesApi.current = api; }, []);
@@ -114,12 +124,12 @@ export default function SpotlightStage(props: SpotlightStageProps) {
   }, [held]);
 
   /* ---- THE REMOTE / KEYBOARD ----------------------------------------------------------------- */
-  const order: FocusZone[] = phase === 'trailers'
-    ? (miniLive ? ['mini', 'actions', 'main'] : ['actions', 'main'])
-    : (miniLive ? ['mini', 'main'] : ['main']);
+  /* No Watch button any more: OK on the poster row opens the title, so Up from the row reaches the
+   * credits frame (while it is there) and nothing else. */
+  const order: FocusZone[] = miniLive ? ['mini', 'main'] : ['main'];
   const focusZone = useCallback((z: FocusZone) => {
     setZone(z);
-    const el = z === 'main' ? mainRef.current : z === 'mini' ? miniRef.current : watchRef.current;
+    const el = z === 'main' ? mainRef.current : miniRef.current;
     el?.focus({ preventScroll: true });
   }, []);
   // The posters (then the slides) have the remote from the first frame — they are what the screen is about.
@@ -140,11 +150,11 @@ export default function SpotlightStage(props: SpotlightStageProps) {
     const root = rootRef.current;
     const inRoot = !!ae && !!root?.contains(ae);
     const k = e.key;
-    const z: FocusZone = inRoot ? (ae === mainRef.current ? 'main' : ae === miniRef.current ? 'mini' : 'actions') : zone;
+    const z: FocusZone = inRoot ? (ae === miniRef.current ? 'mini' : 'main') : zone;
     const eat = () => { e.preventDefault(); e.stopPropagation(); };
     if (k === 'ArrowLeft' || k === 'ArrowRight') {
       eat();
-      if (z === 'mini' || z === 'actions') return;
+      if (z === 'mini') return;
       if (!inRoot) focusZone('main');
       const d = k === 'ArrowRight' ? 1 : -1;
       touch();
@@ -210,7 +220,7 @@ export default function SpotlightStage(props: SpotlightStageProps) {
           <TrailerScreen
             spot={spot} at={at} setAt={setAt} held={held} settled={settled}
             clipSeconds={clipSeconds} kicker={props.kicker} rowLabel={props.rowLabel}
-            zone={zone} setZone={setZone} mainRef={mainRef} watchRef={watchRef}
+            zone={zone} setZone={setZone} mainRef={mainRef}
             onOpen={onOpen} onDone={toSlides} onAudible={onAudible} touch={touch}
             filmStopped={!!mini?.gone}
           />
@@ -240,7 +250,6 @@ function TrailerScreen(p: {
   zone: FocusZone;
   setZone: (z: FocusZone) => void;
   mainRef: RefObject<HTMLDivElement | null>;
-  watchRef: RefObject<HTMLButtonElement | null>;
   onOpen: (it: SpotItem) => void;
   onDone: () => void;
   onAudible?: (audible: boolean) => void;
@@ -259,32 +268,45 @@ function TrailerScreen(p: {
   const [sound, setSound] = useState(true);
   const [logoBad, setLogoBad] = useState<Record<string, true>>({});
 
+  /* TWO INDICES, BECAUSE THE STAGE FADES. `at` is the SELECTED title — the ring on the row and the
+   * words above it, which answer the remote at once. `stageAt` is the title whose trailer is on the
+   * stage, and it follows `at` through a fade: the trailer dissolves back into its still and its sound
+   * falls away (`closeThen`), and only then does the stage move on — the still cross-fades to the next
+   * title's, whose trailer fades up out of it in turn. A trailer used to be cut off mid-frame, sound
+   * and all, the instant the selection moved. */
   const cur = spot[at];
   const curKey = cur ? keyOf(cur) : '';
-  // Icons play as the screen opens; stepping along the posters does not replay them.
-  const intro = useIntro();
+  const [stageAt, setStageAt] = useState(at);
+  const stageCur = spot[stageAt];
+  const stageKey = stageCur ? keyOf(stageCur) : '';
   /* A television that could not spare a second decoder while the credits played gets another go
    * once the film in the corner has stopped (`filmStopped`), for every title from then on. */
   const canTrail = (!trailersBlocked || filmStopped) && (!IS_TV || previewsAllowed(true));
-  const src = cur && canTrail && !failed[curKey] ? cur.trailer?.url || undefined : undefined;
-  const { muted, toggleMute } = useVideoTrailer(slotRef, stageRef, src, cur?.title || '', {
+  const src = stageCur && canTrail && !failed[stageKey] ? stageCur.trailer?.url || undefined : undefined;
+  const { muted, toggleMute, fadeOutSound } = useVideoTrailer(slotRef, stageRef, src, stageCur?.title || '', {
     /* A moment worth seeing — a third of the way in, past the logos and any franchise recap — rather
      * than the distributor card every trailer opens on. See trailerStartOffset. */
-    startAt: trailerStartOffset(cur?.trailer?.runtime),
-    renditions: cur?.trailer?.urls,
+    startAt: trailerStartOffset(stageCur?.trailer?.runtime),
+    renditions: stageCur?.trailer?.urls,
     // TV: the crop is laid out, never transformed — the set does not apply transforms to video.
     cropScale: IS_TV ? 1 : undefined,
-    /* THE WHOLE SCREEN NOW, so the file is sized for it on a computer. The television keeps 720p: the
-     * film is still being decoded in the corner for the first seconds, and a second full-HD decode is
-     * the one thing a set's video path is least likely to give. */
-    maxRenditionPx: IS_TV ? 1280 : 1920,
+    /* THE BEST THERE IS UP TO 1080p, AND NEVER MORE — on the television as well, by the viewer's call:
+     * these trailers ARE the screen, and 720p blown up to it was visibly soft. Not past 1080p, which only
+     * buys a longer wait for the first frame. (It was 720p on the set because the film is still decoding
+     * in the corner for its first seconds; a set that cannot run both decoders misses its first trailer,
+     * holds the still, and plays them from when the film has stopped — see `trailersBlocked`.) */
+    maxRenditionPx: 1920,
+    targetRenditionPx: 1920,
     sound,
-    onFail: () => { if (curKey) setFailed((f) => ({ ...f, [curKey]: true })); },
+    fadeSoundMs: FADE_IN_MS,
+    restartKey: stageKey,
+    onFail: () => { if (stageKey) setFailed((f) => ({ ...f, [stageKey]: true })); },
   });
 
   /* The engine marks the stage `has-trailer` on the first painted frame. THAT is when the clip's clock
    * starts — not when it was asked for, which on a television can be seconds earlier. The stage's
-   * className is static for this reason: a className React recomputed would write over the mark. */
+   * className is static for this reason: a className React recomputed would write over the mark (and
+   * over `is-closing`, below, which is written the same way). */
   useEffect(() => {
     setRevealed(false);
     const el = stageRef.current;
@@ -294,22 +316,60 @@ function TrailerScreen(p: {
     mo.observe(el, { attributes: true, attributeFilter: ['class'] });
     check();
     return () => mo.disconnect();
-  }, [src]);
+  }, [src, stageKey]);
 
   /* Ducked for as long as a trailer is on screen, loading or playing — releasing between two clips let
    * the credits' music blip up for the second the next file took to start. */
   useEffect(() => { onAudible?.(!!src && !muted); }, [src, muted, onAudible]);
   useEffect(() => () => onAudible?.(false), [onAudible]);
 
+  /* ---- THE FADE DOWN ----------------------------------------------------------------------------
+   * THE STILL COMES BACK OVER THE TRAILER, rather than the trailer fading out. The stills sit ABOVE the
+   * video in the stage (see the markup), so revealing a trailer is its still fading away, and closing
+   * it is the still fading back — both on the picture layer, where a television honours opacity; a set
+   * hands the video itself to its own pipeline, which does not. `is-closing` and the fade's length are
+   * written onto the stage directly, like the engine's own `has-trailer`. The sound falls with it. */
+  const atRef = useRef(at);
+  atRef.current = at;
+  const autoNext = useRef(false);
+  const closing = useRef<{ id: number; done: boolean } | null>(null);
+  const closeThen = useCallback((ms: number, then: () => void, done = false) => {
+    const el = stageRef.current;
+    if (closing.current) window.clearTimeout(closing.current.id);
+    closing.current = null;
+    if (!el || !el.classList.contains('has-trailer')) { then(); return; }
+    el.style.setProperty('--pp-art-fade', `${ms}ms`);
+    el.classList.add('is-closing');
+    fadeOutSound(ms);
+    const id = window.setTimeout(() => { closing.current = null; then(); }, ms);
+    closing.current = { id, done };
+  }, [fadeOutSound]);
+  useEffect(() => () => { if (closing.current) window.clearTimeout(closing.current.id); }, []);
+
+  /* The selection moved: fade the stage down, then follow. A fade already under way just lands on
+   * wherever the remote has got to by the time it ends — except the last one, which was heading for
+   * the slideshow and is turned round instead. */
+  useEffect(() => {
+    if (at === stageAt) return;
+    const ms = autoNext.current ? FADE_OUT_MS : SWITCH_FADE_MS;
+    autoNext.current = false;
+    if (closing.current && !closing.current.done) return;
+    closeThen(ms, () => setStageAt(atRef.current));
+  }, [at, stageAt, closeThen]);
+  // A new title on the stage starts from its still, fully up.
+  useEffect(() => { stageRef.current?.classList.remove('is-closing'); }, [stageKey]);
+
+  /* Moving on by itself: the fade down starts FADE_OUT_MS before the clip is up, so the clip — fade
+   * included — is `clipSeconds` long. After the last title, the same fade hands over to the slideshow. */
   const advance = useCallback(() => {
-    if (at + 1 < spot.length) setAt((a) => a + 1);
-    else onDone();
-  }, [at, spot.length, setAt, onDone]);
+    if (atRef.current + 1 < spot.length) { autoNext.current = true; setAt((a) => a + 1); }
+    else closeThen(FADE_OUT_MS, onDone, true);
+  }, [spot.length, setAt, onDone, closeThen]);
 
   useEffect(() => {
-    if (!settled || !cur || held) return;
+    if (!settled || !stageCur || held || at !== stageAt) return;
     if (src && revealed) {
-      const id = window.setTimeout(advance, clipSeconds * 1000);
+      const id = window.setTimeout(advance, Math.max(0, clipSeconds * 1000 - FADE_OUT_MS));
       return () => window.clearTimeout(id);
     }
     /* Asked for and not yet showing: wait, but not forever. A television that cannot spare a second
@@ -318,27 +378,28 @@ function TrailerScreen(p: {
      * silence on every title (until the film stops, above). */
     if (src) {
       const id = window.setTimeout(() => {
-        setFailed((f) => ({ ...f, [curKey]: true }));
+        setFailed((f) => ({ ...f, [stageKey]: true }));
         if (IS_TV && !filmStopped) setTrailersBlocked(true);
       }, TRAILER_PATIENCE);
       return () => window.clearTimeout(id);
     }
     const id = window.setTimeout(advance, STILL_SECONDS * 1000);
     return () => window.clearTimeout(id);
-  }, [settled, cur, held, src, revealed, clipSeconds, advance, curKey, filmStopped]);
+  }, [settled, stageCur, held, at, stageAt, src, revealed, clipSeconds, advance, stageKey, filmStopped]);
 
-  /* Two picture layers under the trailer, cross-faded: what shows while a trailer loads, or instead of
-   * one. The incoming title goes into the layer at the back, which is then brought forward. */
+  /* Two picture layers over the trailer, cross-faded: what shows while a trailer loads, or instead of
+   * one, and what it fades up out of and back down into. The incoming title goes into the layer at the
+   * back, which is then brought forward. */
   const [layers, setLayers] = useState<{ a?: SpotItem; b?: SpotItem; front: 'a' | 'b' }>({ front: 'a' });
   useEffect(() => {
-    if (!cur) return;
+    if (!stageCur) return;
     setLayers((l) => {
       const front = l.front === 'a' ? l.a : l.b;
-      if (front && keyOf(front) === curKey) return l;
-      return l.front === 'a' ? { a: l.a, b: cur, front: 'b' } : { a: cur, b: l.b, front: 'a' };
+      if (front && keyOf(front) === stageKey) return l;
+      return l.front === 'a' ? { a: l.a, b: stageCur, front: 'b' } : { a: stageCur, b: l.b, front: 'a' };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curKey]);
+  }, [stageKey]);
 
   const glance = useSettledGlance({
     item: cur || { id: '' },
@@ -359,11 +420,13 @@ function TrailerScreen(p: {
     <>
       {/* THE TRAILER, FULL SCREEN. A static className — see the note on `revealed` above. */}
       <div className="pp-stage" ref={stageRef}>
+        {/* UNDER the stills, first in the DOM: a trailer is revealed by its still fading away and closed
+            by the still fading back — see THE FADE DOWN. */}
+        <div className="pp-stage-slot" ref={slotRef} aria-hidden="true" />
         {(['a', 'b'] as const).map((s) => (
           <img key={`${s}-${layers[s] ? keyOf(layers[s]!) : ''}`} className={`pp-stage-art${layers.front === s ? ' on' : ''}`}
             src={art(layers[s], 'w1280') || undefined} alt="" decoding="async" />
         ))}
-        <div className="pp-stage-slot" ref={slotRef} aria-hidden="true" />
       </div>
       <div className="pp-stage-shade" aria-hidden="true" />
       {!IS_TV && src && revealed && (
@@ -375,19 +438,15 @@ function TrailerScreen(p: {
       )}
 
       <div className="pp-info" key={curKey}>
-        <div className="pp-kicker">{p.kicker}</div>
         <h2 className="pp-name">
           {logo && !logoBad[curKey]
             ? <img className="pp-logo" src={logo} alt={cur?.title || ''} onError={() => setLogoBad((b) => ({ ...b, [curKey]: true }))} />
             : <span className="pp-title">{cur?.title}</span>}
         </h2>
         {facts.length > 0 && <div className="pp-facts">{facts.map((f, i) => <span key={i}>{f}</span>)}</div>}
-        <GlanceChips callouts={glance} max={2} />
-        <div className={`pp-actions${intro ? ' gl-run' : ''}`} onFocus={() => p.setZone('actions')}>
-          <button ref={p.watchRef} type="button" className="pp-btn pp-primary" onClick={() => cur && onOpen(cur)}>
-            <GlanceIcon name="play" /><span>{t('postplay.watch')}</span>
-          </button>
-        </div>
+        {/* Arriving in turn with the words above them — spotlight.css THE WORDS ARRIVE IN TURN — rather than
+            with the callouts' own rise, so `rise` is off and the icons' moves are timed from there. */}
+        <GlanceChips callouts={glance} max={2} className="gl-run" rise={false} />
       </div>
 
       <div className="pp-rowwrap">
@@ -395,6 +454,9 @@ function TrailerScreen(p: {
         <div
           ref={p.mainRef}
           className={`pp-row${p.zone === 'main' ? ' is-zone' : ''}`}
+          /* Ten posters do not fit across the screen: past the fourth the row slides along under the
+             remote (a transform, see spotlight.css), and stops when the last one is in view. */
+          style={{ ['--shift' as string]: Math.max(0, Math.min(at - ROW_LEAD, spot.length - ROW_VISIBLE)) }}
           tabIndex={0}
           role="listbox"
           aria-label={p.rowLabel}
@@ -409,8 +471,8 @@ function TrailerScreen(p: {
                 key={k}
                 role="option"
                 aria-selected={on}
-                className={`pp-thumb${on ? ' on' : ''}${on && src && revealed && !held ? ' run' : ''}`}
-                style={on ? { ['--clip' as string]: `${clipSeconds}s` } : undefined}
+                className={`pp-thumb${on ? ' on' : ''}${on && i === stageAt && src && revealed && !held ? ' run' : ''}`}
+                style={on ? { ['--clip' as string]: `${Math.max(1, clipSeconds - FADE_OUT_MS / 1000)}s` } : undefined}
                 onClick={() => { if (i !== at) { p.touch(); setAt(() => i); } else onOpen(it); }}
               >
                 <img className="pp-thumb-art" src={art(it, IS_TV ? 'w300' : 'w500') || undefined} alt="" decoding="async" />
