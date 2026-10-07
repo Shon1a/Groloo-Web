@@ -6,6 +6,11 @@ import { collectAddonMeta } from './addonClient';
 import type { Awards, HomePayload, MediaItem, MetaDetail, SeasonEpisodes } from './types';
 import { useLang } from '../i18n/i18n';
 import { usePlayer } from '../stores/player';
+import { imgW, rasterLogo } from './img';
+import { retainImage } from './useImageReady';
+import { currentEp } from './episodeNumbering';
+import { useHistory } from '../stores/history';
+import { STILL_RENDITION, deckOpensOn, firstSeasonOf, seasonsOf, warmStill } from '../components/DetailModal/deckGeometry';
 
 /* Query hooks — one per backend read. The `lang` query param is threaded from
  * the active UI language so the API can localize titles/logos. As screens land
@@ -305,6 +310,68 @@ export function usePrefetchMeta() {
   }, [qc, lang]);
 }
 
+/* ---- THE TITLE SCREEN, READY BEFORE OK IS PRESSED ------------------------------------------------
+ *
+ * Opening a title used to begin on OK: the detail request went out, the screen waited under its veil
+ * for it, then for the backdrop to download, then for that 1280px picture to decode, then for the
+ * wordmark — measured on the set at ~100ms for the warm case and a good deal more for a title whose
+ * detail was not cached. All of it can happen while the remote is simply resting on the title, which
+ * is what precedes nearly every OK: the rows and the hero call this after a short dwell, it reads the
+ * detail under the same key the title screen reads (so that read is a cache hit), and it fetches AND
+ * decodes the exact backdrop and wordmark the screen will paint (TvDetail's renditions), keeping them
+ * in the shared picture cache. The screen then opens on a picture that is already there.
+ *
+ * A SERIES OPENS ON ITS EPISODE DECK, so for a series this goes one step further: the season the deck
+ * will open on (TvDetail's choice — the episode Continue Watching names, else the first season) is
+ * read under the deck's own key, and the stills of the cards it will show first are decoded into the
+ * deck's cache (deckGeometry `deckOpensOn`, `warmStill`). The deck is then dealt with its episodes and
+ * their pictures from the first frame, instead of after a season request and eight separate fades.
+ *
+ * One request per title someone actually stopped on (two for a series), cached like any other read; a
+ * failure is silent, because the screen will simply make the request itself. */
+const DETAIL_BACKDROP = 'w1280';
+/** Cards the TV deck shows around the one it opens on (TvEpisodeDeck DECK_ABOVE / DECK_BELOW). */
+const DECK_FIRST_SCREEN = { above: 2, below: 3 };
+export function useWarmDetail() {
+  const { lang } = useLang();
+  const qc = useQueryClient();
+  return useCallback((it: MediaItem | null | undefined, resumeEp?: { season: number; episode: number }) => {
+    const id = it ? apiIdOf(it) : undefined;
+    if (!it || !id) return;
+    const q = metaQuery(id, it.type, lang);
+    void qc.prefetchQuery(q).then(() => {
+      const m = qc.getQueryData<MetaDetail>(q.queryKey);
+      if (!m) return;
+      const backdrop = m.backdrop || it.poster;
+      for (const url of [backdrop ? imgW(backdrop, DETAIL_BACKDROP) : '', m.titleLogo ? rasterLogo(m.titleLogo, 'original') : '']) {
+        if (!url) continue;
+        const img = retainImage(url);
+        // Decoded whether or not the bytes were already here: `complete` says loaded, not decoded.
+        if (typeof img.decode === 'function') img.decode().catch(() => { /* the screen copes */ });
+      }
+      // The deck (TvEpisodeDeck): a TMDB-described series only — an add-on's episodes come with its meta.
+      if (!m.imdb || m.addonEpisodes || !seasonsOf(m).length) return;
+      const named = currentEp(m, resumeEp);
+      const picked = named ? { season: named.season, ep: named.episode } : null;
+      const season = picked?.season ?? firstSeasonOf(m);
+      if (season == null) return;
+      const sq = seasonQuery(m.id, season, lang, m.imdb);
+      void qc.prefetchQuery(sq).then(() => {
+        const eps = qc.getQueryData<SeasonEpisodes>(sq.queryKey)?.episodes ?? [];
+        const progress = useHistory.getState().progress;
+        const at = deckOpensOn(eps, season, picked, (ep) => {
+          const p = progress[`${it.id}:S${season}E${ep}`];
+          return p && p.dur > 0 ? { pct: Math.min(100, (p.pos / p.dur) * 100), at: p.at || 0 } : { pct: 0, at: 0 };
+        });
+        for (let i = at - DECK_FIRST_SCREEN.above; i <= at + DECK_FIRST_SCREEN.below; i++) {
+          const still = eps[i]?.still;
+          if (still) warmStill(imgW(still, STILL_RENDITION));
+        }
+      }).catch(() => { /* the deck asks again */ });
+    }).catch(() => { /* the title screen will ask again and report it */ });
+  }, [qc, lang]);
+}
+
 /* ---- THE ROW PREVIEW'S TRAILER, AS A VIDEO FILE ---------------------------------------------
  *
  * /api/imdb-trailer/:imdb resolves IMDb's own trailer for a title: progressive MP4s the TV
@@ -389,11 +456,18 @@ export function useGenres() {
  * season and two add-on seasons. Passing the IMDb id lets the server hand back the
  * numbering the streams actually use; without it the list is TMDB's, and episodes
  * past the fold resolve to ids no add-on has. See server.js `episodeMap`. */
+/** One season's episodes, under the key both the deck and the title screen's warm-up use. */
+export function seasonQuery(id: string | number | undefined, season: number | undefined, lang: string, imdb?: string) {
+  return {
+    queryKey: ['season', id, season, lang, imdb ?? ''] as const,
+    queryFn: () => api<SeasonEpisodes>(`/api/tv/${id}/season/${season}?lang=${encodeURIComponent(lang)}${imdb ? `&imdb=${encodeURIComponent(imdb)}` : ''}&nv=${NUMBERING}`),
+  };
+}
+
 export function useSeason(id: string | number | undefined, season: number | undefined, imdb?: string) {
   const { lang } = useLang();
   return useQuery({
-    queryKey: ['season', id, season, lang, imdb ?? ''],
+    ...seasonQuery(id, season, lang, imdb),
     enabled: id != null && id !== '' && season != null,
-    queryFn: () => api<SeasonEpisodes>(`/api/tv/${id}/season/${season}?lang=${encodeURIComponent(lang)}${imdb ? `&imdb=${encodeURIComponent(imdb)}` : ''}&nv=${NUMBERING}`),
   });
 }

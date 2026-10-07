@@ -4,11 +4,12 @@ import { useT, useGenre } from '../i18n/i18n';
 import { imgW, rasterLogo } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useImdbTrailer, useMeta, useMetaCached, apiIdOf } from '../lib/queries';
+import { useImdbTrailer, useMeta, useMetaCached, useWarmDetail, apiIdOf } from '../lib/queries';
 import Glance from './glance/Glance';
 import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { FadeBg, FadeImg } from './FadeArt';
+import { useBootDone } from '../lib/bootGate';
 
 /* THE TV FEATURED BILLBOARD — the top of the TV home, and only the top.
  *
@@ -215,12 +216,28 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
    * Nothing here is new policy: previewsAllowed and previewDwellMs are the row's, so the Settings
    * toggle and the storage arm govern both surfaces from one place. */
   const heroTrailers = previewsAllowed(useSettings((s) => s.settings.tvRowTrailers));
+  /* Not under the start-up splash: a trailer that began behind it would be met half-way through, and
+   * mounting a media pipeline is exactly the kind of work the splash is waiting out (lib/bootGate.ts). */
+  const booted = useBootDone();
   const stageRef = useRef<HTMLDivElement>(null);
   const trailerSlotRef = useRef<HTMLDivElement>(null);
   const [dwelt, setDwelt] = useState<MediaItem | null>(null);
   const [trailerFailed, setTrailerFailed] = useState(false);
   const [metaImdb, setMetaImdb] = useState<string | undefined>(undefined);
   const restingOn: MediaItem | undefined = list[active];
+  /* OK on the featured card opens a title screen that is already made: its detail, backdrop and wordmark
+   * are fetched and decoded once the remote has rested here a moment (lib/queries `useWarmDetail`) — the
+   * same rule the rows follow. */
+  const warmDetail = useWarmDetail();
+  const bootedForWarm = useBootDone();
+  useEffect(() => {
+    // Not under the start-up splash, which would only be held up by the request (lib/bootGate.ts).
+    if (!focused || !restingOn || !bootedForWarm) return;
+    const it = restingOn;
+    const id = window.setTimeout(() => warmDetail(it), 600);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused, restingOn?.id, warmDetail, bootedForWarm]);
 
   useEffect(() => {
     setDwelt(null);
@@ -231,13 +248,13 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
      * a feature becomes untestable — today already produced three independent ways for this trailer
      * to be silently off, and none of them announced themselves. One switch governs both surfaces:
      * `previewsAllowed`, which is the viewer's own toggle. */
-    if (!heroTrailers || !focused || !onScreen || !restingOn) return;
+    if (!heroTrailers || !booted || !focused || !onScreen || !restingOn) return;
     const id = window.setTimeout(() => setDwelt(restingOn), previewDwellMs());
     return () => window.clearTimeout(id);
     // Keyed on the title's id rather than the object: `list` is rebuilt on every render of Home,
     // so an object dependency would re-arm this timer forever and it would never fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heroTrailers, focused, onScreen, restingOn?.id]);
+  }, [heroTrailers, booted, focused, onScreen, restingOn?.id]);
 
   /* ---- THE FEATURED FEED CARRIES NO IMDb ID, WHICH IS WHY THIS EXISTS -------------------------
    *

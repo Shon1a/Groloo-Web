@@ -74,7 +74,12 @@ import { useEffect, useState } from 'react';
  * hero or a row you just left and let the warm evict the picture it was about to need. Two more
  * is ~3MB of pixmap at worst. Not a re-run of the 24 experiment — that asked whether MORE cache
  * speeds a hold (it does not); this keeps the warm from being thrown away before the press. */
-const RETAIN_MAX = 12;
+/* 12 -> 20 WITH THE WARM SIX CARDS AHEAD (TvSpotlight `warmNow`) and the title screen's own backdrop and
+ * wordmark (lib/queries `useWarmDetail`): seven cards of the walk at a backdrop and a wordmark each, plus
+ * the hero and one title screen, so nothing the next press needs is evicted by the warm that put it there.
+ * Still a fixed ceiling for the whole app — about 25MB of pixmap at the very worst, against the ~33MB a
+ * single 4K picture would cost (lib/hero.ts). 24 was measured on the set without moving a frame. */
+const RETAIN_MAX = 20;
 
 /** Insertion-ordered, so the first key is always the least recently retained. */
 const retained = new Map<string, HTMLImageElement>();
@@ -98,6 +103,13 @@ export function retainImage(url: string): HTMLImageElement {
     retained.delete(oldest);
   }
   return img;
+}
+
+/** Whether `url` is already held here AND loaded — asked without creating anything, so a render can use it
+ *  (a tile mounting with its picture already in hand takes it at once; see TvSpotlight's Tile). */
+export function retainedReady(url: string): boolean {
+  const hit = retained.get(url);
+  return !!hit && isDecoded(hit);
 }
 
 /** Decoded and paintable right now — the synchronous answer, worth one fewer frame of nothing. */

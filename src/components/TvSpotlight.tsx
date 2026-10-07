@@ -5,7 +5,7 @@ import { imgW, artW, artPosition } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { tvRowCards } from '../lib/tvRowSize';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, useAwards, apiIdOf } from '../lib/queries';
+import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, useAwards, useWarmDetail, apiIdOf } from '../lib/queries';
 import { useGlanceResolver } from './glance/useGlance';
 import { GlanceIcon } from './glance/GlanceIcons';
 
@@ -13,8 +13,9 @@ import { GlanceIcon } from './glance/GlanceIcons';
  * `localStorage['groloo.tvglance'] = 'off'` drops it, so its cost can be A/B'd on one build
  * (scripts/tv-bench-local.mjs --ls=groloo.tvglance=off, or tv-measure.mjs on the set). Read once. */
 const ROW_GLANCE = (() => { try { return localStorage.getItem('groloo.tvglance') !== 'off'; } catch { return true; } })();
-import { retainImage, isDecoded } from '../lib/useImageReady';
+import { retainImage, isDecoded, retainedReady } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
+import { useHistory } from '../stores/history';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { registerTvRow, rowIndexOf, prepareRowWindow, ROW_PREPARE_EVENT } from '../lib/tvRowRegistry';
 import { tileFadeAlways } from '../lib/tvMotionFlags';
@@ -202,6 +203,8 @@ const endsBefore = (p: number, endAt: number, stops: number): number => Math.flo
  * because one card each way is what a press of Left or Right reaches, and the point is to have the
  * trailer in hand BEFORE the next rest rather than to cache the row. */
 const TRAILER_PREFETCH_SPAN = 1;
+/** How long the remote must rest on a card before its title screen is made ready (see `warmDetail`). */
+const DETAIL_WARM_MS = 600;
 /* THE YOUTUBE EMBED IS GONE FROM THIS ROW, AND IT WAS THE MOST EXPENSIVE THING ON THE SCREEN.
  *
  * It was a cross-origin iframe: a second player with its own JS, its own decoder and its own
@@ -692,6 +695,13 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
    * the same picture, cropped by object-fit, at lower detail. */
   const { src, fallbackSrc, pos: objectPosition, own } = tilePictureOf(it);
   const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
+  /* A PICTURE ALREADY DECODED IS TAKEN AT ONCE. The row's warm-ahead (`warmNow`) keeps the cards ahead of
+   * the walk decoded in the shared cache, and a tile is the same file: there is nothing left to defer,
+   * so it mounts with its `src` rather than waiting for the next idle moment's promotion — which on a
+   * set busy with a walk could be most of a second, the posters-arriving-late a viewer sees at the
+   * right-hand edge. Already `rdy`, so a new element has no fade to run. */
+  const warmPic = !!src && retainedReady(src);
+  const warmMark = !!mark && retainedReady(mark);
   /* What names this tile: its wordmark, its title in type, or nothing at all when it
    * has fallen back to a plain poster that already carries its own. */
   const name: 'mark' | 'text' | null = mark ? 'mark' : (own ? 'text' : null);
@@ -717,8 +727,9 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
           tile for a change no one can see. */}
       {src && (
         <img
-          className="tv-spot-thumbimg"
-          data-src={src}
+          className={warmPic ? 'tv-spot-thumbimg rdy' : 'tv-spot-thumbimg'}
+          src={warmPic ? src : undefined}
+          data-src={warmPic ? undefined : src}
           decoding="async"
           style={{ objectPosition }}
           alt=""
@@ -773,8 +784,9 @@ const Tile = memo(function Tile({ item: it, left, pct, onOpen }: TileProps) {
       )}
       {!!mark && (
         <img
-          className="tv-spot-thumbmark"
-          data-src={mark}
+          className={warmMark ? 'tv-spot-thumbmark rdy' : 'tv-spot-thumbmark'}
+          src={warmMark ? mark : undefined}
+          data-src={warmMark ? undefined : mark}
           decoding="async"
           alt=""
           onLoad={(e) => e.currentTarget.classList.add('rdy')}
@@ -1446,6 +1458,43 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     return a ? { ...it, ...a } : it;
   };
 
+  /* ---- OK OPENS A TITLE THAT IS ALREADY THERE ---------------------------------------------------
+   * Resting on a card for DETAIL_WARM_MS fetches its detail and decodes the backdrop and wordmark its
+   * title screen will paint (lib/queries `useWarmDetail`), so OK opens straight onto a finished screen
+   * instead of a veil.
+   *
+   * TIMED FROM THE PRESS, AND EVERY PRESS CANCELS IT. It was keyed on the committed walk, which lands
+   * ~400ms after a press (see `syncNow`) — so at the pace of a deliberate walk, a card every 700ms or
+   * so, the warm for the card just left fired 300ms into the NEXT press, its requests and decodes
+   * landing on the frames that press was animating. Armed by the press itself (`step`), it fires only
+   * when the remote has really stopped for DETAIL_WARM_MS, and it reads where the walk IS then. A held
+   * key re-arms it on every repeat, so a walk past a card still warms nothing. */
+  const warmDetail = useWarmDetail();
+  const detailWarmId = useRef(0);
+  const detailWarmLatest = useRef<() => void>(() => {});
+  detailWarmLatest.current = () => {
+    if (!open || !artOn) return;
+    const at = liveActive.current;
+    const it = at < n ? list[at] : undefined;
+    if (!it) return;
+    /* Continue Watching (the row with `resumeOf`) opens a series on the episode it names, so its deck
+     * is warmed on that one — ContinueRow's `openEntry` reads the same history entry. */
+    const e = resumeOf ? useHistory.getState().history.find((h) => String(h.id) === String(it.id)) : undefined;
+    const resumeEp = e && e.season != null && e.episode != null ? { season: e.season, episode: e.episode } : undefined;
+    warmDetail(withArt(it), resumeEp);
+  };
+  const armDetailWarm = () => {
+    window.clearTimeout(detailWarmId.current);
+    detailWarmId.current = window.setTimeout(() => { detailWarmId.current = 0; detailWarmLatest.current(); }, DETAIL_WARM_MS);
+  };
+  /* Arriving on the row with the remote is a rest like any other. */
+  useEffect(() => {
+    if (!open || !artOn) return;
+    armDetailWarm();
+    return () => { window.clearTimeout(detailWarmId.current); detailWarmId.current = 0; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, artOn]);
+
   /* THE BILLBOARD'S URL, IN ONE PLACE, because three things now ask for it and a fourth would be
    * a bug. The warm-ahead below fetches it, the swap gate decodes it, and `heroArt` paints it — if
    * any of them built the string itself and drifted by a rendition, the warm would be a cache MISS
@@ -1463,7 +1512,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * moment the remote arrives — handed to lib/artPrefetch, which downloads them (bytes only, no
    * decode) once the home screen has settled, nearest rows to the remote first. A row that already
    * has its artwork on is doing this itself through `promoteSoon`, so it queues nothing. */
-  const PREFETCH_TITLES = 7;
+  const PREFETCH_TITLES = 12;
   useEffect(() => {
     if (artOn || !n) return;
     const urls: string[] = [];
@@ -1481,6 +1530,25 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artOn, list, n]);
+
+  /* THE ROW THE REMOTE IS ON DOWNLOADS THE REST OF ITSELF. The warm-ahead decodes the next six cards and
+   * the strip's window holds a dozen; past those, a walk used to meet each new poster as a request at
+   * the moment it slid in — fine on a desktop, a visible late arrival on a television on Wi-Fi. So the
+   * row being walked queues the bytes of the cards after that (lib/artPrefetch: idle, three at a time,
+   * this row first), and a walk of any length finds them in the cache. Bytes only — nothing is decoded
+   * until the warm-ahead reaches it. */
+  useEffect(() => {
+    if (!open || !artOn || n < 8) return;
+    const urls: string[] = [];
+    for (let d = 7; d <= Math.min(n - 1, 26); d++) {
+      const it = list[(active + d) % n];
+      if (!it) continue;
+      const a = withArt(it);
+      urls.push(tilePictureOf(a).src, logoOf(a) || '');
+    }
+    prefetchArt(urls, () => 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, artOn, n, list]);
 
   /* ---- THE WINDOW, BUILT FRESH ON EVERY PRESS AND CHEAP BECAUSE OF IT -------------------------
    * The strip used to be one memo holding every tile, guarded against rebuilding on a focus change
@@ -1974,7 +2042,11 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * ON THE IDLE FRAME, for the reason the tile promotion records: decoding artwork on the keypress
    * frame measured WORSE than not windowing at all, because it lands on the one frame that is
    * animating a cross-fade. Between presses the row is doing nothing. */
-  const BILLBOARD_WARM_AHEAD = 3;
+  /* SIX AHEAD, NOT THREE. The billboard needed three; the TILES need the rest. A tile is the same picture
+   * as its billboard, and the one sliding in at the right-hand edge on a press is four or five cards
+   * ahead of the walk — beyond a three-card warm, so on a set it could arrive still decoding. Six covers
+   * every card a press can bring on screen (RETAIN_MAX in useImageReady holds them). */
+  const BILLBOARD_WARM_AHEAD = 6;
   const BILLBOARD_WARM_BEHIND = 1;
   const warmNow = () => {
     if (!artOn || stops < 2) return;
@@ -2243,6 +2315,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     scheduleSync(chained);
     promoteSoon();
     warmSoon();
+    armDetailWarm();
   };
 
   /* ---- PAYING THE COMMIT THE WALK RAN UP ---------------------------------------------------
