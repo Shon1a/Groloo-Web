@@ -9,6 +9,7 @@ import TvCatalogRow from '../components/TvCatalogRow';
 import TvChipMenu from '../components/DetailModal/TvChipMenu';
 import TvMultiMenu from '../components/TvMultiMenu';
 import { isOkKey, openTvKeyboard, isImeRefocus } from '../lib/tvIme';
+import { barItemHere } from '../lib/tvBar';
 import type { GridDesc } from '../lib/grid';
 import type { MediaItem } from '../lib/types';
 
@@ -195,12 +196,12 @@ export default function Explore() {
      * Up scored the nearest nav item — which is whichever one happens to sit over the chip you are
      * on, not the page you are actually looking at — and Down could land on a filter's own label or
      * simply refuse, since the billboard's box starts a long way under the row.
-     * So both are stated. Up goes to the ACTIVE nav item, which is the same rule TvSpatialNav
-     * applies when it enters the bar from anywhere else (the tab you are on is the only sane place
-     * to arrive), and Down goes to the billboard, which is the single focus stop in the results —
-     * the strip's tiles are a preview, not stops. */
+     * So both are stated. Up goes to the page's own nav item (lib/tvBar.ts — here, the search icon),
+     * which is the same rule TvSpatialNav applies when it enters the bar from anywhere else (the tab
+     * you are on is the only sane place to arrive), and Down goes to the billboard, which is the
+     * single focus stop in the results — the strip's tiles are a preview, not stops. */
     if (e.key === 'ArrowUp') {
-      go(document.querySelector<HTMLElement>('.tv-nav-item.active') ?? document.querySelector<HTMLElement>('.tv-nav-item'));
+      go(barItemHere() ?? document.querySelector<HTMLElement>('.tv-nav-item'));
       return;
     }
     if (e.key === 'ArrowDown') {

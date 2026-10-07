@@ -22,6 +22,7 @@ import { tileFadeAlways } from '../lib/tvMotionFlags';
 import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '../lib/tvRowWindow';
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
+import { barItemHere } from '../lib/tvBar';
 import { prefetchArt } from '../lib/artPrefetch';
 import { TvRowStage, SLIDE_MS, PRESS_SETTLED_MS, type StageSlot, type StagePeek } from '../lib/tvRowStage';
 
@@ -2378,8 +2379,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * first card, so the press belongs to whatever is outside the row, and on this screen that
        * is the navigation bar.
        *
-       * STRAIGHT TO `.tv-nav-item.active`, not to the spatial handler. TvSpatialNav already
-       * redirects every arrival in the bar to the active page for a reason recorded there —
+       * STRAIGHT TO THE PAGE'S OWN NAV ITEM (lib/tvBar.ts), not to the spatial handler. TvSpatialNav
+       * already redirects every arrival in the bar to the same item for a reason recorded there —
        * geometry alone picks the search icon or the avatar, because the billboard is full-width
        * and every item is dead ahead. The same destination is chosen here rather than bubbling,
        * so the two paths cannot disagree about where "out of the row" goes. */
@@ -2388,8 +2389,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
          * the row used to overshoot: the repeat that arrived as the walk reached the start threw focus
          * into the nav bar and scrolled the page, mid-hold. Same rule `paced` keeps for a queued tap. */
         if (held) return;
-        const nav = document.querySelector<HTMLElement>('.tv-nav-item.active')
-          || document.querySelector<HTMLElement>('.tv-nav-item');
+        const nav = barItemHere() || document.querySelector<HTMLElement>('.tv-nav-item');
         if (nav) { nav.focus(); return; }
       }
       paced(-1, held);
