@@ -11,6 +11,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './lib/queryClient';
 import { I18nProvider } from './i18n/i18n';
 import { bootLaunchIntent } from './lib/launchIntent';
+import { installIdleWatch } from './lib/idle';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 // Visual baseline: the vanilla app's stylesheet, imported verbatim so ported
@@ -113,6 +114,12 @@ if (import.meta.env.MODE === 'tv') window.addEventListener('vite:preloadError', 
  * of the launch-intent resolver; webOS's launchParams/relaunch feeds and the Android bridge post
  * into the same `applyLaunchIntent`. It adds no route — see lib/launchIntent.ts. */
 bootLaunchIntent();
+
+/* The screensaver's clock (lib/idle.ts). HERE, BEFORE THE FIRST RENDER, and that placement is the
+ * point: its listeners must be the first on the window, so that while the slideshow is up the press
+ * that wakes it is caught before the Back resolver, the player or post-play — all of which register
+ * from effects, after this — can act on it as well. */
+installIdleWatch();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
