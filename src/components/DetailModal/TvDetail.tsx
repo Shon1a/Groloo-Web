@@ -15,6 +15,7 @@ import Glance from '../glance/Glance';
 import { useIntro } from '../glance/useGlance';
 import RateButtons from '../glance/RateButtons';
 import { GlanceIcon } from '../glance/GlanceIcons';
+import { castFaces, faceReady, type CastFace } from './castFaces';
 
 /* ============================================================================
  * THE TITLE SCREEN ON A TV — a different SHAPE, not a stripped copy of the web modal.
@@ -47,8 +48,6 @@ import { GlanceIcon } from '../glance/GlanceIcons';
  * WHAT WAS DROPPED, AND WHY EACH IS SAFE TO DROP ON A TV:
  *   · The recommendations grid. ~20 thumbnails and ~20 D-pad stops, for browsing — which is
  *     what the home rows are already for, one Back press away.
- *   · Cast headshots. A dozen circular avatars at 38px are unreadable from a sofa; the names
- *     are the information, so they ship as one line of text.
  *   · The second, blurred copy of the poster behind the backdrop (pure ambience).
  *   · The two dropdowns (source / language). A menu that opens over itself is a mouse control;
  *     both are now pills that are simply THERE, so Left/Right walks them.
@@ -62,19 +61,17 @@ import { GlanceIcon } from '../glance/GlanceIcons';
  * is what makes "where you are in this show" readable from a sofa. The count, not the still, was
  * the problem.
  *
- * That is ~12 images on open where the web modal loads ~30, and 6-ish stops to a playing film.
+ * SO DID THE CAST'S FACES, on the same argument. They went as "a dozen avatars at 38px, unreadable
+ * from a sofa" — a complaint about the size. Five at ninety pixels are recognised before a name is
+ * read (castFaces.ts), and they are warmed with the rest of the screen so they arrive with it.
+ *
+ * That is ~17 images on open where the web modal loads ~30, and 6-ish stops to a playing film.
  * Styling lives in the "TV TITLE SCREEN" section of src/styles/tv.css.
  * ==========================================================================*/
 
 const BACKDROP_RENDITION = 'w1280';
 /** Longest the loading veil waits on the backdrop's decode before opening without it. */
 const ART_WAIT_MAX = 2500;
-/* Cast names on the credits row. It was six, then four while the row was held to a single line
- * with an ellipsis; the row wraps to two lines inside its own column now (see .tv-det-credit-names
- * in tv.css), so the names fit again and being cut off after three was just losing the cast.
- * Six is still a cap: TMDB orders cast by billing, so the names anyone recognises are at the front,
- * and a list past six is a document rather than a cue whatever room there is to print it. */
-const CAST_LINE = 6;
 
 /* NO TRAILER PLAYS ON THIS SCREEN, and the note at the head of this file — "the trailer embed…
  * never ran here anyway" — is load-bearing rather than historical.
@@ -149,6 +146,38 @@ function CheckIcon() { return <span className="ic3" aria-hidden="true"><GlanceIc
 function FlagIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="flag" /></span>; }
 function CloseIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="close" /></span>; }
 
+/* ONE FACE OF THE CAST ROW. The photo fades in on load unless the title's warm-up already holds it
+ * (castFaces `warmFace`), in which case it is on the circle from the first frame. `complete` is read in
+ * the ref as well as `load` for the reason the episode cards give: a picture already decoded can finish
+ * before the handler is attached, and its `load` never comes. No photo, or one that fails, leaves the
+ * silhouette the web modal uses — the person still has a place in the row. */
+function CastFaceItem({ face }: { face: CastFace }) {
+  const [shown, setShown] = useState(() => !!face.url && faceReady(face.url));
+  const [broken, setBroken] = useState(false);
+  return (
+    <li className="tv-det-face" aria-label={face.name}>
+      <span className="tv-det-face-pic" aria-hidden="true">
+        {face.url && !broken
+          ? (
+            <img
+              className={shown ? 'rdy' : undefined}
+              src={face.url}
+              alt=""
+              decoding="async"
+              ref={(el) => { if (el?.complete && el.naturalWidth > 0 && !shown) setShown(true); }}
+              onLoad={() => setShown(true)}
+              onError={() => setBroken(true)}
+            />
+          )
+          : <svg viewBox="0 0 24 24"><path d="M12 12.6a4.6 4.6 0 1 0 0-9.2 4.6 4.6 0 0 0 0 9.2ZM12 14.4c-5.2 0-9 3.1-9 7.4V24h18v-2.2c0-4.3-3.8-7.4-9-7.4Z" /></svg>}
+      </span>
+      {/* A name too wide for its circle ("Christopher", "Yoshitsugu", most Georgian names past six
+          letters) sets a step smaller rather than losing its end to an ellipsis — castFaces `long`. */}
+      <span className={face.long ? 'tv-det-face-name is-long' : 'tv-det-face-name'} aria-hidden="true">{face.label}</span>
+    </li>
+  );
+}
+
 export default function TvDetail(p: TvDetailProps) {
   const t = useT();
   const genre = useGenre();
@@ -213,10 +242,8 @@ export default function TvDetail(p: TvDetailProps) {
 
   const [logoShown, setLogoShown] = useState(() => !!titleLogo && retainedReady(rasterLogo(titleLogo, 'original')));
 
-  /* One line of credits, director first. The web modal gives this a whole sticky column with a
-   * photo each; the names are the part that survives the trip across the room. */
-  const director = meta?.director || meta?.creators?.[0]?.name || '';
-  const castNames = (meta?.cast ?? []).slice(0, CAST_LINE).map((c) => c.name).filter(Boolean);
+  /* The credits: the cast as a row of faces (castFaces.ts). */
+  const faces = castFaces(meta);
 
   /* ---- ONE LINE OF FACTS, DIVIDED RATHER THAN JOINED -----------------------------------------
    * ★ 6.8 │ 2020 │ 12+ │ 1h 55min │ Adventure · Fantasy · Action
@@ -709,27 +736,15 @@ export default function TvDetail(p: TvDetailProps) {
 
             <p className="tv-det-plot">{plot}</p>
 
-            {/* TWO ALIGNED ROWS, NOT TWO PARAGRAPHS. The label used to be an inline span at the
-                head of a block of text, so a cast list long enough to wrap came back under the
-                label rather than under the first name — a second line starting in a column of its
-                own, ragged against the line above it. As a two-column grid the labels share one
-                edge and the names share another, which is what makes these read as credits rather
-                than as two more sentences under the synopsis. */}
-            {(director || castNames.length > 0) && (
-              <div className="tv-det-credits">
-                {director && (
-                  <>
-                    <span className="tv-det-credit-role">{t(isSeries ? 'modal.creator' : 'modal.director')}</span>
-                    <span className="tv-det-credit-names">{director}</span>
-                  </>
-                )}
-                {castNames.length > 0 && (
-                  <>
-                    <span className="tv-det-credit-role">{t('modal.cast_credits')}</span>
-                    <span className="tv-det-credit-names">{castNames.join(' · ')}</span>
-                  </>
-                )}
-              </div>
+            {/* THE CREDITS ARE THE CAST'S FACES, AND NOTHING ELSE. They were a small table: a
+                director line, and a "Casts & Credits" label in a column of its own beside the names
+                (then beside the faces). Both went; the row needs no caption to read as the cast, and
+                without the label's column it starts on the edge the rest of this column shares. The
+                label survives only as the list's name, for assistive tech. */}
+            {faces.length > 0 && (
+              <ul className="tv-det-faces" aria-label={t('modal.cast_credits')}>
+                {faces.map((f) => <CastFaceItem key={f.name} face={f} />)}
+              </ul>
             )}
 
           </div>
