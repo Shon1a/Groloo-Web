@@ -12,8 +12,10 @@
  * own, they are referenced from attributes in the same <svg>, never from a stylesheet (an external
  * sheet's `url(#…)` is not a safe bet on a 2022 television's Chromium).
  *
- * Parts that move carry a motion class (`m-pop`, `m-drop`, `m-swing`…, glance.css): an icon plays
+ * Parts that move carry a motion class (`m-pop`, `m-drop`, `m-swing`…, glanceMotion.ts): an icon plays
  * its little entrance when its callout arrives, and replays it whenever its button takes focus. */
+
+import { ensureMotionCss } from './glanceMotion';
 
 export type GlanceIconName =
   | 'calendar' | 'top10' | 'thumbUp' | 'thumbDown' | 'thumbs' | 'megaphone' | 'laurel' | 'clapper'
@@ -220,14 +222,14 @@ const ICONS: Record<Exclude<GlanceIconName, 'credits'>, string> = {
   /* Eye-opening: the world under a glass. */
   globe:
     `<g class="m-pop"><circle cx="10.6" cy="10.6" r="5.9" ${ACC}/>`
-    + '<g class="m-turn" fill="none" style="stroke:var(--gl-d)" stroke-width="1" opacity=".7">'
-    + '<ellipse cx="10.6" cy="10.6" rx="2.6" ry="5.9"/><path d="M4.7 10.6H16.5M5.5 7.7H15.7M5.5 13.5H15.7"/></g>'
+    + '<g class="m-turn"><g fill="none" style="stroke:var(--gl-d)" stroke-width="1" opacity=".7">'
+    + '<ellipse cx="10.6" cy="10.6" rx="2.6" ry="5.9"/><path d="M4.7 10.6H16.5M5.5 7.7H15.7M5.5 13.5H15.7"/></g></g>'
     + '<circle cx="10.6" cy="10.6" r="7.3" fill="none" stroke="url(@B)" stroke-width="2.2"/>'
     + '<path d="M16.1 16.1L20.4 20.4" stroke="url(@B)" stroke-width="3.2" stroke-linecap="round"/></g>',
 
   /* Spine-chilling: a ghost with its shadow. */
   ghost:
-    `<g class="m-slide" style="--d:.1s" opacity=".9"><g transform="translate(2.6 1.3)"><path d="${GHOST}" ${ACC}/></g></g>`
+    `<g class="m-slide" style="--d:.1s"><g opacity=".9" transform="translate(2.6 1.3)"><path d="${GHOST}" ${ACC}/></g></g>`
     + `<g class="m-float"><path d="${GHOST}" ${SIL}/>`
     + '<ellipse class="dk" cx="9.2" cy="10.6" rx="1.15" ry="1.6"/><ellipse class="dk" cx="13.6" cy="10.6" rx="1.15" ry="1.6"/></g>',
 
@@ -288,7 +290,7 @@ const ICONS: Record<Exclude<GlanceIconName, 'credits'>, string> = {
 
   /* Pulse-pounding: the bolt, with its silver echo. */
   bolt:
-    `<g class="m-slide" style="--d:.08s" opacity=".9"><g transform="translate(2.4 1)"><path d="${BOLT}" ${SIL} stroke="url(@B)" stroke-width=".9" stroke-linejoin="round"/></g></g>`
+    `<g class="m-slide" style="--d:.08s"><g opacity=".9" transform="translate(2.4 1)"><path d="${BOLT}" ${SIL} stroke="url(@B)" stroke-width=".9" stroke-linejoin="round"/></g></g>`
     + `<g class="m-flash"><path d="${BOLT}" ${ACC} stroke="url(@A)" stroke-width=".9" stroke-linejoin="round"/></g>`,
 
   /* Deeply moving: one tear. */
@@ -345,14 +347,34 @@ function defs(p: string): string {
     + '</defs>';
 }
 
+/* A part's delay is written `--d` in the drawings above, the way it reads best there, and handed to the
+ * page as `data-d` in centiseconds: the delay is baked into the move's keyframes now (glanceMotion.ts),
+ * and a stylesheet can select on an attribute's value but not on a custom property's. */
+const DELAY = / style="--d:([\d.]+)s"/g;
+const toCs = (s: string) => Math.round(parseFloat(s) * 100);
+const DRAWN: Record<string, string> = Object.fromEntries(Object.entries(ICONS)
+  .map(([k, v]) => [k, v.replace(DELAY, (_, d: string) => ` data-d="${toCs(d)}"`)]));
+/** Every (move, delay) the set uses — each gets keyframes of its own. */
+function movesUsed(): Array<[string, number]> {
+  const out: Array<[string, number]> = [];
+  for (const v of Object.values(DRAWN)) {
+    for (const m of v.matchAll(/class="([^"]*)"(?: data-d="(\d+)")?/g)) {
+      const move = /\bm-([a-z0-9]+)/.exec(m[1])?.[1];
+      if (move) out.push([move, Number(m[2] || 0)]);
+    }
+  }
+  return out;
+}
+
 let seq = 0;
 /** The inner markup of one icon, with gradient ids of its own. Pass `prefix` for ids that must not
  *  change between renders (React: the same string twice means the SVG is left alone — a new one
  *  means it is rebuilt, which restarts every animation in it). */
 export function iconMarkup(name: GlanceIconName, prefix?: string): string {
+  ensureMotionCss(movesUsed);
   const key = name === 'credits' ? 'rewind' : name;
   const p = prefix || `gl${(seq++).toString(36)}`;
-  return defs(p) + ICONS[key].replace(/@([ABVS])/g, `#${p}$1`);
+  return defs(p) + DRAWN[key].replace(/@([ABVS])/g, `#${p}$1`);
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';

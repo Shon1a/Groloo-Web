@@ -22,13 +22,16 @@
  * so a prefetched picture outlives the session. An add-on's poster host is left to the row.
  * ========================================================================== */
 
+import { bootDone } from './bootGate';
+
 /** Our art worker's urls exactly — the same test as the groloo-art rule in vite.config.ts. */
 const ART_PATH = /^\/(crop|img|logo)\/(w\d+|original)\/(f\d+\/)?[A-Za-z0-9]{8,64}\.webp$/;
 const CONCURRENCY = 3;
 /** Nothing starts until the first screen has had this long to itself. */
 const START_AFTER_MS = 2500;
-/** A bound on the whole session: a home screen is ~13 rows x 7 titles x 2 pictures. */
-const MAX_URLS = 400;
+/** A bound on the whole session: a home screen is ~13 rows x 12 titles x 2 pictures, plus the rest of
+ *  each row the remote actually walks (TvSpotlight). Bytes in the cache, never bitmaps. */
+const MAX_URLS = 900;
 
 type Job = { url: string; rank: () => number };
 
@@ -76,8 +79,13 @@ function pump(): void {
      * entry by construction rather than by a cache-key rule that differs between engine versions.
      * (Checked on current Chromium: a cors+omit fetch was reused by a later <img> too.) The
      * service worker upgrades it to a cors fetch for its own cache (vite.config.ts
-     * `fetchOptions`) and matches by URL, so both layers hit. */
-    fetch(job.url, { mode: 'no-cors', credentials: 'include' })
+     * `fetchOptions`) and matches by URL, so both layers hit.
+     *
+     * AT LOW PRIORITY. A fetch() is a High-priority request by default — the same rank as the picture
+     * the viewer is actually waiting for — so on a television's Wi-Fi the background download of rows
+     * nobody has reached could hold up the poster sliding in on screen. `priority: 'low'` puts them
+     * behind every visible image (Chromium 101+; older engines ignore the member). */
+    fetch(job.url, { mode: 'no-cors', credentials: 'include', priority: 'low' })
       // Read to the end so the body is stored, then dropped — bytes, not a bitmap.
       .then((r) => r.blob())
       .catch(() => null)
@@ -99,7 +107,14 @@ export function prefetchArt(urls: Array<string | undefined | null>, rank: () => 
   }
   if (!armed) {
     armed = true;
-    window.setTimeout(() => { started = true; schedule(); }, START_AFTER_MS);
+    /* AND NOT UNDER THE START-UP SPLASH: the first screen's own pictures are what the splash is waiting
+     * for, and these would only compete with them for the network (lib/bootGate.ts). */
+    const go = () => {
+      if (!bootDone()) { window.setTimeout(go, 300); return; }
+      started = true;
+      schedule();
+    };
+    window.setTimeout(go, START_AFTER_MS);
   }
   schedule();
 }

@@ -672,8 +672,16 @@ export class TvRowStage {
   private playChips(i: 0 | 1) {
     const box = this.p.plates[i].querySelector<HTMLElement>(':scope > .gl-chips');
     if (!box) return;
-    box.classList.remove('gl-run', 'rise');
-    void box.offsetWidth;
+    /* THE FORCED LAYOUT ONLY WHEN THERE IS SOMETHING TO RESTART. Reading `offsetWidth` here makes the
+     * engine style and lay out everything the press has just written, inside the key handler — on every
+     * press, because this used to do it unconditionally. A walk never needs it: the incoming card's chips
+     * were either built fresh (no classes yet) or quietened when that card last left the screen
+     * (`quietChips`), so adding the classes is already a new start. Only replaying chips that are still
+     * marked running — the card on show, when its row is entered again — has to take them off first. */
+    if (box.classList.contains('gl-run') || box.classList.contains('rise')) {
+      box.classList.remove('gl-run', 'rise');
+      void box.offsetWidth;
+    }
     box.classList.add('gl-run', 'rise');
   }
   private quietChips(i: 0 | 1) {

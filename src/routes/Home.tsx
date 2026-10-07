@@ -18,6 +18,7 @@ import AddonRows from '../components/AddonRows';
 import { useModal, openItem } from '../stores/modal';
 import { useLibrary } from '../stores/library';
 import { registerRowStager } from '../lib/tvRowRegistry';
+import { bootDone, bootRowsStaged } from '../lib/bootGate';
 import type { MediaItem } from '../lib/types';
 
 /* Home = the featured hero + the categorised rows (via /api/home): Hero,
@@ -70,8 +71,14 @@ function StagedStrips({ rows, tail, onSelect, onSeeAll }: {
   onSeeAll: (cat: string) => void;
 }) {
   const total = rows.length;
-  /* Rows shown so far; Infinity once the tail (studios + add-on rows) has been mounted. */
-  const [limit, setLimit] = useState<number>(IS_TV ? STAGE_FIRST : Infinity);
+  /* Rows shown so far; Infinity once the tail (studios + add-on rows) has been mounted.
+   *
+   * ALL AT ONCE UNDER THE START-UP SPLASH. Staging exists so the remote stays answered while the rows
+   * mount, and so the first screen paints before the rest. Behind the splash neither is true — no key is
+   * taken until it goes (lib/bootGate.ts), and nothing is painted for anyone to see — so the staging is
+   * only its own overhead: a commit, a layout and a timer per row. One commit mounts the lot sooner, and
+   * the splash goes sooner with it. Coming back to Home later, with the remote live, stages as before. */
+  const [limit, setLimit] = useState<number>(IS_TV && bootDone() ? STAGE_FIRST : Infinity);
   /* The COMMITTED limit, written in a layout effect and never during render. A write in render leaks the
    * value of a transition render that has not committed (and may never), and the stager below would
    * read "everything is mounted" while a row was still on its way — a press lost to a half-finished
@@ -87,7 +94,9 @@ function StagedStrips({ rows, tail, onSelect, onSeeAll }: {
     return (n: number) => Math.max(n, to);
   }, [total]);
   useEffect(() => {
-    if (!IS_TV || limit === Infinity) return;
+    if (!IS_TV) return;
+    // Every row is in: the splash may go once their pictures are (lib/bootGate.ts).
+    if (limit === Infinity) { bootRowsStaged(); return; }
     const id = window.setTimeout(() => startTransition(() => setLimit(grow(limit))), STAGE_GAP_MS);
     return () => window.clearTimeout(id);
   }, [limit, grow]);

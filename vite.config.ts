@@ -1,9 +1,61 @@
 import { fileURLToPath, URL } from 'node:url'
-import { defineConfig, type Plugin } from 'vite'
+import { readFileSync } from 'node:fs'
+import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import postcss from 'postcss'
 import { execSync } from 'node:child_process'
+
+/* ---- THE FIRST FRAME, AND THE TELEVISION'S SPLASH ---------------------------------------------
+ *
+ * BOTH BUILDS: the page is black from its very first frame. Until the stylesheet arrives a document
+ * is white, and a white frame between the launcher and the app is the brightest thing a dark room
+ * sees all evening (captured on the live site: one full white frame, then black).
+ *
+ * THE TV BUILD: a splash in the markup itself — the Groloo mark breathing on black, a hairline of
+ * progress beneath it — so it is on screen before a single script has run, and it stays until the app
+ * underneath is complete and still (src/lib/bootGate.ts says when, and why). Everything that moves
+ * in it is opacity or a transform, so it keeps moving smoothly however busy the main thread is with
+ * the build it is covering. The inline timer is the backstop for a bundle that never runs at all.
+ * Monochrome, like everything else in the app: white on black. */
+const GROLOO_MARK = readFileSync(fileURLToPath(new URL('./public/assets/groloo-logo.svg', import.meta.url)), 'utf8')
+  .replace(/<\?xml[^>]*>/, '').replace(/ width="100" height="100"/, '').replace(/ role="img" aria-label="groloo"/, ' aria-hidden="true"')
+const SPLASH_CSS = [
+  '#boot-splash{position:fixed;inset:0;z-index:2147483000;background:#000;display:flex;flex-direction:column;',
+  'align-items:center;justify-content:center;gap:5vh;opacity:1;transition:opacity .52s cubic-bezier(.4,0,.2,1)}',
+  '#boot-splash.out{opacity:0;pointer-events:none}',
+  '#boot-splash .bs-mark{width:15vh;height:15vh;animation:bsBreath 2.6s ease-in-out infinite}',
+  '#boot-splash .bs-mark svg{display:block;width:100%;height:100%}',
+  '@keyframes bsBreath{0%,100%{opacity:.5;transform:scale(.97)}50%{opacity:1;transform:scale(1)}}',
+  '#boot-splash .bs-bar{width:14vw;height:.3vh;min-height:2px;border-radius:2px;background:rgba(255,255,255,.12);overflow:hidden}',
+  '#boot-splash .bs-bar i{display:block;width:100%;height:100%;background:#fff;transform-origin:0 50%;',
+  'transform:scaleX(.02);transition:transform .5s cubic-bezier(.2,.8,.2,1)}',
+  '@media (prefers-reduced-motion:reduce){#boot-splash .bs-mark{animation:none}}',
+].join('')
+function bootSplash(mode: string): Plugin {
+  return {
+    name: 'groloo-boot-splash',
+    transformIndexHtml() {
+      const tags: HtmlTagDescriptor[] = [
+        { tag: 'style', children: 'html,body{background:#000}', injectTo: 'head-prepend' },
+      ]
+      if (mode === 'tv') {
+        tags.push(
+          { tag: 'style', children: SPLASH_CSS, injectTo: 'head' },
+          {
+            tag: 'div', attrs: { id: 'boot-splash', 'aria-hidden': 'true' }, injectTo: 'body-prepend',
+            children: `<div class="bs-mark">${GROLOO_MARK}</div><div class="bs-bar"><i></i></div>`,
+          },
+          {
+            tag: 'script', injectTo: 'body-prepend',
+            children: "setTimeout(function(){var s=document.getElementById('boot-splash');if(s){s.className='out';setTimeout(function(){s.remove()},600)}},14000)",
+          },
+        )
+      }
+      return tags
+    },
+  }
+}
 
 /* ---- THE TV STYLESHEET DIET ------------------------------------------------------------------
  *
@@ -181,6 +233,7 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
+    bootSplash(mode),
     /* TV ONLY, so the website's stylesheet is provably untouched. See tvCssDiet above. */
     ...(mode === 'tv' ? [tvCssDiet()] : []),
     ...(packagedTv(mode) ? [] : [VitePWA({
@@ -487,6 +540,15 @@ export default defineConfig(({ mode }) => ({
       ...(mode === 'tv'
         ? { '@/layout/RailBar': fileURLToPath(new URL('./src/layout/RailBar.tv.tsx', import.meta.url)) }
         : {}),
+      /* THE TELEVISION'S STYLESHEET IS PART OF THE FIRST ONE, not a second one fetched after the app has
+       * started drawing. It used to be a dynamic import, so the first frames were laid out in the
+       * website's styles and then restyled when tv.css landed — captured on the live site as the nav bar
+       * drawn twice (pills, then the TV's plain items) inside the first 80ms, and a whole-document style
+       * recalculation in the middle of start-up. Aliased like the rail above: the TV build resolves this
+       * name to tv.css, so it ships inside the render-blocking stylesheet in the same place in the cascade
+       * it took before (after app.css and every component sheet); the website resolves it to an empty
+       * file, so its CSS is byte-for-byte what it was. */
+      '@/styles/build-sheet.css': fileURLToPath(new URL(mode === 'tv' ? './src/styles/tv.css' : './src/styles/web-sheet.css', import.meta.url)),
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },

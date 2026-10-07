@@ -9,7 +9,7 @@
   .gl-ic .dk{fill:var(--gl-d)}
 
   /* ---- MOTION. A part that moves names its move (`m-pop`, `m-swing`…) and, optionally, its delay
-     (`--d`). The moves play under two classes:
+     (`--d` in the drawings, `data-d` on the page). The moves play under two classes:
        .gl-run  a callout as it appears (GlanceChips; the TV row billboards as each card comes up) and a
                 page's buttons as the page opens (useIntro) — once per appearance, never on a re-render;
        .gl-tap  a button the pointer hovers, clicks, or the remote reaches (GlanceIcons.tsx).
@@ -24,62 +24,10 @@
   .gl-ic [class*="m-"].o-l{transform-origin:0 50%}
   .gl-ic [class*="m-"].o-b{transform-origin:50% 100%}
 
-  .gl-run .m-pop,.gl-tap .m-pop{animation:glmPop .6s cubic-bezier(.3,1.6,.45,1) var(--d,0s) backwards}
-  .gl-run .m-drop,.gl-tap .m-drop{animation:glmDrop .55s cubic-bezier(.3,1.5,.5,1) var(--d,0s) backwards}
-  .gl-run .m-rise,.gl-tap .m-rise{animation:glmRise .5s cubic-bezier(.2,1.4,.5,1) var(--d,0s) backwards}
-  .gl-run .m-swing,.gl-tap .m-swing{animation:glmSwing .8s cubic-bezier(.3,1.2,.4,1) var(--d,0s) backwards}
-  .gl-run .m-flip,.gl-tap .m-flip{animation:glmFlip .6s cubic-bezier(.3,1.4,.5,1) var(--d,0s) backwards}
-  .gl-run .m-shake,.gl-tap .m-shake{animation:glmShake .85s ease-out var(--d,0s) backwards}
-  .gl-run .m-grow,.gl-tap .m-grow{animation:glmGrow .5s cubic-bezier(.3,1.6,.5,1) var(--d,0s) backwards}
-  .gl-run .m-clap,.gl-tap .m-clap{animation:glmClap .75s cubic-bezier(.5,0,.3,1) var(--d,0s) backwards}
-  .gl-run .m-spin,.gl-tap .m-spin{animation:glmSpin .7s cubic-bezier(.3,1.3,.5,1) var(--d,0s) backwards}
-  .gl-run .m-spin2,.gl-tap .m-spin2{animation:glmSpin2 .85s cubic-bezier(.3,1.3,.5,1) var(--d,0s) backwards}
-  .gl-run .m-slide,.gl-tap .m-slide{animation:glmSlide .55s cubic-bezier(.2,.9,.3,1) var(--d,0s) backwards}
-  .gl-run .m-slide2,.gl-tap .m-slide2{animation:glmSlide2 .55s cubic-bezier(.2,.9,.3,1) var(--d,0s) backwards}
-  .gl-run .m-slidel,.gl-tap .m-slidel{animation:glmSlideL .55s cubic-bezier(.2,.9,.3,1) var(--d,0s) backwards}
-  .gl-run .m-stamp,.gl-tap .m-stamp{animation:glmStamp .55s cubic-bezier(.3,1.5,.5,1) var(--d,0s) backwards}
-  .gl-run .m-bob,.gl-tap .m-bob{animation:glmBob .6s ease-out var(--d,0s) backwards}
-  .gl-run .m-turn,.gl-tap .m-turn{animation:glmTurn 1s ease-out var(--d,0s) backwards}
-  .gl-run .m-float,.gl-tap .m-float{animation:glmFloat .9s ease-out var(--d,0s) backwards}
-  .gl-run .m-laugh,.gl-tap .m-laugh{animation:glmLaugh .85s ease-out var(--d,0s) backwards}
-  .gl-run .m-beat,.gl-tap .m-beat{animation:glmBeat .9s ease-out var(--d,0s) backwards}
-  .gl-run .m-tilt,.gl-tap .m-tilt{animation:glmTilt .9s cubic-bezier(.3,1.3,.5,1) var(--d,0s) backwards}
-  .gl-run .m-needle,.gl-tap .m-needle{animation:glmNeedle 1.1s cubic-bezier(.3,1.5,.4,1) var(--d,0s) backwards}
-  .gl-run .m-sweep,.gl-tap .m-sweep{animation:glmSweep .9s ease-out var(--d,0s) backwards}
-  .gl-run .m-flash,.gl-tap .m-flash{animation:glmFlash .65s ease-out var(--d,0s) backwards}
-  .gl-run .m-dropin,.gl-tap .m-dropin{animation:glmDropIn .7s cubic-bezier(.3,1.4,.5,1) var(--d,0s) backwards}
-  .gl-run .m-nudge,.gl-tap .m-nudge{animation:glmNudge .6s ease-out var(--d,0s) backwards}
-  .gl-run .m-wave,.gl-tap .m-wave{animation:glmWave .9s ease-out var(--d,0s) backwards}
-  .gl-run .m-blink,.gl-tap .m-blink{animation:glmBlink .7s ease-out var(--d,0s) backwards}
-  .gl-run .m-draw,.gl-tap .m-draw{stroke-dasharray:1;animation:glmDraw .5s ease-out var(--d,0s) backwards}
-
-  @keyframes glmPop{0%{opacity:0;transform:scale(.4)}}
-  @keyframes glmDrop{0%{opacity:0;transform:translateY(-70%)}}
-  @keyframes glmRise{0%{opacity:0;transform:translateY(55%)}}
-  @keyframes glmSwing{0%{opacity:0;transform:rotate(-24deg) scale(.6)}55%{opacity:1;transform:rotate(9deg) scale(1.05)}}
-  @keyframes glmFlip{0%{opacity:0;transform:scaleY(.1)}60%{opacity:1;transform:scaleY(1.08)}}
-  @keyframes glmShake{0%{opacity:0;transform:scale(.7)}25%{opacity:1;transform:rotate(-10deg) scale(1.08)}45%{transform:rotate(8deg)}65%{transform:rotate(-5deg)}85%{transform:rotate(2deg)}}
-  @keyframes glmGrow{0%{opacity:0;transform:scale(0)}}
-  @keyframes glmClap{0%,45%{transform:rotate(-26deg)}72%{transform:rotate(4deg)}}
-  @keyframes glmSpin{0%{opacity:0;transform:rotate(-120deg) scale(.4)}}
-  @keyframes glmSpin2{0%{opacity:0;transform:rotate(90deg) scale(.5)}}
-  @keyframes glmSlide{0%{opacity:0;transform:translateX(-35%)}}
-  @keyframes glmSlide2{0%{opacity:0;transform:translate(-45%,-45%)}}
-  @keyframes glmSlideL{0%{opacity:0;transform:translateX(40%)}}
-  @keyframes glmStamp{0%{opacity:0;transform:scale(1.5) rotate(-10deg)}60%{opacity:1;transform:scale(.92) rotate(2deg)}}
-  @keyframes glmBob{35%{transform:translateY(-35%)}70%{transform:translateY(8%)}}
-  @keyframes glmTurn{0%{opacity:0;transform:translateX(-30%)}}
-  @keyframes glmFloat{0%{opacity:0;transform:translateY(25%) rotate(-6deg)}60%{opacity:1;transform:translateY(-6%) rotate(3deg)}}
-  @keyframes glmLaugh{0%{opacity:0;transform:scale(.6) rotate(-12deg)}40%{opacity:1;transform:scale(1.08) rotate(8deg)}60%{transform:rotate(-6deg)}80%{transform:rotate(3deg)}}
-  @keyframes glmBeat{0%{opacity:0;transform:scale(.5)}30%{opacity:1;transform:scale(1.15)}45%{transform:scale(.96)}60%{transform:scale(1.1)}}
-  @keyframes glmTilt{0%{opacity:0;transform:rotate(-30deg) scale(.7)}}
-  @keyframes glmNeedle{0%{transform:rotate(-140deg)}60%{transform:rotate(25deg)}80%{transform:rotate(-8deg)}}
-  @keyframes glmSweep{0%{opacity:0;transform:translate(-25%,-25%) scale(.8)}50%{opacity:1;transform:translate(8%,8%)}}
-  @keyframes glmFlash{0%{opacity:0;transform:scale(.6)}30%{opacity:1;transform:scale(1.12)}45%{opacity:.4}60%{opacity:1}}
-  @keyframes glmDropIn{0%{opacity:0;transform:translateY(-55%) scale(.8,1.15)}60%{opacity:1;transform:translateY(4%) scale(1.08,.92)}}
-  @keyframes glmNudge{0%{opacity:0;transform:translateX(-25%)}60%{opacity:1;transform:translateX(8%)}}
-  @keyframes glmWave{0%{opacity:0;transform:scaleX(.2)}40%{opacity:1;transform:skewY(6deg)}70%{transform:skewY(-4deg)}}
-  @keyframes glmBlink{0%{opacity:0;transform:translateX(-30%)}60%{opacity:1}}
+  /* THE MOVES ARE WRITTEN BY glanceMotion.ts, on one shared clock — see the note there for why a part's
+     delay and duration now live inside its keyframes. Only the stroke-drawn tick stays here: it animates
+     `stroke-dashoffset`, which never leaves the main thread, so there is nothing for a clock to save. */
+  .gl-run .m-draw,.gl-tap .m-draw{stroke-dasharray:1;animation:glmDraw .5s ease-out backwards}
   @keyframes glmDraw{0%{stroke-dashoffset:1}}
   @media (prefers-reduced-motion:reduce){.gl-ic *{animation:none!important}}
 
@@ -94,10 +42,13 @@
   .gl-chip>span{overflow:hidden;text-overflow:ellipsis;padding:.1em 0}
   .gl-chip .gl-ic{width:1.35em;height:1.35em}
 
-  /* Arriving: the tab fades up a beat after the copy it sits with (and its icon plays, above). */
-  .gl-chips.rise .gl-chip{animation:glRise .45s cubic-bezier(.2,.8,.2,1) backwards}
-  .gl-chips.rise .gl-chip:nth-child(2){animation-delay:.08s}
-  @keyframes glRise{from{opacity:0;transform:translateY(5px)}}
+  /* Arriving: the tab fades up a beat after the copy it sits with (and its icon plays, above). ON THE
+     ICONS' CLOCK (glanceMotion.ts MOTION_S = 1.1s), so the tab and its icon start and end as one event:
+     the .45s rise is the first 40.91% of it, the second tab's .08s later start is baked in the same way. */
+  .gl-chips.rise .gl-chip{animation:glRise 1.1s cubic-bezier(.2,.8,.2,1) backwards}
+  .gl-chips.rise .gl-chip:nth-child(2){animation-name:glRise2}
+  @keyframes glRise{0%{opacity:0;transform:translateY(5px)}40.91%,100%{opacity:1;transform:none}}
+  @keyframes glRise2{0%,7.27%{opacity:0;transform:translateY(5px)}48.18%,100%{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){.gl-chips.rise .gl-chip{animation:none}}
 
   /* ---- WHERE THE CALLOUTS SIT --------------------------------------------------------------- */

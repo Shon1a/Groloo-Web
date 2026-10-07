@@ -199,8 +199,8 @@
   .pp-slide-chips .gl-chip{animation:ppIn .8s cubic-bezier(.2,.8,.2,1) 1.4s backwards}
   .pp-slide-chips .gl-chip:nth-child(2){animation-delay:1.58s}
   /* the icons play as their tab lands (glance.css moves, pushed back to the tab's arrival) */
-  .pp-slide-chips.gl-run .gl-ic [class*="m-"]{animation-delay:calc(1.5s + var(--d,0s))}
-  .pp-slide-chips.gl-run .gl-chip:nth-child(2) .gl-ic [class*="m-"]{animation-delay:calc(1.68s + var(--d,0s))}
+  .pp-slide-chips.gl-run .gl-ic [class*="m-"]{animation-delay:1.5s}
+  .pp-slide-chips.gl-run .gl-chip:nth-child(2) .gl-ic [class*="m-"]{animation-delay:1.68s}
   @keyframes ppIn{from{opacity:0;transform:translate3d(var(--in),0,0)}}
   /* A computer also gets a focus pull on the wordmark — out of a soft blur into sharpness. */
   .pp-root.web .pp-slide-name{animation-name:ppInFocus}

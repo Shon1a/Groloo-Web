@@ -5,7 +5,7 @@ import { imgW } from '../../lib/img';
 import { useSeason } from '../../lib/queries';
 import { useHistory } from '../../stores/history';
 import TvChipMenu from './TvChipMenu';
-import { WATCHED, STILL_RENDITION, belowExtent, dur, place, runtimeText, seasonsOf } from './deckGeometry';
+import { WATCHED, STILL_RENDITION, belowExtent, deckOpensOn, dur, firstSeasonOf, place, runtimeText, seasonsOf, stillReady, warmStill } from './deckGeometry';
 import type { Episode, MetaDetail } from '../../lib/types';
 
 /* ============================================================================
@@ -58,6 +58,10 @@ import type { Episode, MetaDetail } from '../../lib/types';
  * anything into, so something had to get shorter. */
 const DECK_ABOVE = 2;
 const DECK_BELOW = 3;
+
+/* How many cards past either end of the window are decoded ahead of the walk — see `warmStill` in
+ * deckGeometry, which also holds the stills the title screen's warm-up decoded before the deck existed. */
+const STILL_AHEAD = 3;
 
 /* The ids focus can be sitting on without anyone having chosen it — see the seeding note below.
  * `mWatch` is kept for the case where a WATCH button exists; the TV title screen no longer
@@ -118,7 +122,10 @@ function EpisodeCard({ ep, offset, on, lifted, pct, leftSec, onPick, intro }: Ca
    * cache can finish decoding before React has attached the handler, in which case `load` never
    * fires for it and the card would sit at opacity 0 permanently — an invisible episode. Walking
    * back to a card you have already seen is exactly that case. */
-  const [shown, setShown] = useState(false);
+  const stillUrl = ep.still ? imgW(ep.still, STILL_RENDITION) : '';
+  /* Already decoded (the walk's warm, or the title screen's warm-up): the card is dealt with its picture
+   * on it, rather than dealt dark and lit a beat later. */
+  const [shown, setShown] = useState(() => !!stillUrl && stillReady(stillUrl));
   /* LATCHED AT MOUNT AND NEVER RECOMPUTED. It is the stagger's step, and it has to be frozen:
    * `offset` changes on every press, and a CSS `animation-delay` that GROWS after its animation
    * has finished can drop the element back inside the delay window — where `backwards` fill would
@@ -168,10 +175,9 @@ function EpisodeCard({ ep, offset, on, lifted, pct, leftSec, onPick, intro }: Ca
           ? (
             <img
               className={shown ? 'rdy' : undefined}
-              src={imgW(ep.still, STILL_RENDITION)}
+              src={stillUrl}
               alt=""
               decoding="async"
-              loading="lazy"
               ref={(el) => { if (el?.complete && !shown) setShown(true); }}
               onLoad={() => setShown(true)}
               onError={() => setBroken(true)}
@@ -207,7 +213,7 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
   const progress = useHistory((s) => s.progress);
 
   const seasons = useMemo(() => seasonsOf(meta), [meta]);
-  const firstSeason = useMemo(() => (seasons.find((s) => s.season >= 1) || seasons[0])?.season, [seasons]);
+  const firstSeason = useMemo(() => firstSeasonOf(meta), [meta]);
   const [openSeason, setOpenSeason] = useState<number | undefined>(picked?.season ?? firstSeason);
   const season = openSeason ?? firstSeason;
   // TMDB, or the add-on's own `videos[]` when this title is one TMDB cannot name. Mutually
@@ -221,7 +227,16 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
     }))
     : data?.episodes ?? []), [data, fromAddon, season]);
 
-  const [active, setActive] = useState(0);
+  /** pos/dur for one episode, from the same key DetailModal writes progress under. */
+  const resumeOf = (ep: number) => {
+    const p = progress[`${titleId}:S${season}E${ep}`];
+    if (!p || !(p.dur > 0)) return { pct: 0, leftSec: 0, at: 0 };
+    return { pct: Math.min(100, (p.pos / p.dur) * 100), leftSec: Math.max(0, p.dur - p.pos), at: p.at || 0 };
+  };
+
+  /* Aimed from the first render when the episodes are already here (the title screen's warm-up read
+   * them): the deck is dealt on "up next" directly, instead of on episode 1 and then moved. */
+  const [active, setActive] = useState(() => deckOpensOn(episodes, season, picked, resumeOf));
   /* Whether the remote is IN the deck. With the focus ring gone, the selected card's lift is the
    * only thing left saying so — and it must be able to say "no", because the deck keeps a
    * selection while focus is away on WATCH or up in the season chip. Same onFocus/onBlur pair
@@ -283,15 +298,16 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
    * away from whatever TvSpatialNav had just seeded (WATCH) the moment a season loaded. */
   const walked = useRef(false);
 
-  /** pos/dur for one episode, from the same key DetailModal writes progress under. */
-  const resumeOf = (ep: number) => {
-    const p = progress[`${titleId}:S${season}E${ep}`];
-    if (!p || !(p.dur > 0)) return { pct: 0, leftSec: 0, at: 0 };
-    return { pct: Math.min(100, (p.pos / p.dur) * 100), leftSec: Math.max(0, p.dur - p.pos), at: p.at || 0 };
-  };
-
   // A new season is a new deck: it may re-aim itself, and the remote has not walked it yet.
   useEffect(() => { walked.current = false; }, [season]);
+
+  // The stills a press can bring on next — see warmStill.
+  useEffect(() => {
+    const near: Array<Episode | undefined> = [];
+    for (let d = 1; d <= STILL_AHEAD; d++) near.push(episodes[active + DECK_BELOW + d]);
+    near.push(episodes[active - DECK_ABOVE - 1]);
+    for (const e of near) if (e?.still) warmStill(imgW(e.still, STILL_RENDITION));
+  }, [active, episodes]);
 
   /* WHERE THE DECK OPENS: on UP NEXT, not on episode 1.
    * The most recently touched episode of this season wins — and if it is finished, the one after
@@ -304,20 +320,7 @@ export default function TvEpisodeDeck({ meta, titleId, picked, onPick, actions }
    * wise yank a walked selection back to "up next" the next time that pull landed. */
   useEffect(() => {
     if (walked.current) return;
-    if (!episodes.length) { setActive(0); return; }
-    if (picked && picked.season === season) {
-      const at = episodes.findIndex((e) => e.episode === picked.ep);
-      if (at >= 0) { setActive(at); return; }
-    }
-    let bestAt = 0;
-    let bestIdx = -1;
-    episodes.forEach((e, i) => {
-      const r = resumeOf(e.episode);
-      if (r.at > bestAt) { bestAt = r.at; bestIdx = i; }
-    });
-    if (bestIdx < 0) { setActive(0); return; }
-    const done = resumeOf(episodes[bestIdx].episode).pct >= WATCHED * 100;
-    setActive(Math.min(episodes.length - 1, done ? bestIdx + 1 : bestIdx));
+    setActive(deckOpensOn(episodes, season, picked, resumeOf));
     // resumeOf closes over `progress`/`season`, both of which are in the dep list below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [episodes, season, progress, picked]);

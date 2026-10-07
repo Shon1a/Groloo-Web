@@ -83,6 +83,8 @@ export function useSettledGlance(
   return cur.list || NONE;
 }
 const NONE: GlanceCallout[] = [];
+/** How long a resolver reuses its "because you watched…" map before building it again. */
+const BECAUSE_FRESH_MS = 2000;
 
 /* THE SAME CALLOUTS FOR CODE THAT IS NOT A COMPONENT PER TITLE — the TV row billboard, which
  * describes a card inside its key handler (TvSpotlight `describeSlot`). Nothing here fetches: the
@@ -98,6 +100,18 @@ export function useGlanceResolver(): (item: MediaItem) => GlanceCallout[] {
   return useMemo(() => {
     const index = homeIndex(home);
     const cut = home ? loveCut(taste, homePool(home), home) : undefined;
+    /* "BECAUSE YOU WATCHED…" IS BUILT ONCE, NOT PER CARD. It is a map over the viewer's whole watch
+     * history and every seed's recommendations, and this function runs every time a row describes a card
+     * — each render, each press, each prefill — so for someone with a long history it was the same map
+     * rebuilt several times per keypress. Kept for a couple of seconds, which still picks up a seed's
+     * recommendations arriving in the cache without anything having to say so. */
+    let because: ReturnType<typeof becauseIndex> | null = null;
+    let becauseAt = 0;
+    const becauseOf = () => {
+      const now = Date.now();
+      if (!because || now - becauseAt > BECAUSE_FRESH_MS) { because = becauseIndex(qc, lang); becauseAt = now; }
+      return because;
+    };
     return (item: MediaItem) => {
       const id = apiIdOf(item);
       const meta = id ? qc.getQueryData<MetaDetail>(['meta', id, item.type, lang]) : undefined;
@@ -114,7 +128,7 @@ export function useGlanceResolver(): (item: MediaItem) => GlanceCallout[] {
         home: index,
         taste,
         loveCut: cut,
-        because: becauseIndex(qc, lang).get(becauseKey(item)) || null,
+        because: becauseOf().get(becauseKey(item)) || null,
         seasons: meta?.seasons ?? null,
         t,
         lang,

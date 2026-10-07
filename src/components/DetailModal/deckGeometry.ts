@@ -1,4 +1,4 @@
-import type { MetaDetail, SeasonInfo } from '../../lib/types';
+import type { Episode, MetaDetail, SeasonInfo } from '../../lib/types';
 
 /* ============================================================================
  * THE EPISODE DECK'S GEOMETRY — shared by the TV deck (TvEpisodeDeck) and the web one
@@ -172,4 +172,68 @@ export function seasonsOf(meta: MetaDetail): SeasonInfo[] {
   if (meta.seasonList?.length) return meta.seasonList;
   if (meta.seasons) return Array.from({ length: Number(meta.seasons) }, (_, i) => ({ season: i + 1, episodes: 0 }));
   return [];
+}
+
+/** The season a deck opens on when nothing names one: the first real season, not the specials. */
+export function firstSeasonOf(meta: MetaDetail): number | undefined {
+  const seasons = seasonsOf(meta);
+  return (seasons.find((s) => s.season >= 1) || seasons[0])?.season;
+}
+
+/* ---- WHERE A DECK OPENS, ANSWERABLE BEFORE IT DOES ------------------------------------------------
+ * UP NEXT, not episode 1: the episode a link or Continue Watching named; else the most recently
+ * touched episode of the season — the one after it if that one is finished; else the first. The deck
+ * aims itself with this (TvEpisodeDeck), and the warm-up that runs while the remote rests on a series
+ * (lib/queries `useWarmDetail`) asks the same question to know which stills to decode — one function,
+ * so the two can never disagree about which cards are on screen first. */
+export function deckOpensOn(
+  episodes: Episode[],
+  season: number | undefined,
+  picked: { season: number; ep: number } | null | undefined,
+  progressOf: (ep: number) => { pct: number; at: number },
+): number {
+  if (!episodes.length) return 0;
+  if (picked && picked.season === season) {
+    const at = episodes.findIndex((e) => e.episode === picked.ep);
+    if (at >= 0) return at;
+  }
+  let bestAt = 0;
+  let bestIdx = -1;
+  episodes.forEach((e, i) => {
+    const r = progressOf(e.episode);
+    if (r.at > bestAt) { bestAt = r.at; bestIdx = i; }
+  });
+  if (bestIdx < 0) return 0;
+  const done = progressOf(episodes[bestIdx].episode).pct >= WATCHED * 100;
+  return Math.min(episodes.length - 1, done ? bestIdx + 1 : bestIdx);
+}
+
+/* ---- THE NEXT STILLS ARE ALREADY DECODED --------------------------------------------------------
+ * A card entering the deck used to start fetching its still as it slid into place — `loading="lazy"`
+ * on top, which waits for layout to say the picture is near the viewport before asking at all — so
+ * walking the deck, each new card arrived as a dark panel and its picture faded in after it. The
+ * cards a press can bring on next are known: the ones just past either end of the window. They are
+ * fetched AND decoded ahead of the walk (TvEpisodeDeck), and the first screen's stills before the deck
+ * even exists (lib/queries `useWarmDetail`), into a small cache of the deck's own (stills are not the
+ * row artwork the shared one is sized for), so a card has its picture from its first frame. */
+const STILL_KEEP = 12;
+const stillCache = new Map<string, HTMLImageElement>();
+export function warmStill(url: string): void {
+  const hit = stillCache.get(url);
+  if (hit) { stillCache.delete(url); stillCache.set(url, hit); return; }
+  const im = new Image();
+  im.decoding = 'async';
+  im.src = url;
+  if (typeof im.decode === 'function') im.decode().catch(() => { /* the card shows its plate */ });
+  stillCache.set(url, im);
+  while (stillCache.size > STILL_KEEP) {
+    const oldest = stillCache.keys().next().value;
+    if (oldest === undefined) break;
+    stillCache.delete(oldest);
+  }
+}
+/** Whether a still is held here and loaded — so a card mounting with it in hand needs no fade. */
+export function stillReady(url: string): boolean {
+  const hit = stillCache.get(url);
+  return !!hit && hit.complete && hit.naturalWidth > 0;
 }

@@ -12,21 +12,18 @@ import { queryClient } from './lib/queryClient';
 import { I18nProvider } from './i18n/i18n';
 import { bootLaunchIntent } from './lib/launchIntent';
 import { installIdleWatch } from './lib/idle';
+import { startBootGate } from './lib/bootGate';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 // Visual baseline: the vanilla app's stylesheet, imported verbatim so ported
 // screens look identical. Migrates to per-component CSS Modules over later phases.
 import './styles/app.css';
-
-/* TV EFFECT BUDGET, `--mode tv` only. `import.meta.env.MODE` is the Vite build mode, and it
- * is a compile-time constant: in the web build it is the string "production", so this branch
- * is statically false and Vite dead-code-eliminates it — styles/tv.css is never bundled or
- * shipped to the website. In the TV build MODE is "tv", the branch is live, and the
- * subtractive overrides load. A dynamic import (not a top-level one) is what lets that
- * elimination happen; on a packaged TV app the file is local, so the load is immediate. */
-if (import.meta.env.MODE === 'tv') {
-  import('./styles/tv.css');
-}
+/* TV EFFECT BUDGET, `--mode tv` only: styles/tv.css, the subtractive overrides. A build alias
+ * (vite.config.ts) points this name at tv.css in the TV build and at an empty sheet on the website,
+ * so the website never carries a byte of it — and the television gets it INSIDE the first stylesheet
+ * rather than as a second one fetched after the app had already drawn itself once in the wrong
+ * styles (see the note at the alias). */
+import '@/styles/build-sheet.css';
 
 /* THE PERFORMANCE PROBE, TV BUILD ONLY AND OFF UNLESS ASKED FOR. Same compile-time gate as the
  * stylesheet above, so the website never contains the file at all. See lib/tvPerf.ts for what it
@@ -120,6 +117,12 @@ bootLaunchIntent();
  * that wakes it is caught before the Back resolver, the player or post-play — all of which register
  * from effects, after this — can act on it as well. */
 installIdleWatch();
+
+/* THE TELEVISION OPENS ON ITS SPLASH and stays there until the home screen underneath is complete and
+ * still — see lib/bootGate.ts. Here, before the first render, for the same reason as the line above: its
+ * key listener must be in place before anything else's, so a press during the build goes nowhere.
+ * A no-op on the website, which has no splash. */
+startBootGate();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

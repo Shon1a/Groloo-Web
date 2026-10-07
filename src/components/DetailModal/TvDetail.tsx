@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
 import { imgW, rasterLogo } from '../../lib/img';
+import { retainedReady } from '../../lib/useImageReady';
 import { epLabel } from '../../lib/utils';
 import { langName, sourceNote, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
@@ -180,10 +181,17 @@ export default function TvDetail(p: TvDetailProps) {
    * was still arriving, so the copy would land on black and the artwork would appear underneath it
    * a beat later. That is the same defect one layer further down. The image is decoded into a
    * detached Image() behind the veil, and only then does the screen open — complete, with its
-   * backdrop already on it. */
+   * backdrop already on it.
+   *
+   * A PICTURE ALREADY IN HAND OPENS WITH THE SCREEN. Resting on a card decodes this backdrop and its
+   * wordmark ahead of the OK (lib/queries `useWarmDetail`), and /api/meta is usually cached by then
+   * too — so at mount there is nothing left to wait for, and asking the effect below to find that
+   * out cost a whole extra commit: the veil drawn for one frame, then the grid. Read synchronously
+   * instead, the screen's first commit is the finished screen, arriving inside the overlay's own
+   * fade (`tvDetIn`) rather than after it. */
   const backdrop = ready ? (meta?.backdrop || target.poster) : '';
   const backdropUrl = backdrop ? imgW(backdrop, BACKDROP_RENDITION) : '';
-  const [artReady, setArtReady] = useState(false);
+  const [artReady, setArtReady] = useState(() => !!backdropUrl && retainedReady(backdropUrl));
   useEffect(() => {
     if (!backdropUrl) return;
     let cancelled = false;
@@ -203,7 +211,7 @@ export default function TvDetail(p: TvDetailProps) {
   /** The screen is ready to be seen: the data has landed AND its picture is decoded. */
   const shown = ready && (artReady || !backdropUrl);
 
-  const [logoShown, setLogoShown] = useState(false);
+  const [logoShown, setLogoShown] = useState(() => !!titleLogo && retainedReady(rasterLogo(titleLogo, 'original')));
 
   /* One line of credits, director first. The web modal gives this a whole sticky column with a
    * photo each; the names are the part that survives the trip across the room. */
