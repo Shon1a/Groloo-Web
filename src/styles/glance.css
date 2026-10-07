@@ -70,7 +70,8 @@
   /* The television's sizes track the screen (clamp on vw), as the rest of its type does in tv.css. */
   .tv-hero-stage .gl-chips.on-art{right:clamp(24px,1.9vw,36px);bottom:calc(clamp(24px,1.9vw,36px) - .3em);font-size:clamp(14.5px,1.02vw,19.5px);max-width:70%}
   /* A row billboard: a little smaller, half the card at most — the wordmark has the rest (tv.css caps
-     it). Its preview's sound badge lives in the TOP-right corner, so nothing moves when a trailer starts. */
+     it). Its preview's sound badge joins the row at the right end while a trailer plays, and the callouts slide
+     left to make room for it (tv.css `.tv-spot-sound`). */
   .tv-spot-hero .gl-chips.on-art{right:clamp(16px,1.25vw,24px);bottom:calc(clamp(16px,1.25vw,24px) - .3em);font-size:clamp(12.5px,.88vw,16.5px);max-width:54%}
 
   /* ---- THE THREE THUMBS (RateButtons) --------------------------------------------------------

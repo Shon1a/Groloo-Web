@@ -698,6 +698,32 @@
     opacity .3s ease;
 }
 
+/* ---- THE CALLOUTS GO WITH THE COPY ---------------------------------------------------------------
+   "#1 in Movies This Week", "New Release" are the same kind of thing as the meta line and the
+   synopsis — detail about the title you have reached — so they keep the same hours: hidden at rest,
+   where the card is its wordmark and nothing else; in as the copy unfolds when the remote arrives;
+   out again with it when a trailer takes over. Faded rather than folded (they hang in their own
+   corner, there is no height to give back), on the copy's own timings. TvHero hands them `rise`
+   only while focused, so their entrance plays as they appear rather than unseen at rest.
+
+   The trailer rule carries the extra class to outrank the focused one (it is always live when this
+   has to win) — the same ordering trap as the block above, closed by weight instead of position. */
+.tv-hero-stage .gl-chips.on-art {
+  opacity: 0;
+  transition: opacity .3s ease;
+}
+.tv-hero.is-focused .tv-hero-stage .gl-chips.on-art {
+  opacity: 1;
+  transition: opacity .34s ease .06s;
+}
+.tv-hero.is-focused .tv-hero-stage.has-trailer .gl-chips.on-art {
+  opacity: 0;
+  transition: opacity .3s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tv-hero-stage .gl-chips.on-art { transition: none; }
+}
+
 /* `.tv-hero-actions` / `.tv-hero-btn` USED TO BE HERE — the MORE and My List pills, their
    staggered rise-in, and a ring held 5px off the white primary so it did not vanish against it.
    All of it went with the buttons themselves; the billboard is now one focus stop where OK opens
@@ -1895,45 +1921,52 @@
 .tv-spot-cardtitle { display: block; font-size: 34px; font-weight: 800; color: #fff; }
 
 /* ---- THE PREVIEW'S SOUND BADGE ------------------------------------------------------------
-   A speaker, crossed while the preview is muted, in the corner of the billboard. It reports
-   state; the red button on the remote is what changes it (see TvSpotlight).
+   A speaker, crossed while the preview is muted. It reports state; the red button on the remote is
+   what changes it (see TvSpotlight).
 
-   TIED TO `has-trailer` RATHER THAN TO FOCUS, because that class is the honest signal: the
-   trailer engine adds it at the reveal and removes it at teardown, so the badge is on screen for
-   precisely as long as there is something to hear and never a frame longer.
+   TIED TO `has-trailer` RATHER THAN TO FOCUS, because that class is the honest signal: the trailer
+   engine adds it at the reveal and removes it at teardown, so the badge is on screen for precisely
+   as long as there is something to hear and never a frame longer.
 
-   BOTTOM-RIGHT, WHICH IS A CORNER IT HAS TO BE GIVEN rather than one that was free. The title
-   plate's scrim spans the full width of the card and reaches this corner, and the progress bar
-   sits on the very bottom edge at z-index 3 — so this is lifted above both (z-index 4) and its
-   offset clears the bar rather than landing on it. Nothing collides because the plate's CONTENT
-   is left-aligned: the tag and the wordmark start at the far side of a 675px card.
+   ONE MORE TAB AT THE END OF THE CALLOUTS' ROW, and drawn as one: the same dark see-through
+   rounded square, the same height, the icon at the same size — sized in the callouts' own em
+   (glance.css `.tv-spot-hero .gl-chips.on-art`), so the two can never drift apart. It used to be a
+   round disc alone in the top-right corner, which read as a control floating on the picture rather
+   than as part of the card's information.
+
+   THE CALLOUTS MAKE ROOM FOR IT, and only sideways. When it arrives they slide left by its width and
+   gap (a transform — the compositor's to animate, nothing re-lays-out per frame) and give up the
+   same width at their left end, so they never reach further into the card than they did before:
+   that is what an earlier version of this, which simply pushed them left, got wrong — they stepped
+   into the wordmark. A pair that no longer fits whole drops its second tab, by glance.css's rule
+   that the first keeps every letter.
 
    `pointer-events: none` because it is a readout, not a control — and it sits inside a <button>,
    where anything that swallowed a click would put a dead patch on the card. */
-/* TOP-RIGHT NOW: the bottom-right corner belongs to the at-a-glance callouts (glance.css), which
-   used to have to step aside for this badge whenever a preview started — and stepped straight
-   into the wordmark. Up here it sits on the picture, which its own dark disc and hairline were
-   made to read against anyway. */
 .tv-spot-sound {
-  position: absolute; right: 16px; top: 16px; z-index: 4;
+  position: absolute; z-index: 4;
+  right: clamp(16px, 1.25vw, 24px);
+  bottom: clamp(16px, 1.25vw, 24px);
+  font-size: clamp(12.5px, .88vw, 16.5px);
+  width: 1.95em; height: 1.95em;
   display: grid; place-items: center;
-  width: 38px; height: 38px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, .58);
-  /* The card behind this is a photograph, so the disc needs an edge of its own to stay legible
-     over a bright frame — the same hairline the discs in the detail overlay carry. */
-  border: 1px solid rgba(255, 255, 255, .14);
-  /* The glyphs are 1em, so this one number sizes them. */
-  font-size: 20px;
-  color: rgba(255, 255, 255, .92);
+  border-radius: .45em;
+  background: rgba(18, 18, 18, .74);
+  color: #fff;
   opacity: 0;
   transition: opacity .4s ease;
   pointer-events: none;
 }
 .tv-spot-sound svg { display: block; }
+.tv-spot-sound .ic3 .gl-ic { width: 1.35em; height: 1.35em; }
 .tv-spot-hero.has-trailer .tv-spot-sound { opacity: 1; }
+.tv-spot-hero .gl-chips.on-art { transition: transform .4s cubic-bezier(.2, .7, .2, 1); }
+.tv-spot-hero.has-trailer .gl-chips.on-art {
+  transform: translateX(-2.45em);
+  max-width: calc(54% - 2.45em);
+}
 @media (prefers-reduced-motion: reduce) {
-  .tv-spot-sound { transition: none; }
+  .tv-spot-sound, .tv-spot-hero .gl-chips.on-art { transition: none; }
 }
 
 /* ---- RESUME PROGRESS (Continue Watching) --------------------------------------------------
