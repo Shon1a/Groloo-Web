@@ -76,10 +76,11 @@ export function useSettledGlance(
     const id = window.setTimeout(() => setSt((s) => (s.key === key ? { ...s, late: true } : s)), maxWaitMs);
     return () => window.clearTimeout(id);
   }, [key, maxWaitMs]);
-  useEffect(() => {
-    if (cur.list && cur.list.length) return;
-    if ((ready || cur.late) && live.length) setSt({ key, list: live, late: true });
-  }, [cur.list, cur.late, ready, live, key]);
+  /* SETTLED IN THE RENDER THAT CAN SETTLE THEM, the same render-phase update as the key reset above. As
+   * an effect this always cost one more commit: the surface was drawn once with no callouts and again
+   * with them, so even callouts that were ready (their awards cached) arrived a frame after the words
+   * they belong to — on post-play, visibly out of step with the wordmark they are meant to follow. */
+  if (!(cur.list && cur.list.length) && (ready || cur.late) && live.length) setSt({ key, list: live, late: true });
   return cur.list || NONE;
 }
 const NONE: GlanceCallout[] = [];

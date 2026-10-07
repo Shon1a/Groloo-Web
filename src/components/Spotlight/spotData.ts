@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { apiIdOf, useCards, useHomeCached, useImdbTrailerMany, useMeta, useMetaMany, type ImdbTrailer } from '../../lib/queries';
+import { apiIdOf, useCards, useHomeCached, useImdbTrailerMany, useMeta, useMetaMany, usePrefetchAwards, type ImdbTrailer } from '../../lib/queries';
 import { homePool, usePicks, useTaste } from '../../lib/picks';
 import { kindOf, tasteMatch } from '../../lib/taste';
 import type { Airing, MediaItem, MetaDetail } from '../../lib/types';
@@ -8,17 +8,17 @@ import type { Airing, MediaItem, MetaDetail } from '../../lib/types';
  *
  * Two lists:
  *
- *   SPOT  — up to five titles that each get the stage in turn, with a slice of their own trailer.
+ *   SPOT  — up to ten titles that each get the stage in turn, with a slice of their own trailer.
  *           They need the most: an IMDb id (for the trailer), the wordmark, the facts line. So
  *           they are described from /api/meta, one read each, and their trailers resolved.
  *   MORE  — the slideshow that takes over once the trailers are done: other films, series and
  *           anime, deliberately NOT more of the same — a viewer who has just watched a thriller
- *           and been shown five more thrillers has seen the point already. Artwork only, so one
+ *           and been shown ten more thrillers has seen the point already. Artwork only, so one
  *           /api/cards request dresses all of them.
  *
  * Titles with a trailer go first: the stage is a trailer stage, and a title without one is a still
  * picture where the viewer was promised motion. A title with none still takes a place when there
- * are not five that do. */
+ * are not ten that do. */
 
 export interface SpotItem extends MediaItem {
   trailer?: ImdbTrailer | null;
@@ -30,8 +30,9 @@ export interface SpotItem extends MediaItem {
   seasons?: number;
 }
 
-const SPOT = 5;
-const CANDIDATES = 8;
+/* Ten trailers, from fourteen candidates: some titles have no trailer, and those go to the back. */
+const SPOT = 10;
+const CANDIDATES = 14;
 const MORE = 16;
 /** How long the spot list may wait on slow answers before going with what it has. */
 const SETTLE_MS = 4500;
@@ -72,7 +73,7 @@ function useSettled(ready: boolean, key: string): boolean {
   return ready || late;
 }
 
-/** Candidates in, five described and trailer-resolved titles out (trailers first). */
+/** Candidates in, ten described and trailer-resolved titles out (trailers first). */
 export function useSpotList(cands: MediaItem[], enabled: boolean): { spot: SpotItem[]; settled: boolean } {
   /* De-duplicated before it reaches useQueries, which warns (and double-subscribes) on repeated
    * keys — two candidates can share an id, and every title without an IMDb id shares `undefined`. */
@@ -177,6 +178,12 @@ export function usePostPlayData(media: { id: string | number; type?: string; imd
   }, [recs, picks.length, home, apiId]);
   const ready = enabled && (!!finished || isError || !apiId);
   const { spot, settled } = useSpotList(cands, ready);
+  /* Each trailer's callouts ("Oscar Nominee") lean on the title's awards. Asked for all ten as soon as the
+   * list is known — minutes before the credits, since post-play is armed early — so every title's
+   * callouts are there the moment it comes up and arrive WITH its wordmark, not a beat after it. */
+  const prefetchAwards = usePrefetchAwards();
+  const spotImdbs = spot.map((s) => s.imdb).join(',');
+  useEffect(() => { prefetchAwards(spot.map((s) => s.imdb)); }, [spotImdbs, prefetchAwards]); // eslint-disable-line react-hooks/exhaustive-deps
   const exclude = useMemo(() => new Set([...spot.map(keyOf), ...(media ? [keyOf({ id: apiId ?? media.id, type: media.type })] : [])]), [spot, apiId, media]);
   const { items: more } = useMoreList([recs.slice(CANDIDATES), picks.map((p) => p.item)], exclude, settled);
   return { finished, spot, more, settled };

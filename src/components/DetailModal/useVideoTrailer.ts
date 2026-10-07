@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useT } from '../../i18n/i18n';
 import { claimPreviewSlot, releasePreviewSlot } from '../../lib/tvPreviewPolicy';
 import { acquirePreview, releasePreview, sharedPreviewEnabled } from '../../lib/tvPreviewElement';
@@ -178,15 +178,23 @@ function pickTrailerRendition(
   urls: Record<string, string> | undefined,
   neededPx: number,
   fallback?: string,
+  ceilingPx = Infinity,
 ): string | undefined {
   if (!urls) return fallback;
   /* AUTO is an HLS playlist, not a file. A <video> plays it natively on the TV platforms and on
    * Safari, and not at all in Chrome — so it is only ever a candidate where the browser says it
    * can, and even then only as a last resort behind every progressive rendition. */
   const canHls = hlsSupported();
-  const ladder = Object.keys(urls)
+  let ladder = Object.keys(urls)
     .filter((l) => l !== 'AUTO' && labelWidth(l) > 0)
     .sort((a, b) => labelWidth(a) - labelWidth(b));
+  /* A CAP IS A CEILING, NOT A HINT. "The smallest rendition that covers the box" could still pass the
+   * cap when the one under it was missing — a trailer offered in 720p and 2160p, asked for 1080p, got
+   * the 4K file. Above the ceiling only when there is nothing at or under it. */
+  if (Number.isFinite(ceilingPx)) {
+    const under = ladder.filter((l) => labelWidth(l) <= ceilingPx);
+    if (under.length) ladder = under;
+  }
   if (!ladder.length) return (canHls && urls.AUTO) || fallback;
 
   const floorAt = ladder.indexOf(SAFE_FLOOR);
@@ -232,6 +240,36 @@ export interface VideoTrailerOptions {
    * element without user activation, so a video that mounted unmuted would be refused outright
    * and `onFail` would throw away a perfectly good trailer over its volume. */
   sound?: boolean;
+  /** When the picture is revealed with sound on, the volume rises from silence over this many ms
+   *  instead of arriving at full — post-play's trailers fade in AND out (see `fadeOutSound`). */
+  fadeSoundMs?: number;
+  /** Ask for this rendition width whatever the box measures (still under `maxRenditionPx`): a surface
+   *  whose video IS the screen wants the best there is up to its cap, not what the box arithmetic
+   *  happens to come to on a smaller window. */
+  targetRenditionPx?: number;
+  /** A new value starts the trailer over even when `src` is the same string — post-play hands the
+   *  stage from one title to the next, and two titles can share a trailer file. */
+  restartKey?: string;
+}
+
+/* ---- A VOLUME RAMP -------------------------------------------------------------------------------
+ * Linear, in small steps on a timer: `volume` is a property of the media element, not something the
+ * renderer draws, so this costs nothing per frame and needs no animation clock. One ramp per element
+ * at a time — a new one (a fade-out arriving during the fade-in) takes over from wherever the volume
+ * has got to. */
+const ramps = new WeakMap<HTMLVideoElement, number>();
+function rampVolume(v: HTMLVideoElement, to: number, ms: number): void {
+  const prev = ramps.get(v);
+  if (prev) window.clearInterval(prev);
+  const from = v.volume;
+  if (ms <= 0 || from === to) { v.volume = to; ramps.delete(v); return; }
+  const t0 = performance.now();
+  const id = window.setInterval(() => {
+    const k = Math.min(1, (performance.now() - t0) / ms);
+    try { v.volume = Math.max(0, Math.min(1, from + (to - from) * k)); } catch { /* a set that refuses volume */ }
+    if (k >= 1) { window.clearInterval(id); ramps.delete(v); }
+  }, 40);
+  ramps.set(v, id);
 }
 
 /* THE ROW OWNS ITS PREVIEW OUTRIGHT. There was briefly a `detach` here — an escape hatch that
@@ -250,6 +288,7 @@ export function useVideoTrailer(
 ) {
   const t = useT();
   const mountDelay = opts?.mountDelay ?? 0;
+  const restartKey = opts?.restartKey;
   const revealAt = opts?.revealAt ?? REVEAL_AT;
   const startAt = opts?.startAt ?? 0;
   const [muted, setMuted] = useState(true);
@@ -270,12 +309,15 @@ export function useVideoTrailer(
   /* A caller that names a crop gets it LAID OUT, not transformed — see `place` in the mount. */
   const layoutCrop = opts?.cropScale !== undefined;
   const maxRendition = opts?.maxRenditionPx ?? Infinity;
+  const targetRendition = opts?.targetRenditionPx;
   /* Read through a ref inside the mount effect for the same reason as the renditions above: the
    * effect runs on `src` alone, and a preview that restarted because someone pressed the red
    * button would defeat the point of the button. */
   const soundOpt = opts?.sound;
   const soundRef = useRef(!!soundOpt);
   soundRef.current = !!soundOpt;
+  const fadeSoundRef = useRef(opts?.fadeSoundMs ?? 0);
+  fadeSoundRef.current = opts?.fadeSoundMs ?? 0;
   /* This hook's identity in the one-pipeline-at-a-time register (lib/tvPreviewPolicy.ts). Every
    * caller of this hook mounts a real media pipeline, so every caller has to be counted — the row
    * preview and the detail sheet's trailer must not both hold a decoder. */
@@ -332,8 +374,10 @@ export function useVideoTrailer(
        *
        * So the box is measured in CSS pixels and `maxRenditionPx` lets a caller cap it outright.
        * SAFE_FLOOR still applies underneath, so this can never pick something genuinely soft. */
-      const needed0 = Math.round(Math.min(boxPx0 * cropScale, maxRendition));
-      const chosen0 = (boxPx0 > 0 ? pickTrailerRendition(renditionsRef.current, needed0, src) : src) || src;
+      const needed0 = Math.round(Math.min(targetRendition ?? boxPx0 * cropScale, maxRendition));
+      const chosen0 = (boxPx0 > 0 || targetRendition
+        ? pickTrailerRendition(renditionsRef.current, needed0, src, maxRendition)
+        : src) || src;
 
       let v: HTMLVideoElement;
       if (sharedPreviewEnabled()) {
@@ -437,7 +481,11 @@ export function useVideoTrailer(
          * waits for `revealAt` of ACTUAL playback (see onTime), so a preview announced itself out
          * of a still poster and the trailer only faded up afterwards. Whatever the file is doing
          * before this point, the viewer is still looking at artwork, so it plays silently. */
-        muteFnRef.current?.(!soundRef.current);
+        if (soundRef.current && fadeSoundRef.current > 0) {
+          v.volume = 0;
+          v.muted = false;
+          rampVolume(v, 1, fadeSoundRef.current);
+        } else muteFnRef.current?.(!soundRef.current);
       };
 
       /* Played through once, then gone — the same rule as the embed. A row left resting must not
@@ -614,7 +662,7 @@ export function useVideoTrailer(
       hero?.classList.remove('has-trailer');
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src]);
+  }, [src, restartKey]);
 
   /* The caller's switch, applied to a preview that is already running. Deliberately does NOT
    * touch the mount effect above — this is a property of the element, not of the src, and the
@@ -627,5 +675,11 @@ export function useVideoTrailer(
   }, [soundOpt]);
 
   const toggleMute = () => setMuted((m) => { const nm = !m; muteFnRef.current?.(nm); return nm; });
-  return { muted, toggleMute };
+  /** Take the playing trailer's sound down to silence over `ms` — the caller's picture fade-out runs
+   *  alongside it, and the element itself is left playing until the caller moves on. */
+  const fadeOutSound = useCallback((ms: number) => {
+    const v = videoRef.current;
+    if (v && !v.muted) rampVolume(v, 0, ms);
+  }, []);
+  return { muted, toggleMute, fadeOutSound };
 }

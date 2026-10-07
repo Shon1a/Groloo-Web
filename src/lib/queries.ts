@@ -125,16 +125,34 @@ export function useHomeCached() {
  * Asked for only where one title is in focus (a billboard at rest, a detail sheet, a post-play
  * slide), never per tile: a row would be twenty IMDb lookups to decorate one card. Awards move
  * once a year, so a day is short; failures answer an empty summary rather than an error. */
-export function useAwards(imdb: string | undefined | null) {
-  return useQuery({
-    queryKey: ['awards', imdb],
+function awardsQuery(imdb: string | undefined | null) {
+  return {
+    queryKey: ['awards', imdb] as const,
     queryFn: () => api<Awards>(`/api/awards/${imdb}`),
-    enabled: !!imdb && /^tt\d+$/.test(imdb),
     staleTime: 24 * 60 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
-    retry: false,
+    retry: false as const,
+  };
+}
+
+export function useAwards(imdb: string | undefined | null) {
+  return useQuery({
+    ...awardsQuery(imdb),
+    enabled: !!imdb && /^tt\d+$/.test(imdb),
     refetchOnWindowFocus: false,
   });
+}
+
+/** Awards for titles about to be shown one after another (post-play's trailers), asked for up front
+ *  so each title's callouts are in hand the moment it comes up — see useSettledGlance. */
+export function usePrefetchAwards() {
+  const qc = useQueryClient();
+  return useCallback((imdbs: Array<string | undefined | null>) => {
+    for (const imdb of imdbs) {
+      if (!imdb || !/^tt\d+$/.test(imdb)) continue;
+      void qc.prefetchQuery(awardsQuery(imdb)).catch(() => { /* the callouts go without */ });
+    }
+  }, [qc]);
 }
 
 /* THE SERVER'S EPISODE-NUMBERING REVISION, sent with every series meta and season read. It

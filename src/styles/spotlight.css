@@ -53,7 +53,14 @@
   .pp-stage-art.on{opacity:1;animation:ppPush 26s linear both}
   /* The slow push-in a still picture gets — it is what keeps a screen with no trailer alive. */
   @keyframes ppPush{from{transform:scale(1)}to{transform:scale(1.08)}}
-  .pp-stage.has-trailer .pp-stage-art{opacity:0;transition-duration:.6s}
+  /* …and holds where it is once a trailer covers it: the picture is invisible, and a full-screen layer
+     scaling under the video was a second picture moving for nobody. */
+  .pp-stage.has-trailer .pp-stage-art{opacity:0;transition-duration:1s;animation-play-state:paused}
+  /* THE FADES ARE THE STILL'S, NOT THE VIDEO'S. The stills sit OVER the trailer (SpotlightStage), so a
+     trailer fades up as its still fades away (above) and back down as the still returns (`is-closing`,
+     for the length the stage is given in --pp-art-fade) — opacity on the picture layer, which a
+     television honours, rather than on the video, which a set hands to its own pipeline. */
+  .pp-stage.has-trailer.is-closing .pp-stage-art.on{opacity:1;transition-duration:var(--pp-art-fade,1s)}
   .pp-stage-slot{position:absolute;inset:0;overflow:hidden}
   .pp-stage-slot video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:transparent;
     opacity:0;transition:opacity .6s ease}
@@ -91,11 +98,19 @@
   /* ---- THE WORDS: bottom-left, over the trailer ---------------------------------------------- */
   .pp-info{position:absolute;left:calc(var(--ppx) + 3.4*var(--u));bottom:calc(var(--ppy) + 15.4*var(--u));
     width:calc(40*var(--u));display:flex;flex-direction:column;align-items:flex-start;gap:calc(.75*var(--u));
-    animation:ppRise .55s var(--pp-ease) backwards}
-  /* The copy remounts with each title (that is its cross-fade); only the first arrival waits. */
-  .pp-root.entering .pp-info{animation-duration:.7s;animation-delay:.9s}
-  .pp-kicker{font-size:calc(max(11px,1*var(--u)));font-weight:600;letter-spacing:.14em;text-transform:uppercase;
-    color:rgba(255,255,255,.7);text-shadow:0 1px 8px rgba(0,0,0,.5)}
+    --in:-3vw;--d0:0s}
+  /* THE WORDS ARRIVE IN TURN, the slideshow's way and from its left side: the wordmark, then the line
+     under it, then the callouts and their icons, each sliding in from the left as it fades up. They
+     used to rise in as one block with the callouts popping in a beat after it, on their own. The copy
+     remounts with each title, so this plays per title; only the first arrival (post-play opening) waits
+     for the film to settle into its corner (--d0). */
+  .pp-root.entering .pp-info{--d0:.9s}
+  .pp-info .pp-name{animation:ppIn 1s cubic-bezier(.2,.8,.2,1) calc(var(--d0) + .1s) backwards}
+  .pp-info .pp-facts{animation:ppIn .9s cubic-bezier(.2,.8,.2,1) calc(var(--d0) + .4s) backwards}
+  .pp-info .gl-chip{animation:ppIn .8s cubic-bezier(.2,.8,.2,1) calc(var(--d0) + .7s) backwards}
+  .pp-info .gl-chip:nth-child(2){animation-delay:calc(var(--d0) + .82s)}
+  .pp-info .gl-chips.gl-run .gl-ic [class*="m-"]{animation-delay:calc(var(--d0) + .8s)}
+  .pp-info .gl-chips.gl-run .gl-chip:nth-child(2) .gl-ic [class*="m-"]{animation-delay:calc(var(--d0) + .92s)}
   .pp-name{margin:0;line-height:1}
   .pp-logo{display:block;max-width:calc(30*var(--u));max-height:calc(7.4*var(--u));width:auto;height:auto;
     object-fit:contain;object-position:left bottom;filter:drop-shadow(0 2px 12px rgba(0,0,0,.55))}
@@ -106,17 +121,6 @@
   .pp-facts span+span::before{content:'';display:inline-block;width:4px;height:4px;border-radius:50%;
     background:rgba(255,255,255,.5);margin:0 .9em 0 -.55em;vertical-align:middle}
   .pp-info .gl-chips{font-size:calc(max(12px,1.1*var(--u)));margin:calc(.2*var(--u)) 0 calc(.1*var(--u)) calc(.3*var(--u))}
-  .pp-actions{display:flex;gap:calc(.8*var(--u));margin-top:calc(.3*var(--u))}
-  .pp-btn{display:inline-flex;align-items:center;gap:.5em;height:calc(max(38px,3.3*var(--u)));padding:0 1.3em 0 .6em;
-    border-radius:calc(max(19px,1.65*var(--u)));border:1.5px solid rgba(255,255,255,.3);background:rgba(20,20,20,.5);
-    color:#fff;font:600 calc(max(13px,1.15*var(--u)))/1 var(--font);cursor:pointer;outline:none;
-    transition:background .2s ease,color .2s ease,border-color .2s ease,transform .2s ease}
-  .pp-btn .gl-ic{width:1.35em;height:1.35em}
-  .pp-btn:hover{background:rgba(255,255,255,.2)}
-  /* White fill = "the remote is here" on this build (see tv.css): the primary is glass at rest there. */
-  .pp-btn:focus-visible,.pp-btn:focus{background:#fff;color:#0a0a0a;border-color:#fff;transform:scale(1.04)}
-  .pp-root.web .pp-primary{background:#fff;color:#0a0a0a;border-color:#fff}
-  .pp-root.web .pp-primary:hover{background:#e6e6e6}
 
   /* ---- THE POSTERS: a short row along the foot ---------------------------------------------- */
   .pp-rowwrap{position:absolute;left:0;right:0;bottom:calc(var(--ppy) + 2.6*var(--u));
@@ -127,6 +131,9 @@
     height:calc(8.6*var(--u));padding-left:calc(var(--ppx) + 3.4*var(--u));outline:none}
   /* The row is one focus stop; the ring belongs to the poster it has selected, not to the strip. */
   .pp-row:focus,.pp-row:focus-visible{outline:none}
+  /* TEN POSTERS, SEVEN ACROSS: past the fourth the row slides one poster-pitch (12.4u + 1.2u) along per
+     step, set from SpotlightStage as --shift. A transform, so it is the compositor's to glide. */
+  .pp-row{transform:translate3d(calc(var(--u) * -13.6 * var(--shift,0)),0,0);transition:transform .45s var(--pp-ease)}
   .pp-thumb{position:relative;flex:none;width:calc(12.4*var(--u));height:calc(6.98*var(--u));border-radius:calc(.5*var(--u));
     overflow:hidden;background:#222;cursor:pointer;transform-origin:50% 60%;
     transition:transform .45s var(--pp-ease),box-shadow .45s ease;box-shadow:0 0 0 0 rgba(255,255,255,0)}
@@ -143,10 +150,25 @@
   /* …and fills, along its foot, for as long as that clip has left. */
   .pp-thumb-bar{position:absolute;z-index:1;left:0;right:0;bottom:0;height:3px;background:rgba(255,255,255,.2);opacity:0;
     transition:opacity .3s ease}
-  .pp-thumb-bar i{display:block;height:100%;width:0;background:#fff}
+  /* A SCALE, NOT A WIDTH. It used to grow `width` from 0 to 100% over the clip's twenty seconds, and a
+     width is layout: the set restyled, re-laid-out and repainted this bar on every frame of every
+     trailer — measured at the set's speed, a main-thread frame with a layout and a paint thirty times
+     a second for as long as post-play ran, on top of a video being decoded. scaleX from the left edge
+     draws the same bar and is the compositor's to run. On a television it also moves in steps (one
+     every 1/120th of the clip — a step of about two pixels): a three-pixel bar loses nothing, and the
+     set re-composites its picture six times a second for it instead of sixty. */
+  .pp-thumb-bar i{display:block;height:100%;width:100%;background:#fff;transform:scaleX(0);transform-origin:0 50%}
   .pp-thumb.on .pp-thumb-bar{opacity:1}
   .pp-thumb.run .pp-thumb-bar i{animation:ppClip var(--clip,20s) linear forwards}
-  @keyframes ppClip{to{width:100%}}
+  .pp-root.tv .pp-thumb.run .pp-thumb-bar i{animation-timing-function:steps(120,end)}
+  @keyframes ppClip{to{transform:scaleX(1)}}
+  /* THE TELEVISION'S EFFECT BUDGET (see the head of tv.css). A drop-shadow FILTER is an offscreen blur:
+     on the wordmark over the trailer and on each of the five poster wordmarks it was the costliest
+     thing on the screen that nobody would miss — the shade under the words and the gradient at each
+     poster's foot are what make them legible. And the ring snaps rather than tweening its box-shadow,
+     which repainted both posters on every frame of a change; the lift, a transform, still glides. */
+  .pp-root.tv .pp-logo,.pp-root.tv .pp-thumb-logo{filter:none}
+  .pp-root.tv .pp-thumb{transition:transform .45s var(--pp-ease)}
   .pp-root.web .pp-thumb:hover{transform:scale(1.05)}
   .pp-root.web .pp-thumb.on:hover{transform:scale(1.1)}
 
@@ -236,9 +258,8 @@
 
   /* ---- TELEVISION: the same composition, a little bolder from three metres ----------------- */
   .pp-root.tv .pp-thumb.on{box-shadow:0 0 0 3px #fff,0 calc(.6*var(--u)) calc(1.6*var(--u)) rgba(0,0,0,.6)}
-  .pp-root.tv .pp-btn:focus{transform:none}
   /* The player's blanket TV focus rule fills whatever the remote is on with white (tv.css, "the remote
-     is here"). Right for the Watch button, and kept for it; wrong for the stops whose CONTENT is a
+     is here"). Wrong for the stops whose CONTENT is a
      picture — the poster row (its selected poster already wears the ring), the slideshow, and the
      credits frame, which a white fill would simply paint over. Out-specified, not edited. */
   .vp-overlay.tv.pp-on .pp-root .pp-row.pp-row:focus,
@@ -249,7 +270,7 @@
   .vp-overlay.tv.pp-on .pp-root .pp-slides.pp-slides:focus-visible{background:#000;outline:none;color:#fff}
 
   @media (prefers-reduced-motion:reduce){
-    .pp-stage-art.on,.pp-slide-pan,.pp-slide-light,.pp-slide-copy{animation:none}
+    .pp-stage-art.on,.pp-slide-pan,.pp-slide-light,.pp-slide-copy,.pp-info .pp-name,.pp-info .pp-facts,.pp-info .gl-chip{animation:none}
     .pp-root *{animation-duration:.001ms!important}
   }
 
@@ -267,10 +288,9 @@
       background:linear-gradient(0deg,rgba(20,20,20,1),rgba(20,20,20,0) 35%)}
     .pp-info{left:5vw;width:90vw;bottom:auto;top:calc(env(safe-area-inset-top,0px) + 30vw + 56.25vw + 4vw);gap:10px}
     .pp-logo{max-height:64px;max-width:70vw}
-    .pp-btn{height:42px;font-size:14px}
     .pp-rowwrap{bottom:calc(env(safe-area-inset-bottom,0px) + 18px)}
     .pp-rowlabel{margin-left:5vw;font-size:13px}
-    .pp-row{height:auto;padding:6px 0 6px 5vw;overflow-x:auto;overflow-y:hidden;gap:3vw}
+    .pp-row{height:auto;padding:6px 0 6px 5vw;overflow-x:auto;overflow-y:hidden;gap:3vw;transform:none}
     .pp-thumb{width:40vw;height:22.5vw}
     .pp-slide-copy{bottom:calc(env(safe-area-inset-bottom,0px) + 16vw);max-width:88vw}
     .pp-slide.side-l .pp-slide-copy{left:6vw}

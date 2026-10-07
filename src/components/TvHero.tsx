@@ -10,6 +10,7 @@ import { useSettings } from '../stores/settings';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { FadeBg, FadeImg } from './FadeArt';
 import { useBootDone } from '../lib/bootGate';
+import { usePlayer } from '../stores/player';
 
 /* THE TV FEATURED BILLBOARD — the top of the TV home, and only the top.
  *
@@ -191,11 +192,18 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     return () => io.disconnect();
   }, []);
 
+  /* NOT UNDER THE PLAYER EITHER. The player is an overlay: the home screen stays mounted beneath it so
+   * closing a film puts you back exactly where you were — and this card went on rotating under it, a
+   * new title every seven seconds for the length of the film and all of post-play, each one a cross-
+   * fade, a wordmark, callouts and a re-render nobody could see, on the same set that was decoding the
+   * film. The observer above cannot tell (an overlay does not change what intersects), so the player
+   * says so itself. The web hero has always paused for it (Hero.tsx). */
+  const playerOpen = usePlayer((s) => !!s.source);
   useEffect(() => {
-    if (focused || reduceMotion || n < 2 || !onScreen) return;
+    if (focused || reduceMotion || n < 2 || !onScreen || playerOpen) return;
     const id = window.setTimeout(() => setActive((a) => (a + 1) % n), ADVANCE_MS);
     return () => window.clearTimeout(id);
-  }, [active, focused, reduceMotion, n, onScreen]);
+  }, [active, focused, reduceMotion, n, onScreen, playerOpen]);
 
   /* ---- THE FEATURED CARD PLAYS ITS TRAILER TOO ------------------------------------------------
    *
