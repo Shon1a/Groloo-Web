@@ -13,6 +13,7 @@ import { playWithWasmAudio, needsWasmDecoder, type WasmAudioHandle } from '../..
 import { langName, normalizeSubLang, collectAddonSubtitles } from '../../lib/addonClient';
 import { apiFetch } from '../../lib/api';
 import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
+import { useKeepAwake } from '../../lib/idle';
 import EpisodeRail from './EpisodeRail';
 import TvChipMenu from '../DetailModal/TvChipMenu';
 import { scrollCardToSlot } from './railScroll';
@@ -1854,6 +1855,11 @@ export default function VideoPlayer() {
     const c = settings.clarity;
     k.setAttribute('kernelMatrix', `0 ${-c} 0 ${-c} ${1 + 4 * c} ${-c} 0 ${-c} 0`);
   }, [settings.clarity]);
+
+  /* NO SCREENSAVER WHILE SOMETHING IS BEING WATCHED (lib/idle.ts): a film or an episode playing, or
+   * post-play holding the screen. Paused — or stopped on an error — is not watching, so after ten
+   * idle minutes the slideshow may come up over it, and goes again with the next press. */
+  useKeepAwake(!!source && ((playing && !errKind) || ppOpen));
 
   if (!source) return <div className="vp-overlay" id="playerOverlay" />;
 

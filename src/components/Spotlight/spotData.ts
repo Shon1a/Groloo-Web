@@ -105,12 +105,13 @@ export function useSpotList(cands: MediaItem[], enabled: boolean): { spot: SpotI
 
 /* THE SLIDESHOW: a mix of kinds, ordered so neighbours differ. Films, series and anime are taken
  * in turn (each kind's own list ranked by taste when there is one, by standing when not), plus a
- * couple of upcoming titles, which is where a "Coming Friday" earns its place on this screen. */
+ * couple of upcoming titles, which is where a "Coming Friday" earns its place on this screen.
+ * `ready` once the artwork request has answered (or failed) for the list as it stands. */
 export function useMoreList(
   sources: MediaItem[][],
   exclude: Set<string>,
   enabled: boolean,
-): SpotItem[] {
+): { items: SpotItem[]; ready: boolean } {
   const taste = useTaste();
   const home = useHomeCached();
   const mixed = useMemo(() => {
@@ -144,14 +145,15 @@ export function useMoreList(
 
   // One request dresses the lot: wordmark, textless backdrop, genre, full date.
   const ids = useMemo(() => mixed.map((m) => `${norm(m.type)}/${apiIdOf(m) ?? m.id}`), [mixed]);
-  const { data } = useCards(ids, true);
-  return useMemo(() => {
+  const { data, isFetched } = useCards(ids, true);
+  const items = useMemo(() => {
     const byKey = new Map((data?.results || []).map((c) => [`${norm(c.type)}:${String(c.ref ?? c.id)}`, c]));
     return mixed.map((m) => {
       const c = byKey.get(`${norm(m.type)}:${String(apiIdOf(m) ?? m.id)}`);
       return c ? { ...m, ...c, type: m.type, id: m.id } : m;
     });
   }, [mixed, data]);
+  return { items, ready: ids.length > 0 && isFetched };
 }
 
 /* ---- POST-PLAY: more like the film that just ended --------------------------------------------- */
@@ -176,6 +178,6 @@ export function usePostPlayData(media: { id: string | number; type?: string; imd
   const ready = enabled && (!!finished || isError || !apiId);
   const { spot, settled } = useSpotList(cands, ready);
   const exclude = useMemo(() => new Set([...spot.map(keyOf), ...(media ? [keyOf({ id: apiId ?? media.id, type: media.type })] : [])]), [spot, apiId, media]);
-  const more = useMoreList([recs.slice(CANDIDATES), picks.map((p) => p.item)], exclude, settled);
+  const { items: more } = useMoreList([recs.slice(CANDIDATES), picks.map((p) => p.item)], exclude, settled);
   return { finished, spot, more, settled };
 }

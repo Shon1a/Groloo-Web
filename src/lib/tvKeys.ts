@@ -49,8 +49,9 @@ export type BackHandler = () => boolean;
  * screen changed, and the second press was the one that closed the player.
  *
  * So a handler also carries the z of the surface it belongs to, and only the topmost surface's
- * handlers are consulted. Within a surface nothing changes: same z, so recency still decides. */
-export const BACK_LAYER = { modal: 200, player: 3000 } as const;
+ * handlers are consulted. Within a surface nothing changes: same z, so recency still decides.
+ * The screensaver (z 4000, IdleSlideshow) sits over all of them: Back wakes it and nothing else. */
+export const BACK_LAYER = { modal: 200, player: 3000, screensaver: 4000 } as const;
 
 interface Layer { fn: BackHandler; z: number }
 
