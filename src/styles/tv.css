@@ -2486,61 +2486,92 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-/* The cast column, flattened to two lines. The web version is a sticky sidebar of circular
-   headshots; at 38px they are unreadable from a sofa, so the names — the actual information —
-   ship as text and a dozen image requests do not happen at all. */
-/* ---- CREDITS AS A SMALL TABLE ---------------------------------------------------------------
-   Two rows, two columns: the labels in the first, the names in the second, each column sharing one
-   left edge. As a stack of inline text this was two ragged blocks — a wrapped cast list returned
-   under its own LABEL, so the second line started in a column nothing else used, and the two
-   credits lined up with each other nowhere.
-   `auto 1fr` rather than a fixed label width: the labels are two words in one language and two
-   quite different ones in the next (ka/ru are longer), and a hard-coded column is a number that is
-   right in English and wrong everywhere else. Baseline alignment, not centre — these are two runs
-   of type at different sizes, and what has to agree is the line they sit on. */
-.tv-det-credits {
-  margin-bottom: clamp(20px, 2.6vh, 34px);
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: clamp(12px, 1vw, 20px);
-  row-gap: 8px;
-  align-items: baseline;
-  font-size: clamp(15px, 1vw, 20px);
-  line-height: 1.45;
-}
-/* WRAPS NOW, AND THAT IS ONLY SAFE BECAUSE THE COLUMN EXISTS. This was one nowrap line with an
-   ellipsis, on the argument that a second line of names is not worth the height. The argument was
-   really against the OLD shape: wrapping put the continuation under the label, in a column of its
-   own, which is what made a long cast look broken. Inside the grid a second line lands under the
-   first NAME and the block stays a tidy rectangle, so the names can simply be shown.
-   Two lines is still the ceiling — past that it is a document rather than a cue — and the clamp
-   ends it with an ellipsis instead of letting a twelve-name list run down the frame.
-   `min-width: 0` is the grid release that lets the column shrink to its track at all; without it
-   the text pushes the column wider than the frame instead of wrapping inside it. */
-.tv-det-credit-names {
+/* ---- THE CREDITS: THE CAST AS A ROW OF FACES ------------------------------------------------
+   This row is all the credits there are. It was a line of names, on the argument that the web modal's
+   38px avatars are unreadable from a sofa — true of the size, not of the photos — and then a small
+   table: a director line and a "Casts & Credits" label in a column of their own, with the names (then
+   the faces) beside them. The table went; the row starts on the edge the wordmark, the facts and the
+   synopsis already share.
+   The faces sit edge to edge, each in a thin light ring, with the first name under each (castFaces.ts
+   says when it gets an initial). Five at 88px is 440px of a ~623px column. A face is still a flex
+   BASIS, not a width, so a window too narrow for the row shrinks its circles instead of pushing the
+   last one out. The square comes from `padding-top: 100%` — `aspect-ratio` arrived in Chrome 88 and
+   this build's floor is 87.
+   The font size is the old table's, so the captions (em of it) keep the size they were drawn at. */
+.tv-det-faces {
+  --face: clamp(64px, 4.6vw, 88px);
+  display: flex;
   min-width: 0;
-  color: #d6d6d6;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
+  margin: 0 0 clamp(20px, 2.6vh, 34px);
+  /* A little over the synopsis' own bottom margin: on that alone the rings sat close under the last
+     line's descenders. Padding, because a top MARGIN here collapses into that one and adds nothing. */
+  padding: clamp(4px, .6vh, 8px) 0 0;
+  list-style: none;
+  font-size: clamp(15px, 1vw, 20px);
+}
+.tv-det-face {
+  flex: 0 1 var(--face);
+  min-width: 0;
+}
+/* The circle, with its ring painted OVER the photo (`::after`) rather than around it, so neighbouring
+   circles meet ring to ring. A ring outside the box would overlap the next face. There is a ring at
+   all because a dark-haired head on a dark backdrop otherwise has no edge. `overflow: hidden` is the
+   round clip for the photo and for the silhouette's shoulders alike. */
+.tv-det-face-pic {
+  position: relative;
+  display: block;
+  padding-top: 100%;
+  border-radius: 50%;
   overflow: hidden;
+  background: #262626;
 }
-/* THE LABEL IS THE QUIET HALF, and it was the loud one: `--accent` is WHITE in this build, so the
-   word "CASTS & CREDITS" was printing brighter than the names it introduces — the eye landed on
-   the word for the category rather than on the answer. Grey at 45% keeps it legible as a heading
-   and lets the names lead, which is the order they are read in. */
-.tv-det-credit-role {
-  font-family: var(--font-mono);
-  font-size: .74em;
-  letter-spacing: .16em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, .45);
+.tv-det-face-pic::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .62);
+}
+.tv-det-face-pic img,
+.tv-det-face-pic svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* TMDB headshots are portraits with the face in their upper part; the square is cut from there. */
+.tv-det-face-pic img {
+  object-fit: cover;
+  object-position: 50% 20%;
+  opacity: 0;
+  transition: opacity .35s ease;
+}
+.tv-det-face-pic img.rdy { opacity: 1; }
+.tv-det-face-pic svg {
+  transform: translateY(10%);
+  fill: rgba(255, 255, 255, .26);
+}
+/* One line, no wider than its circle: the circles touch, so there is no gap for a caption to borrow. */
+.tv-det-face-name {
+  display: block;
+  margin-top: .45em;
+  font-size: .86em;
+  line-height: 1.3;
+  color: #ececec;
+  text-align: center;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-:root[data-lang="ka"] .tv-det-credit-role {
-  text-transform: none;
-  letter-spacing: .06em;
+/* The same line box as the others (.76 × 1.47 ≈ .86 × 1.3), so a long name does not change the row's
+   height. */
+.tv-det-face-name.is-long {
+  margin-top: .51em;
+  font-size: .76em;
+  line-height: 1.47;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tv-det-face-pic img { transition: none; }
 }
 
 /* ---- Actions ---- */
@@ -5942,7 +5973,7 @@
    screen while they change — which is the only way to tell whether a filter did what you meant.
 
    EACH CONTROL WEARS ITS OWN LABEL, in the small caps this build already uses for a field name
-   (`.tv-det-credit-role`, the settings rows). On a panel the label could sit in a left-hand
+   (the settings rows). On a panel the label could sit in a left-hand
    column shared by every row; in a line there is nowhere for it to go but above the control, and
    it has to be there — four unlabelled pills reading "All", "Genre", "any year", "any rating" say
    nothing about which axis each one moves.

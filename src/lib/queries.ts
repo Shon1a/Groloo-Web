@@ -11,6 +11,7 @@ import { retainImage } from './useImageReady';
 import { currentEp } from './episodeNumbering';
 import { useHistory } from '../stores/history';
 import { STILL_RENDITION, deckOpensOn, firstSeasonOf, seasonsOf, warmStill } from '../components/DetailModal/deckGeometry';
+import { castFaces, warmFace } from '../components/DetailModal/castFaces';
 
 /* Query hooks — one per backend read. The `lang` query param is threaded from
  * the active UI language so the API can localize titles/logos. As screens land
@@ -337,7 +338,8 @@ export function usePrefetchMeta() {
  * is what precedes nearly every OK: the rows and the hero call this after a short dwell, it reads the
  * detail under the same key the title screen reads (so that read is a cache hit), and it fetches AND
  * decodes the exact backdrop and wordmark the screen will paint (TvDetail's renditions), keeping them
- * in the shared picture cache. The screen then opens on a picture that is already there.
+ * in the shared picture cache, and the cast row's faces in a small cache of their own (castFaces). The
+ * screen then opens on pictures that are already there.
  *
  * A SERIES OPENS ON ITS EPISODE DECK, so for a series this goes one step further: the season the deck
  * will open on (TvDetail's choice — the episode Continue Watching names, else the first season) is
@@ -367,6 +369,8 @@ export function useWarmDetail() {
         // Decoded whether or not the bytes were already here: `complete` says loaded, not decoded.
         if (typeof img.decode === 'function') img.decode().catch(() => { /* the screen copes */ });
       }
+      // The cast row's faces (castFaces), after the two pictures above and at low priority.
+      for (const f of castFaces(m)) if (f.url) warmFace(f.url);
       // The deck (TvEpisodeDeck): a TMDB-described series only — an add-on's episodes come with its meta.
       if (!m.imdb || m.addonEpisodes || !seasonsOf(m).length) return;
       const named = currentEp(m, resumeEp);
