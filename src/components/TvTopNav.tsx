@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type FocusEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
@@ -66,6 +66,8 @@ const GATED = ['/addons', '/settings', '/library'];
  * cost one page mount instead of three: a remote's repeat and a deliberate run of taps both arrive
  * faster than this, so the pages passed on the way are never built. */
 const DWELL = 260;
+/** How long a Down pressed during a page switch waits for the new page to have something to land on. */
+const DOWN_OWED_MS = 2500;
 
 /* The two lazily loaded pages, fetched the moment the remote lands on their item, so the chunk is
  * in hand by the time the old page has slid away and the swap runs — not still downloading while the
@@ -93,6 +95,7 @@ export default function TvTopNav() {
   const user = useAuth((s) => s.user);
   const openAuth = useAuth((s) => s.openAuth);
   const [itemsFocused, setItemsFocused] = useState(false);
+  const groupRef = useRef<HTMLDivElement>(null);
 
   /* THE WHITE PILL IS ONE ELEMENT THAT SLIDES, not a background that switches item — the same
    * decision, and the same implementation, as the season chip menu's travelling bar (see
@@ -160,6 +163,61 @@ export default function TvTopNav() {
   };
   const here = heading ?? pathname;
   const isActive = (to: string) => (to === '/' ? here === '/' : here.startsWith(to));
+  /* THE PAGE ON SCREEN, as opposed to `isActive`'s wash (which follows the press ahead of the swap and
+   * is withheld from Search and My Space by design). Marked `data-current` on its item, for every
+   * page on the bar; lib/tvBar.ts `barItemHere` is where the remote reads it. No style hangs off it. */
+  const isCurrent = (to: string) => (to === '/' ? pathname === '/' : pathname.startsWith(to));
+
+  /* ARRIVING IN THE BAR IS NOT CHOOSING. Focus coming in from outside the group — Up out of the page,
+   * Left off a row's first card, the start-up seed — lands on the page's own item (lib/tvBar.ts), and
+   * it must never switch the page by itself: on a page that is not on the bar there is no own item,
+   * and the nearest one used to be opened 260ms after a plain Up. Only a move ALONG the bar is a
+   * choice; OK always is. */
+  const arriving = (e: FocusEvent<HTMLElement>) =>
+    !(e.relatedTarget instanceof Node && !!groupRef.current?.contains(e.relatedTarget));
+  const follow = (to: string) => (e: FocusEvent<HTMLElement>) => { if (!arriving(e)) go(to, DWELL); };
+
+  /* BACK FROM A TAB, WITH THE REMOTE STILL IN THE BAR, TAKES THE BAR WITH IT. Back from Anime shows
+   * Home, but focus stayed on the Anime item — the white pill on one tab, the wash on another, and the
+   * next Right starting from the wrong place (it went to My Space rather than Series). Any route change
+   * the bar did not make itself (Back, a deep link, a title's own navigation) re-seats focus on the
+   * page's own item. Not while a switch the bar asked for is still under way: the page is catching up
+   * with the remote, not the other way round. Moving within the group, so it opens nothing. */
+  useEffect(() => {
+    const ae = document.activeElement as HTMLElement | null;
+    const group = groupRef.current;
+    if (!ae || !group?.contains(ae) || ae.hasAttribute('data-current') || pageSwitchPending()) return;
+    group.querySelector<HTMLElement>('.tv-nav-item[data-current]')?.focus({ preventScroll: true });
+  }, [pathname]);
+
+  /* DOWN DURING A PAGE SWITCH IS KEPT, NOT SPENT. The page under the bar at that moment is the one
+   * leaving, so the press cannot go into it (see onKeyDown) — but swallowing it meant pressing Down
+   * twice to reach a page that was already on its way, which reads as a press the remote lost. So the
+   * press hurries the swap along AND is owed: once the new page is up and has something to land on,
+   * the same Down is replayed from the bar, through the same handlers as any other. Any other key in
+   * the meantime cancels it, and it lapses if the page takes longer than DOWN_OWED_MS to appear. */
+  const downOwed = useRef(0);
+  useEffect(() => {
+    if (!downOwed.current) return;
+    let timer = 0;
+    const tryDown = () => {
+      if (!downOwed.current) return;
+      if (performance.now() - downOwed.current > DOWN_OWED_MS) { downOwed.current = 0; return; }
+      const ae = document.activeElement as HTMLElement | null;
+      if (!ae || !groupRef.current?.contains(ae)) { downOwed.current = 0; return; }
+      const main = document.querySelector('main');
+      const ready = !pageSwitchPending() && !!main && !main.querySelector('.cat-loader')
+        && !!main.querySelector('.tv-hero-scrim, .tv-spot-hero, .poster, input, button, [tabindex="0"]');
+      if (!ready) { timer = window.setTimeout(tryDown, 80); return; }
+      downOwed.current = 0;
+      const key = { key: 'ArrowDown', code: 'ArrowDown', bubbles: true, cancelable: true };
+      ae.dispatchEvent(new KeyboardEvent('keydown', key));
+      /* …and its keyup, or TvSpatialNav would read the next real Down as this one still held. */
+      ae.dispatchEvent(new KeyboardEvent('keyup', key));
+    };
+    timer = window.setTimeout(tryDown, 0);
+    return () => window.clearTimeout(timer);
+  }, [pathname]);
 
   return (
     <nav className="tv-topnav" aria-label="Primary navigation">
@@ -178,6 +236,7 @@ export default function TvTopNav() {
           Tracked on the group rather than the whole bar so landing on the profile avatar — which
           is not part of this group — does not swell the menu it is not in. */}
       <div
+        ref={groupRef}
         className={`tv-nav-items${itemsFocused ? ' is-focused' : ''}${armed ? ' is-armed' : ''}`}
         onFocus={(e) => {
           setItemsFocused(true);
@@ -195,9 +254,13 @@ export default function TvTopNav() {
              page you can see. Stopped before it bubbles to TvSpatialNav's window listener. */
           if (e.key === 'ArrowDown' && pageSwitchPending()) {
             flushPageSwitch();
+            downOwed.current = performance.now();
             e.preventDefault();
             e.stopPropagation();
+            return;
           }
+          // Any other press — a Down that went through included — settles what was owed.
+          downOwed.current = 0;
         }}
         onBlur={(e) => {
           if (e.currentTarget.contains(e.relatedTarget as Node)) return;
@@ -219,7 +282,8 @@ export default function TvTopNav() {
           type="button"
           className="tv-nav-item tv-nav-search"
           aria-label={t('nav.search')}
-          onFocus={() => go('/explore', DWELL)}
+          data-current={isCurrent('/explore') || undefined}
+          onFocus={follow('/explore')}
           onClick={() => go('/explore')}
         >
           <SearchGlyph />
@@ -229,7 +293,8 @@ export default function TvTopNav() {
             key={it.to}
             type="button"
             className={`tv-nav-item${isActive(it.to) ? ' active' : ''}`}
-            onFocus={() => go(it.to, DWELL)}
+            data-current={isCurrent(it.to) || undefined}
+            onFocus={follow(it.to)}
             onClick={() => go(it.to)}
           >
             {t(it.key)}
@@ -258,7 +323,8 @@ export default function TvTopNav() {
         <button
           type="button"
           className="tv-nav-item tv-nav-profile"
-          onFocus={() => go('/library', DWELL)}
+          data-current={isCurrent('/library') || undefined}
+          onFocus={follow('/library')}
           onClick={() => go('/library')}
         >
           {t('myspace.title')}

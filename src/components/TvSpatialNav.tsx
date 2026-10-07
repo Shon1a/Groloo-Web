@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { pageY, pageMax, setPageY, beginPageMove, endPageMove, usingTransformScroll } from '../lib/tvPageScroll';
 import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch } from '../lib/tvRowRegistry';
 import { setActiveRowIndex } from '../lib/tvRowWindow';
+import { barItemHere } from '../lib/tvBar';
 
 /* REMOTE / D-PAD NAVIGATION — mounted only in the `--mode tv` build. A TV has no pointer, so
  * this turns the four arrow keys (the remote's directional pad) into spatial focus movement:
@@ -599,23 +600,25 @@ export default function TvSpatialNav() {
      * loading puts focus on its own retry button, which ends the wait too. */
     const seedFrom = performance.now();
     let seed = 0;
+    /* Where a page starts: the featured billboard, then a row billboard, then any tile — checked in
+     * that order rather than as one comma-selector, which would just return whichever matches first
+     * in the DOM (the nav). Starting on the featured hero is what puts the app at the top of the
+     * home screen on launch; seeding a ROW instead both scrolls past the hero and opens that row,
+     * so the app opened half way down itself. */
+    const pageStart = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>('.tv-hero-scrim')
+      || document.querySelector<HTMLElement>('.tv-spot-hero')
+      || document.querySelector<HTMLElement>('.poster');
+    const nothingFocused = () => !document.activeElement || document.activeElement === document.body;
     const trySeed = () => {
-      if (document.activeElement && document.activeElement !== document.body) return;
-      // Prefer the featured billboard, then a row billboard, then any tile, then the nav —
-      // checked in that order rather than as one comma-selector, which would just return
-      // whichever matches first in the DOM (the nav). Starting on the featured hero is what puts
-      // the app at the top of the home screen on launch; seeding a ROW instead both scrolls past
-      // the hero and opens that row, so the app opened half way down itself.
-      const start = document.querySelector<HTMLElement>('.tv-hero-scrim')
-        || document.querySelector<HTMLElement>('.tv-spot-hero')
-        || document.querySelector<HTMLElement>('.poster');
+      if (!nothingFocused()) return;
+      const start = pageStart();
       if (start) { start.focus({ preventScroll: true }); return; }
       if (document.querySelector('.cat-loader') && performance.now() - seedFrom < SEED_PATIENCE_MS) {
         seed = window.setTimeout(trySeed, 250);
         return;
       }
-      (document.querySelector<HTMLElement>('.tv-nav-item.active')
-        || document.querySelector<HTMLElement>('.tv-nav-item'))?.focus({ preventScroll: true });
+      (barItemHere() || document.querySelector<HTMLElement>('.tv-nav-item'))?.focus({ preventScroll: true });
     };
     seed = window.setTimeout(trySeed, 600);
 
@@ -652,10 +655,11 @@ export default function TvSpatialNav() {
           // Closed: hand the remote back to the card it came from, if that card still exists.
           const back = restoreTo; restoreTo = null;
           if (back && document.contains(back)) back.focus({ preventScroll: true });
+          else recoverPage();
           return;
         }
       }
-      if (!layerNow) return;
+      if (!layerNow) { recoverPage(); return; }
 
       /* THE PLAYER SEEDS ITS OWN FOCUS, so this must not seed it for them.
        *
@@ -742,6 +746,30 @@ export default function TvSpatialNav() {
       if (ae !== layerNow.querySelector<HTMLElement>('#closeModal')) { seeded = true; return; }
       const primary = layerNow.querySelector<HTMLElement>('#mWatch');
       if (primary) { primary.focus({ preventScroll: true }); seeded = true; }
+    };
+
+    /* ---- FOCUS LOST WITH NO LAYER UP IS PUT BACK ON THE PAGE -------------------------------------
+     *
+     * Back from inside a tab — a Movies card, say — swaps the page under the remote, and the element
+     * focus was on goes with the page it belonged to. The browser hands focus to <body> without a
+     * word, and nothing gave it back: Home came up with no selection on it at all, and the next arrow
+     * press started from the first focusable thing in the document, which is the Search icon at the
+     * head of the top bar. Every bar item opens its page, so Up after Back opened Search.
+     *
+     * So when a page settles (this runs from the same per-frame mutation check as the layers) with
+     * nothing focused, the remote is landed where the page starts, through `land` like any press so
+     * the page scrolls to it; a page with nothing to land on yet waits for its content, which is the
+     * next mutation; one with nothing at all gets its own bar item, which opens nothing. Only after
+     * something has held focus once: before that, the start-up seed is still deciding, with its own
+     * patience for a page that is loading. */
+    let hadFocus = false;
+    const onFocusIn = () => { hadFocus = true; };
+    document.addEventListener('focusin', onFocusIn);
+    const recoverPage = () => {
+      if (!hadFocus || !nothingFocused()) return;
+      if (document.querySelector('.cat-loader')) return;
+      const to = pageStart() || barItemHere();
+      if (to) land(to, 'up', false);
     };
 
     /* Coalesced to one check per frame: a modal opening is a burst of mutations, and this only
@@ -912,7 +940,9 @@ export default function TvSpatialNav() {
       /* The focused element's rect comes out of the pool it is already in, so the "where am I"
        * read is the same measurement as the "where is everything else" one. */
       const curCand = ae ? cands.find((c) => c.el === ae) : undefined;
-      if (!curCand) { cands[0].el.focus({ preventScroll: true }); return true; }
+      /* Nothing focused: start where the page starts. The first candidate in the document is the
+       * first item of the top bar, and every bar item opens its page — see `recoverPage`. */
+      if (!curCand) { (layer ? cands[0].el : (pageStart() || barItemHere() || cands[0].el)).focus({ preventScroll: true }); return true; }
       const cur = curCand.el;
 
       if (layer) {
@@ -1027,8 +1057,10 @@ export default function TvSpatialNav() {
        * costs nothing: the avatar sits immediately left of the group, so Left from the first item
        * still reaches it. */
       if (next && !curInNav && inNav(next)) {
-        const active = document.querySelector<HTMLElement>('.tv-nav-item.active');
-        if (active) next = active;
+        /* `.active` alone was not this: it is withheld from Search and My Space, so Up out of either
+         * landed on the nearest item and opened ITS page. See lib/tvBar.ts. */
+        const here = barItemHere();
+        if (here) next = here;
       }
       if (next) return land(next, dir, held);
       return false;
@@ -1185,6 +1217,7 @@ export default function TvSpatialNav() {
       mo.disconnect();
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('touchstart', onUserScroll);
       window.removeEventListener('resize', bumpGeometry);
