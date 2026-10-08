@@ -34,21 +34,36 @@ function debounced(fn: () => void, ms = 400) {
 const onAddons = debounced(pullAddons);
 const onState = debounced(pullState);
 
+/* How long to stay off the stream after the server evicted us, and how long a stream has to
+ * have lasted for its end to count as normal (and reset the backoff). Both exist because a
+ * quick reconnect is not free: each one is a signed-in request plus two pulls. With more
+ * live devices on an account than the server's per-account cap, reconnecting two seconds
+ * after an eviction evicted the next device, which did the same — a loop that ran around
+ * the clock against the server and its database. */
+const STAND_DOWN_MS = 10 * 60_000;
+const STEADY_MS = 30_000;
+
 async function listen(signal: AbortSignal) {
   let backoff = 2000;
   let first = true;   // App's sign-in effect already pulled; only a RE-connect has a gap to cover
   while (!signal.aborted) {
+    let wait = 0;
     try {
       const res = await apiFetch('/api/sync/stream', { headers: { accept: 'text/event-stream' }, signal });
       if (res.status === 401 || res.status === 403) return;   // signed out — the auth effect restarts us
-      if (!res.ok || !res.body) throw new Error('stream ' + res.status);
-      backoff = 2000;
+      if (!res.ok || !res.body) {
+        // A full account (429) or an API that cannot read accounts (503) names its own wait.
+        wait = (Number(res.headers.get('retry-after')) || 0) * 1000;
+        throw new Error('stream ' + res.status);
+      }
+      const opened = Date.now();
       // Anything that changed while we were disconnected is caught by one pull on reconnect.
       if (!first) { onAddons(); onState(); }
       first = false;
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
+      let evicted = false;
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -59,10 +74,13 @@ async function listen(signal: AbortSignal) {
           const ev = /^event: *(.+)$/m.exec(frame)?.[1]?.trim();
           if (ev === 'addons') onAddons();
           else if (ev === 'addon-state') onState();
+          else if (ev === 'evicted') evicted = true;   // the account is over its cap: stand down
         }
       }
+      if (evicted) wait = STAND_DOWN_MS;
+      else if (Date.now() - opened >= STEADY_MS) backoff = 2000;
     } catch { if (signal.aborted) return; }
-    await new Promise<void>((r) => { const id = window.setTimeout(r, backoff); timers.push(id); });
+    await new Promise<void>((r) => { const id = window.setTimeout(r, Math.max(wait, backoff)); timers.push(id); });
     backoff = Math.min(backoff * 2, 60_000);
   }
 }
