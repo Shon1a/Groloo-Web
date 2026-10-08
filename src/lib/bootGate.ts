@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { isBackKey } from './tvKeys';
 import { queryClient } from './queryClient';
 import { loadDetailModal } from '../components/DetailModal/loadDetailModal';
+import { introFinish, introProgress, introSkip, introStart } from './bootIntro';
 
 /* ---- THE TELEVISION OPENS READY ------------------------------------------------------------------
  *
@@ -13,9 +14,10 @@ import { loadDetailModal } from '../components/DetailModal/loadDetailModal';
  * their frames on time against ~90% once the screen had settled, with input lag past 130ms. "It lags
  * from the beginning and then it gets better" was exactly that.
  *
- * WHAT IT DOES. index.html paints the Groloo mark on black from the very first frame (vite.config.ts
- * `bootSplash`, TV build only). Underneath, the home screen is built exactly as before, and the splash
- * stays until there is nothing left to build:
+ * WHAT IT DOES. index.html opens on the Groloo intro from the very first frame (vite.config.ts
+ * `bootSplash`, lib/bootIntroMarkup.ts): the stacked logo lands, and its tall O's fill as the build gets
+ * on. Underneath, the home screen is built exactly as before, and the intro holds the screen until
+ * there is nothing left to build:
  *
  *   rows   the home payload is in and every row is mounted (StagedStrips reports it), or the screen
  *          that was asked for — a title opened by a deep link, a browse page — is up
@@ -25,34 +27,35 @@ import { loadDetailModal } from '../components/DetailModal/loadDetailModal';
  *          reveal would push the rows under it down while somebody is looking)
  *   fonts  the faces the screen is set in have arrived, so nothing re-lays-out after the reveal
  *   code   the title screen's chunk is loaded and parsed, so the first OK opens at once
- *   quiet  the main thread has gone QUIET_MS without a long task — the work has really finished
  *
- * Then the splash fades away over a screen that is complete and still, and the remote is handed over.
- * A key pressed while it is up is not acted on (except Back: a set being switched off is never held),
- * so nothing queues up behind the build.
+ * Then the intro's finale plays (lib/bootIntro.ts): the O's top up and hop, and the last one floods the
+ * screen. The remote is handed over as the flood covers it, and the flood clears off a screen that is
+ * complete and still. A key pressed before then is not acted on (except Back: a set being switched off
+ * is never held), so nothing queues up behind the build.
  *
- * NEVER STUCK. This is a promise about smoothness, not a gate on content: at CAP_MS the splash goes
+ * THE FINALE IS THE SETTLING TIME TOO. With all of the above true, the reveal used to wait for the main
+ * thread to go quiet as well (300ms without a long task, or 800ms ready): a television's start-up keeps
+ * throwing off small tasks for a while after the screen is built (a row measuring itself, a decode
+ * answering). The finale now starts the moment the screen is ready, runs on the compositor, and takes
+ * over two seconds to reach the hand-over, so those tasks are long over by then; waiting for them first
+ * would only add to the wait.
+ *
+ * NEVER STUCK. This is a promise about smoothness, not a gate on content: at CAP_MS the finale starts
  * whatever is still missing — a slow network, an add-on that never answers, an API that is down (the
  * home screen's own retry panel then shows). index.html carries an inline timer as well, so a bundle
  * that fails to load at all cannot leave a black screen with a logo on it. */
 
 const IS_TV = import.meta.env.MODE === 'tv';
-/** The longest the splash may hold the screen, counted from navigation start. */
+/** The longest the intro may wait before its finale, counted from navigation start. */
 const CAP_MS = 9000;
-/** How long the main thread must have gone without a long task before the reveal… */
-const QUIET_MS = 300;
-/** …or, on a set whose background work never quite stops, how long everything else must have been ready. */
-const SETTLE_MAX_MS = 800;
 const POLL_MS = 120;
-/** `#boot-splash.out` in the injected stylesheet. */
-const FADE_MS = 520;
 /** A page other than home that has drawn nothing recognisable by now is taken as drawn. */
 const OTHER_PAGE_MS = 2500;
 
-let splash: HTMLElement | null = null;
-let bar: HTMLElement | null = null;
 let rowsStaged = false;
 let done = !IS_TV;
+let revealing = false;
+/** When the last long task ended: `__bootState.quietFor`, for reading a start-up from a remote debugger. */
 let lastLong = 0;
 let progress = 0;
 const listeners = new Set<() => void>();
@@ -74,9 +77,9 @@ export function useBootDone(): boolean {
 }
 
 function setProgress(p: number) {
-  if (p <= progress || !bar) return;
+  if (p <= progress) return;
   progress = p;
-  bar.style.transform = `scaleX(${Math.min(1, p).toFixed(3)})`;
+  introProgress(p);
 }
 
 const onScreen = (el: Element) => {
@@ -131,31 +134,29 @@ function screenReady(): boolean {
   return !!document.querySelector('.tv-spot, .grid .poster, .tv-grid') || performance.now() > OTHER_PAGE_MS;
 }
 
+/** The finale; the remote is handed over when its flood covers the screen. */
 function reveal(blockers: Array<[string, EventListener]>) {
-  if (done) return;
-  done = true;
-  for (const [type, fn] of blockers) window.removeEventListener(type, fn, true);
+  if (revealing) return;
+  revealing = true;
   setProgress(1);
-  (window as Window & { __bootRevealAt?: number }).__bootRevealAt = performance.now();
-  try { performance.mark('groloo:boot-reveal'); } catch { /* no user timing */ }
-  document.documentElement.classList.remove('booting');
-  const el = splash;
-  // A beat for the bar to arrive at the end, then the fade.
-  window.setTimeout(() => {
-    el?.classList.add('out');
-    window.setTimeout(() => el?.remove(), FADE_MS + 80);
-  }, 140);
-  listeners.forEach((fn) => fn());
+  introFinish(() => {
+    done = true;
+    for (const [type, fn] of blockers) window.removeEventListener(type, fn, true);
+    (window as Window & { __bootRevealAt?: number }).__bootRevealAt = performance.now();
+    try { performance.mark('groloo:boot-reveal'); } catch { /* no user timing */ }
+    document.documentElement.classList.remove('booting');
+    listeners.forEach((fn) => fn());
+  });
 }
 
-/** Called once from main.tsx, before the first render, on the TV build. */
+/** Called once from main.tsx, before the first render. */
 export function startBootGate(): void {
-  if (!IS_TV || done) return;
-  splash = document.getElementById('boot-splash');
+  if (!IS_TV) { startWebIntro(); return; }
+  if (done) return;
+  const splash = document.getElementById('boot-splash');
   if (!splash) { done = true; return; }
-  bar = splash.querySelector<HTMLElement>('.bs-bar i');
+  introStart(splash);
   document.documentElement.classList.add('booting');
-  setProgress(0.06);
 
   /* Keys wait for the reveal. Capture phase, and registered before anything else that listens (the
    * Back resolver, spatial navigation, the rows) so a press goes no further. Back is let through. */
@@ -172,7 +173,7 @@ export function startBootGate(): void {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries()) lastLong = Math.max(lastLong, e.startTime + e.duration);
     }).observe({ entryTypes: ['longtask'] });
-  } catch { /* no longtask support: the quiet test degrades to the rest of the checks */ }
+  } catch { /* no longtask support: `quietFor` reads from the start */ }
 
   /* The title screen's code, fetched AND evaluated now, while nobody is waiting on it — the first OK on a
    * title used to pay for both (measured on the set: 441ms for the first open against ~103ms after). It
@@ -183,9 +184,8 @@ export function startBootGate(): void {
   let fonts = !document.fonts;
   document.fonts?.ready.then(() => { fonts = true; }, () => { fonts = true; });
 
-  let readySince = 0;
   const tick = () => {
-    if (done) return;
+    if (revealing) return;
     const now = performance.now();
     if (now >= CAP_MS) { reveal(blockers); return; }
     const screen = screenReady();
@@ -193,23 +193,55 @@ export function startBootGate(): void {
     if (screen) {
       const [r, t] = artState();
       artDone = r >= t;
+      // The screen is up and its pictures are arriving: past half of them, the O's pour again.
       setProgress(0.3 + (t ? (r / t) * 0.5 : 0.5));
-    } else {
-      // The build is under way: creep forward so the bar is never seen standing still.
-      setProgress(Math.min(0.28, progress + 0.012));
     }
     const net = queryClient.isFetching() === 0;
     const fontsIn = fonts && (!document.fonts || document.fonts.status !== 'loading');
     const ready = screen && artDone && net && fontsIn && code;
-    if (ready) {
-      if (!readySince) readySince = now;
-      setProgress(0.9);
-      /* Quiet, or ready for long enough: a television's start-up keeps throwing off small tasks (a
-       * row measuring itself, a picture's decode answering) for a while after the screen is built,
-       * and waiting for every last one of them would only hold a finished screen behind the splash. */
-      if (now - lastLong >= QUIET_MS || now - readySince >= SETTLE_MAX_MS) { reveal(blockers); return; }
-    } else readySince = 0;
     (window as Window & { __bootState?: unknown }).__bootState = { t: Math.round(now), screen, artDone, net, fonts: fontsIn, code, quietFor: Math.round(now - lastLong) };
+    if (ready) { reveal(blockers); return; }
+    window.setTimeout(tick, POLL_MS);
+  };
+  window.setTimeout(tick, POLL_MS);
+}
+
+/* ---- THE WEBSITE OPENS ON THE SAME INTRO, once a visit ------------------------------------------
+ *
+ * Opened on its home page, the website plays the intro too. index.html's inline check has already taken
+ * it out for a reload within the same visit, for a deep link (somebody arriving for a title, or to link
+ * a television, has somewhere to be) and for reduced motion. Nothing is gated here: no key is held and
+ * `bootDone()` stays true, so the site behaves exactly as it does without the intro, and a click or a
+ * key skips straight to the flood. The finale starts once the page underneath is drawn, its requests are
+ * in and its first-screen pictures are decoded, or at WEB_CAP_MS whatever it is still waiting on. */
+const WEB_CAP_MS = 6500;
+
+function startWebIntro(): void {
+  const el = document.getElementById('boot-splash');
+  if (!el) return;
+  introStart(el);
+  const off = () => {
+    el.removeEventListener('pointerdown', skip);
+    window.removeEventListener('keydown', skip, true);
+  };
+  const skip = () => { off(); introSkip(); };
+  el.addEventListener('pointerdown', skip);
+  window.addEventListener('keydown', skip, true);
+
+  let fonts = !document.fonts;
+  document.fonts?.ready.then(() => { fonts = true; }, () => { fonts = true; });
+  let drawnAt = 0;
+  const tick = () => {
+    if (!el.isConnected) { off(); return; }
+    const now = performance.now();
+    if (!drawnAt && document.getElementById('root')?.firstElementChild) { drawnAt = now; introProgress(0.5); }
+    // A moment after the first draw, so the page's own requests have started.
+    let ready = drawnAt > 0 && now - drawnAt >= 300 && fonts && queryClient.isFetching() === 0;
+    if (ready) {
+      const [r, t] = artState();
+      ready = r >= t;
+    }
+    if (ready || now >= WEB_CAP_MS) { introFinish(off); return; }
     window.setTimeout(tick, POLL_MS);
   };
   window.setTimeout(tick, POLL_MS);

@@ -118,10 +118,10 @@ bootLaunchIntent();
  * from effects, after this — can act on it as well. */
 installIdleWatch();
 
-/* THE TELEVISION OPENS ON ITS SPLASH and stays there until the home screen underneath is complete and
+/* THE TELEVISION OPENS ON ITS INTRO and stays there until the home screen underneath is complete and
  * still — see lib/bootGate.ts. Here, before the first render, for the same reason as the line above: its
  * key listener must be in place before anything else's, so a press during the build goes nowhere.
- * A no-op on the website, which has no splash. */
+ * The website plays the same intro once a visit, and holds nothing back for it. */
 startBootGate();
 
 createRoot(document.getElementById('root')!).render(

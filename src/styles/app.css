@@ -2748,7 +2748,8 @@
     font-size:18px;cursor:pointer;line-height:1;transition:.2s}
   .auth-dismiss:hover{color:var(--accent)}
   .auth-brand{display:flex;align-items:center;gap:12px;margin-bottom:4px}
-  .auth-logo{height:44px;width:auto;display:block;filter:drop-shadow(0 1px 5px rgba(0,0,0,.6))}
+  /* 64, not the old mark's 44: the stacked logo is two rows of letters, each about a third of its height */
+  .auth-logo{height:64px;width:auto;display:block;filter:drop-shadow(0 1px 5px rgba(0,0,0,.6))}
   .auth-word{font-size:19px;letter-spacing:.18em;font-weight:300}
   .auth-word b{font-weight:500;background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
   .auth-kicker{font-size:15px;letter-spacing:.12em;color:var(--text-muted);margin:2px 0 24px}
