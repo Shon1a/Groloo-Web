@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { apiFetch } from '../lib/api';
+import { libraryPusher } from '../lib/libraryPush';
 import { useAuth } from './auth';
 import { usePlayer } from './player';
 
@@ -58,7 +59,6 @@ function merge(a: Record<string, RatingEntry>, b: Record<string, RatingEntry>): 
   return keep;
 }
 
-let pushTimer: number | undefined;
 let lastPull = 0;
 
 interface RatingsState {
@@ -70,23 +70,19 @@ interface RatingsState {
   rate: (id: string | number, r: Thumb | null, info?: { type?: string; title?: string; genres?: string[] }) => void;
   reload: () => void;
   pull: () => Promise<void>;
+  /** Send a waiting change now (the page is going away). */
+  flush: (keepalive?: boolean) => void;
 }
 
 export const useRatings = create<RatingsState>((set, get) => {
-  const pushNow = (keepalive = false) => {
-    if (pushTimer) { clearTimeout(pushTimer); pushTimer = undefined; }
-    if (!authed()) return;
-    apiFetch('/api/library-state', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ratings: get().ratings }),
-      keepalive,
-    }).catch(() => { /* offline: the next push carries it */ });
-  };
-  const schedulePush = () => {
-    if (!authed() || pushTimer) return;
-    pushTimer = window.setTimeout(() => pushNow(false), PUSH_MS);
-  };
+  // Confirmed and retried until the server keeps it — see lib/libraryPush.ts.
+  const pusher = libraryPusher({
+    debounceMs: PUSH_MS,
+    flagKey: () => 'groloo.ratings-unsynced:' + email(),
+    body: () => JSON.stringify({ ratings: get().ratings }),
+    authed,
+  });
+  const schedulePush = pusher.schedule;
 
   return {
     ratings: read(),
@@ -108,6 +104,7 @@ export const useRatings = create<RatingsState>((set, get) => {
     reload: () => set({ ratings: read() }),
     pull: async () => {
       if (!authed()) return;
+      pusher.resume();   // unconfirmed thumbs from an earlier session first (see history.ts)
       try {
         const res = await apiFetch('/api/library-state');
         if (!res.ok) return;
@@ -118,6 +115,7 @@ export const useRatings = create<RatingsState>((set, get) => {
         lastPull = Date.now();
       } catch { /* offline — keep local */ }
     },
+    flush: (keepalive) => pusher.flush(keepalive),
   };
 });
 
@@ -131,13 +129,5 @@ if (typeof window !== 'undefined') {
   };
   window.addEventListener('visibilitychange', () => { if (!document.hidden) maybePull(); });
   window.addEventListener('focus', maybePull);
-  window.addEventListener('pagehide', () => {
-    if (pushTimer && authed()) {
-      clearTimeout(pushTimer); pushTimer = undefined;
-      apiFetch('/api/library-state', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ratings: useRatings.getState().ratings }), keepalive: true,
-      }).catch(() => {});
-    }
-  });
+  window.addEventListener('pagehide', () => useRatings.getState().flush(true));
 }
