@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api, setSessionToken } from '../lib/api';
+import { api, ApiError, getToken, setSessionToken } from '../lib/api';
 
 /* Auth — port of the vanilla auth flow (assets/js/app.js + server/auth.js). Talks
  * to /api/auth/*; the session token is mirrored to localStorage via the api client
@@ -62,6 +62,10 @@ interface AuthState {
 const jsonPost = (path: string, body: unknown) =>
   api<{ user: User; token: string }>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
+/* refresh() asks again this long after a /me that said nothing about the session. */
+const REFRESH_RETRY_MS = 30_000;
+let refreshRetry = 0;
+
 export const useAuth = create<AuthState>((set) => ({
   user: null,
   ready: false,
@@ -72,11 +76,19 @@ export const useAuth = create<AuthState>((set) => ({
   linkCode: '',
 
   refresh: async () => {
+    window.clearTimeout(refreshRetry);
     try {
       const { user } = await api<{ user: User | null }>('/api/auth/me');
       set({ user: user || null });
-    } catch {
-      set({ user: null });
+    } catch (e) {
+      /* No answer about the session: the API was unreachable, or it answered 503 because it
+       * could not read accounts (ACCOUNTS_UNAVAILABLE). Neither says the token is bad, so
+       * keep it, and the user already shown, and ask again — a device left on, like the TV,
+       * then comes back signed in by itself instead of waiting for someone to restart it.
+       * A 4xx is a real answer and still means signed out. */
+      const noAnswer = !(e instanceof ApiError) || e.status >= 500 || e.status === 429;
+      if (!noAnswer) set({ user: null });
+      else if (getToken()) refreshRetry = window.setTimeout(() => { void useAuth.getState().refresh(); }, REFRESH_RETRY_MS);
     } finally {
       set({ ready: true });
     }
@@ -100,6 +112,7 @@ export const useAuth = create<AuthState>((set) => ({
     setSessionToken(token); set({ user, authOpen: false });
   },
   logout: async () => {
+    window.clearTimeout(refreshRetry);
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
     setSessionToken(null); set({ user: null });
   },
