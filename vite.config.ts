@@ -1,57 +1,40 @@
 import { fileURLToPath, URL } from 'node:url'
-import { readFileSync } from 'node:fs'
 import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import postcss from 'postcss'
 import { execSync } from 'node:child_process'
+import { introMarkup } from './src/lib/bootIntroMarkup.ts'
 
-/* ---- THE FIRST FRAME, AND THE TELEVISION'S SPLASH ---------------------------------------------
+/* ---- THE FIRST FRAME, AND THE INTRO -------------------------------------------------------------
  *
  * BOTH BUILDS: the page is black from its very first frame. Until the stylesheet arrives a document
  * is white, and a white frame between the launcher and the app is the brightest thing a dark room
  * sees all evening (captured on the live site: one full white frame, then black).
  *
- * THE TV BUILD: a splash in the markup itself — the Groloo mark breathing on black, a hairline of
- * progress beneath it — so it is on screen before a single script has run, and it stays until the app
- * underneath is complete and still (src/lib/bootGate.ts says when, and why). Everything that moves
- * in it is opacity or a transform, so it keeps moving smoothly however busy the main thread is with
- * the build it is covering. The inline timer is the backstop for a bundle that never runs at all.
- * Monochrome, like everything else in the app: white on black. */
-const GROLOO_MARK = readFileSync(fileURLToPath(new URL('./public/assets/groloo-logo.svg', import.meta.url)), 'utf8')
-  .replace(/<\?xml[^>]*>/, '').replace(/ width="100" height="100"/, '').replace(/ role="img" aria-label="groloo"/, ' aria-hidden="true"')
-const SPLASH_CSS = [
-  '#boot-splash{position:fixed;inset:0;z-index:2147483000;background:#000;display:flex;flex-direction:column;',
-  'align-items:center;justify-content:center;gap:5vh;opacity:1;transition:opacity .52s cubic-bezier(.4,0,.2,1)}',
-  '#boot-splash.out{opacity:0;pointer-events:none}',
-  '#boot-splash .bs-mark{width:15vh;height:15vh;animation:bsBreath 2.6s ease-in-out infinite}',
-  '#boot-splash .bs-mark svg{display:block;width:100%;height:100%}',
-  '@keyframes bsBreath{0%,100%{opacity:.5;transform:scale(.97)}50%{opacity:1;transform:scale(1)}}',
-  '#boot-splash .bs-bar{width:14vw;height:.3vh;min-height:2px;border-radius:2px;background:rgba(255,255,255,.12);overflow:hidden}',
-  '#boot-splash .bs-bar i{display:block;width:100%;height:100%;background:#fff;transform-origin:0 50%;',
-  'transform:scaleX(.02);transition:transform .5s cubic-bezier(.2,.8,.2,1)}',
-  '@media (prefers-reduced-motion:reduce){#boot-splash .bs-mark{animation:none}}',
-].join('')
+ * THE INTRO, in the markup itself, so it is on screen before a single script has run: the stacked
+ * GROLOO lands, its depth pops out, its tall O's fill as the app loads, and the last one floods the
+ * screen into the app (src/lib/bootIntroMarkup.ts draws it, src/lib/bootIntro.ts plays it, and
+ * src/lib/bootGate.ts says when). Everything that moves in it is opacity or a transform, so it keeps
+ * moving smoothly however busy the main thread is with the build it is covering. Its pink-violet is
+ * the logo's own: the one colour in the app that is not a state.
+ *
+ *   TV       every launch. The inline timer is the backstop for a bundle that never runs at all.
+ *   website  once a visit, on the home page: a reload, a deep link (a shared title, the TV-linking
+ *            page) and reduced motion take it out before its first frame, and a click skips it. */
+const INTRO = introMarkup()
+const ONCE_A_VISIT = "(function(){var s=document.getElementById('boot-splash');try{if(sessionStorage.getItem('groloo.intro')||!/^(#\\/?)?$/.test(location.hash)||matchMedia('(prefers-reduced-motion: reduce)').matches){s.remove();return}sessionStorage.setItem('groloo.intro','1')}catch(e){}})();"
+const BACKSTOP = "setTimeout(function(){var s=document.getElementById('boot-splash');if(s){s.className='out';setTimeout(function(){s.remove()},600)}},14000)"
 function bootSplash(mode: string): Plugin {
   return {
     name: 'groloo-boot-splash',
     transformIndexHtml() {
       const tags: HtmlTagDescriptor[] = [
         { tag: 'style', children: 'html,body{background:#000}', injectTo: 'head-prepend' },
+        { tag: 'style', children: INTRO.css, injectTo: 'head' },
+        { tag: 'div', attrs: { id: 'boot-splash', 'aria-hidden': 'true' }, injectTo: 'body-prepend', children: INTRO.html },
+        { tag: 'script', injectTo: 'body-prepend', children: (mode === 'tv' ? '' : ONCE_A_VISIT) + BACKSTOP },
       ]
-      if (mode === 'tv') {
-        tags.push(
-          { tag: 'style', children: SPLASH_CSS, injectTo: 'head' },
-          {
-            tag: 'div', attrs: { id: 'boot-splash', 'aria-hidden': 'true' }, injectTo: 'body-prepend',
-            children: `<div class="bs-mark">${GROLOO_MARK}</div><div class="bs-bar"><i></i></div>`,
-          },
-          {
-            tag: 'script', injectTo: 'body-prepend',
-            children: "setTimeout(function(){var s=document.getElementById('boot-splash');if(s){s.className='out';setTimeout(function(){s.remove()},600)}},14000)",
-          },
-        )
-      }
       return tags
     },
   }
