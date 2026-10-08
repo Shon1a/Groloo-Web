@@ -66,7 +66,23 @@ const jsonPost = (path: string, body: unknown) =>
 const REFRESH_RETRY_MS = 30_000;
 let refreshRetry = 0;
 
-export const useAuth = create<AuthState>((set) => ({
+/* The last account the server confirmed for the stored token. While /me cannot answer — the
+ * API down, or up without its database — the app carries on as this account instead of as a
+ * guest: every synced store keys its local data by the signed-in email, so a "guest" stretch
+ * would file the progress watched meanwhile under 'guest', where it never reaches the account.
+ * Kept beside the token and dropped with it; a real answer from /me always overrides it. */
+const USER_KEY = 'groloo_user';
+function rememberUser(u: User | null) {
+  try { if (u) localStorage.setItem(USER_KEY, JSON.stringify(u)); else localStorage.removeItem(USER_KEY); } catch { /* private mode */ }
+}
+function rememberedUser(): User | null {
+  try {
+    const u = JSON.parse(localStorage.getItem(USER_KEY) || 'null') as User | null;
+    return u && typeof u.id === 'string' && typeof u.email === 'string' ? u : null;
+  } catch { return null; }
+}
+
+export const useAuth = create<AuthState>((set, get) => ({
   user: null,
   ready: false,
   config: null,
@@ -80,15 +96,19 @@ export const useAuth = create<AuthState>((set) => ({
     try {
       const { user } = await api<{ user: User | null }>('/api/auth/me');
       set({ user: user || null });
+      rememberUser(user || null);
     } catch (e) {
       /* No answer about the session: the API was unreachable, or it answered 503 because it
        * could not read accounts (ACCOUNTS_UNAVAILABLE). Neither says the token is bad, so
-       * keep it, and the user already shown, and ask again — a device left on, like the TV,
-       * then comes back signed in by itself instead of waiting for someone to restart it.
-       * A 4xx is a real answer and still means signed out. */
+       * keep it, carry on as the account last confirmed for it, and ask again — a device
+       * left on, like the TV, then never drops to guest at all. A 4xx is a real answer and
+       * still means signed out. */
       const noAnswer = !(e instanceof ApiError) || e.status >= 500 || e.status === 429;
-      if (!noAnswer) set({ user: null });
-      else if (getToken()) refreshRetry = window.setTimeout(() => { void useAuth.getState().refresh(); }, REFRESH_RETRY_MS);
+      if (!noAnswer) { set({ user: null }); rememberUser(null); }
+      else if (getToken()) {
+        if (!get().user) { const held = rememberedUser(); if (held) set({ user: held }); }
+        refreshRetry = window.setTimeout(() => { void useAuth.getState().refresh(); }, REFRESH_RETRY_MS);
+      }
     } finally {
       set({ ready: true });
     }
@@ -98,23 +118,23 @@ export const useAuth = create<AuthState>((set) => ({
   },
   login: async (email, password) => {
     const { user, token } = await jsonPost('/api/auth/login', { email, password });
-    setSessionToken(token); set({ user, authOpen: false });
+    setSessionToken(token); rememberUser(user); set({ user, authOpen: false });
   },
   signup: async (d) => {
     const { user, token } = await jsonPost('/api/auth/signup', d);
-    setSessionToken(token); set({ user, authOpen: false });
+    setSessionToken(token); rememberUser(user); set({ user, authOpen: false });
   },
   googleLogin: async (credential) => {
     const { user, token } = await jsonPost('/api/auth/google', { credential });
-    setSessionToken(token); set({ user, authOpen: false });
+    setSessionToken(token); rememberUser(user); set({ user, authOpen: false });
   },
   adoptSession: (token, user) => {
-    setSessionToken(token); set({ user, authOpen: false });
+    setSessionToken(token); rememberUser(user); set({ user, authOpen: false });
   },
   logout: async () => {
     window.clearTimeout(refreshRetry);
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
-    setSessionToken(null); set({ user: null });
+    setSessionToken(null); rememberUser(null); set({ user: null });
   },
   openAuth: (intent) => set({ authOpen: true, intent: intent ?? null }),
   closeAuth: () => set({ authOpen: false, intent: null }),

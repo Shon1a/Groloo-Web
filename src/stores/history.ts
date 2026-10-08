@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { apiFetch } from '../lib/api';
+import { libraryPusher } from '../lib/libraryPush';
 import { useAuth } from './auth';
 import { usePlayer } from './player';
 import { heartLib, type Library } from '../lib/heartLibrary';
@@ -80,8 +81,6 @@ function mergeTomb(a: Record<string, number>, b: Record<string, number>): Record
   return out;
 }
 
-let pushTimer: number | undefined;
-let pushPending = false;
 let lastPull = 0;
 
 interface HistoryState {
@@ -100,14 +99,15 @@ interface HistoryState {
 export const useHistory = create<HistoryState>((set, get) => {
   const persist = () => { writeJSON(hKey(), get().history); writeJSON(pKey(), get().progress); writeJSON(rKey(), get().removed); };
 
-  const pushNow = (keepalive?: boolean) => {
-    if (pushTimer) { clearTimeout(pushTimer); pushTimer = undefined; }
-    pushPending = false;
-    if (!authed()) return;
-    const body = JSON.stringify({ history: get().history, progress: get().progress, removed: get().removed });
-    apiFetch('/api/library-state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, keepalive: !!keepalive }).catch(() => {});
-  };
-  const schedulePush = () => { if (!authed()) return; pushPending = true; if (!pushTimer) pushTimer = window.setTimeout(() => pushNow(false), PUSH_MS); };
+  // Confirmed and retried until the server keeps it — see lib/libraryPush.ts.
+  const pusher = libraryPusher({
+    debounceMs: PUSH_MS,
+    flagKey: () => 'sf:history-unsynced:' + email(),
+    body: () => JSON.stringify({ history: get().history, progress: get().progress, removed: get().removed }),
+    authed,
+  });
+  const pushNow = pusher.now;
+  const schedulePush = pusher.schedule;
 
   return {
     history: readJSON(hKey(), [] as WatchEntry[]),
@@ -170,6 +170,9 @@ export const useHistory = create<HistoryState>((set, get) => {
 
     pull: async () => {
       if (!authed()) return;
+      // First, not after a successful pull: progress an earlier session saved here but never
+      // got confirmed goes up even while the server cannot answer reads, and keeps retrying.
+      pusher.resume();
       try {
         const r = await apiFetch('/api/library-state');
         if (!r.ok) return;
@@ -187,7 +190,7 @@ export const useHistory = create<HistoryState>((set, get) => {
       } catch { /* offline — keep local */ }
     },
 
-    flush: (keepalive) => { if (pushPending) pushNow(keepalive); },
+    flush: (keepalive) => pusher.flush(keepalive),
   };
 });
 

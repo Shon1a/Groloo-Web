@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { MediaItem } from '../lib/types';
 import { apiFetch } from '../lib/api';
+import { libraryPusher } from '../lib/libraryPush';
 import { useAuth } from './auth';
 import { usePlayer } from './player';
 
@@ -78,21 +79,19 @@ interface LibraryState {
   flush: (keepalive?: boolean) => void;
 }
 
-let pushTimer: number | undefined;
-let pushPending = false;
 let lastPull = 0;
 
 export const useLibrary = create<LibraryState>((set, get) => {
   const persist = () => { writeJSON(lKey(), get().mylist); writeJSON(rKey(), get().removed); };
 
-  const pushNow = (keepalive?: boolean) => {
-    if (pushTimer) { clearTimeout(pushTimer); pushTimer = undefined; }
-    pushPending = false;
-    if (!authed()) return;
-    const body = JSON.stringify({ mylist: get().mylist, mylistRemoved: get().removed });
-    apiFetch('/api/library-state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, keepalive: !!keepalive }).catch(() => {});
-  };
-  const schedulePush = () => { if (!authed()) return; pushPending = true; if (!pushTimer) pushTimer = window.setTimeout(() => pushNow(false), PUSH_MS); };
+  // Confirmed and retried until the server keeps it — see lib/libraryPush.ts.
+  const pusher = libraryPusher({
+    debounceMs: PUSH_MS,
+    flagKey: () => 'sf:mylist-unsynced:' + email(),
+    body: () => JSON.stringify({ mylist: get().mylist, mylistRemoved: get().removed }),
+    authed,
+  });
+  const schedulePush = pusher.schedule;
 
   return {
     mylist: loadList(),
@@ -122,6 +121,7 @@ export const useLibrary = create<LibraryState>((set, get) => {
 
     pull: async () => {
       if (!authed()) return;
+      pusher.resume();   // unconfirmed changes from an earlier session first (see history.ts)
       try {
         const r = await apiFetch('/api/library-state');
         if (!r.ok) return;
@@ -134,7 +134,7 @@ export const useLibrary = create<LibraryState>((set, get) => {
       } catch { /* offline — keep local */ }
     },
 
-    flush: (keepalive) => { if (pushPending) pushNow(keepalive); },
+    flush: (keepalive) => pusher.flush(keepalive),
   };
 });
 
