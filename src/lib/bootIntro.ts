@@ -145,6 +145,19 @@ function cover(): void {
   fn?.();
 }
 
+/* ---- THE FIRST PRESS CLEARS THE FLOOD AT ONCE ------------------------------------------------------
+ * The remote is handed over as the flood covers the screen, and the flood then takes CLEAR_MS to fade
+ * off the app. A viewer who presses straight away — the remote has been held back for seconds, so many
+ * do — started the page's first scroll underneath a screen-sized layer still being blended over all of
+ * it: on a television's GPU that is the one kind of frame it can least afford, at the one moment the
+ * app is being judged. So a key pressed while it is still clearing takes it away on the spot; the app
+ * is already fully on screen beneath it, so nothing is lost but the last of a fade. */
+export function introClearNow(): void {
+  if (state !== 'covered' || !root?.isConnected) return;
+  root.getAnimations({ subtree: true }).forEach((a) => a.cancel());
+  root.remove();
+}
+
 /** The hop and the flood, all scheduled now. A skip has no hop, and floods at once. */
 function finale(quick: boolean): void {
   const el = root!;
