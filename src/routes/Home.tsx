@@ -17,7 +17,7 @@ import PicksRow from '../components/PicksRow';
 import AddonRows from '../components/AddonRows';
 import { useModal, openItem } from '../stores/modal';
 import { useLibrary } from '../stores/library';
-import { registerRowStager } from '../lib/tvRowRegistry';
+import { registerRowStager, prepareRowWindow, firstRow } from '../lib/tvRowRegistry';
 import { bootDone, bootRowsStaged } from '../lib/bootGate';
 import type { MediaItem } from '../lib/types';
 
@@ -95,8 +95,15 @@ function StagedStrips({ rows, tail, onSelect, onSeeAll }: {
   }, [total]);
   useEffect(() => {
     if (!IS_TV) return;
-    // Every row is in: the splash may go once their pictures are (lib/bootGate.ts).
-    if (limit === Infinity) { bootRowsStaged(); return; }
+    if (limit === Infinity) {
+      // Every row is in: the splash may go once their pictures are (lib/bootGate.ts).
+      bootRowsStaged();
+      /* Coming back to Home later (from a browse page) remounts every row with its rail skipped, and the
+       * remote lands on the featured billboard: prepare the rows under it now, as the start-up intro's
+       * finale does for a launch (TvSpatialNav), rather than in the frames of the first Down. */
+      if (bootDone()) prepareRowWindow(firstRow());
+      return;
+    }
     const id = window.setTimeout(() => startTransition(() => setLimit(grow(limit))), STAGE_GAP_MS);
     return () => window.clearTimeout(id);
   }, [limit, grow]);

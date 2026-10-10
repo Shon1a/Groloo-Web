@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { isBackKey } from './tvKeys';
 import { queryClient } from './queryClient';
 import { loadDetailModal } from '../components/DetailModal/loadDetailModal';
-import { introFinish, introProgress, introSkip, introStart } from './bootIntro';
+import { introClearNow, introFinish, introProgress, introSkip, introStart } from './bootIntro';
 
 /* ---- THE TELEVISION OPENS READY ------------------------------------------------------------------
  *
@@ -66,6 +66,18 @@ export function bootRowsStaged(): void { rowsStaged = true; }
 
 /** True once the splash has gone (always true off the television). */
 export function bootDone(): boolean { return done; }
+
+/** True from the moment the screen underneath is ready and the intro's finale starts, until the splash
+ *  has gone: every key is still held back, the first screen is complete, and the network is idle — the
+ *  quietest two seconds of a launch, which background work can have (lib/artPrefetch). */
+export function bootRevealing(): boolean { return revealing && !done; }
+
+const revealHooks: Array<() => void> = [];
+/** Run `fn` when the finale starts — at once if it already has (or there is no splash at all). */
+export function onBootRevealing(fn: () => void): void {
+  if (revealing || done) { fn(); return; }
+  revealHooks.push(fn);
+}
 
 /** For components that should wait for the reveal — a trailer must not start under the splash. */
 export function useBootDone(): boolean {
@@ -138,10 +150,15 @@ function screenReady(): boolean {
 function reveal(blockers: Array<[string, EventListener]>) {
   if (revealing) return;
   revealing = true;
+  for (const fn of revealHooks.splice(0)) {
+    try { fn(); } catch (e) { console.error('[groloo] reveal hook failed', e); }
+  }
   setProgress(1);
   introFinish(() => {
     done = true;
     for (const [type, fn] of blockers) window.removeEventListener(type, fn, true);
+    /* A press made while the flood is still clearing clears it at once (lib/bootIntro.ts). */
+    window.addEventListener('keydown', introClearNow, { capture: true, once: true });
     (window as Window & { __bootRevealAt?: number }).__bootRevealAt = performance.now();
     try { performance.mark('groloo:boot-reveal'); } catch { /* no user timing */ }
     document.documentElement.classList.remove('booting');

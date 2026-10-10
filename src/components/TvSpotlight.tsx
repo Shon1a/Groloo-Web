@@ -24,6 +24,7 @@ import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
 import { barItemHere } from '../lib/tvBar';
 import { prefetchArt } from '../lib/artPrefetch';
+import { whenQuiet } from '../lib/tvQuiet';
 import { TvRowStage, SLIDE_MS, PRESS_SETTLED_MS, type StageSlot, type StagePeek } from '../lib/tvRowStage';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
@@ -204,8 +205,16 @@ const endsBefore = (p: number, endAt: number, stops: number): number => Math.flo
  * because one card each way is what a press of Left or Right reaches, and the point is to have the
  * trailer in hand BEFORE the next rest rather than to cache the row. */
 const TRAILER_PREFETCH_SPAN = 1;
-/** How long the remote must rest on a card before its title screen is made ready (see `warmDetail`). */
-const DETAIL_WARM_MS = 600;
+/** How long the remote must have been still, on a card, before its title screen is made ready (see
+ *  `warmDetail`). Longer than a vertical press's scroll (~450ms) and the row's focus commit, so the
+ *  warm's requests and decodes cannot land in the frames of the move that reached the card. */
+const DETAIL_WARM_MS = 900;
+/** How long the remote must have been still on a row before the rest of its titles are fetched
+ *  (`onOpen` — TvHomeRow's catalogue page). Same reasoning: not inside the next press's scroll. */
+const OPEN_FETCH_QUIET_MS = 900;
+/** How long the remote must have been still before the row it is on takes its compositor layers and
+ *  the row it left gives them up (`primeSoon`): past the end of a vertical press's scroll (~450ms). */
+const PRIME_QUIET_MS = 600;
 /* THE YOUTUBE EMBED IS GONE FROM THIS ROW, AND IT WAS THE MOST EXPENSIVE THING ON THE SCREEN.
  *
  * It was a cross-origin iframe: a second player with its own JS, its own decoder and its own
@@ -1012,6 +1021,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const el = sectionRef.current;
     if (el) myRow.current = rowIndexOf(el);
   });
+  /** This row's distance from the row the remote is on (`focused`, -1 when it is on none) — how the
+   *  art prefetch ranks this row's pictures (lib/artPrefetch). A ref read, so it costs nothing to ask. */
+  const rowDistance = useRef((focused: number): number => {
+    const me = myRow.current;
+    if (me < 0) return 99;
+    return focused < 0 ? me : Math.abs(me - focused);
+  }).current;
   const inWindow = !rowsVirtual || myRow.current < 0 || rowInWindow(myRow.current, activeRow);
   /** Artwork is allowed only when the row is BOTH near the viewport and inside the window. */
   const artOn = visible && inWindow;
@@ -1145,6 +1161,31 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * as `--active` and `liveActive` above — one idea, applied twice. */
   const openRef = useRef(false);
   const openCommit = useRef(0);
+  /* ---- THE ROW'S COMPOSITOR LAYERS FOLLOW THE REMOTE ONLY ONCE IT IS STILL ----------------------
+   * The open row promotes its strip and its two billboard layers (`.tv-spot.is-primed` in tv.css), so
+   * the first slide or dissolve after the remote arrives does not have to build and raster a layer on
+   * its own press. Those promotions used to hang off the focus COMMIT, 420ms after a vertical press —
+   * the tail of that press's scroll — and the row being left lost its own in the same moment, while it
+   * was still scrolling off the screen: two rows' worth of layers built, torn down and rastered again
+   * (the strip's content back into the page's layer) at the end of every vertical move, on the GPU this
+   * set has least of.
+   *
+   * Now the class follows the remote only when it has been still for PRIME_QUIET_MS (lib/tvQuiet): a
+   * walk down the page builds and destroys no layers at all, the row the viewer stops on is promoted a
+   * beat after they stop, and the row they left gives its layers up then, off screen. The live state is
+   * `primedRef`, re-asserted after every render like `is-open` (React's className write would drop it). */
+  const primedRef = useRef(false);
+  const primeCancel = useRef<(() => void) | null>(null);
+  const primeSoon = () => {
+    primeCancel.current?.();
+    primeCancel.current = whenQuiet(() => {
+      primeCancel.current = null;
+      if (primedRef.current === openRef.current) return;
+      primedRef.current = openRef.current;
+      sectionRef.current?.classList.toggle('is-primed', primedRef.current);
+    }, PRIME_QUIET_MS);
+  };
+  useEffect(() => () => { primeCancel.current?.(); }, []);
   /** Clears `is-fast` once the remote stops chaining — see the note in `step`. */
   const fastOff = useRef(0);
   const railRef = useRef<HTMLDivElement>(null);
@@ -1470,11 +1511,23 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * landing on the frames that press was animating. Armed by the press itself (`step`), it fires only
    * when the remote has really stopped for DETAIL_WARM_MS, and it reads where the walk IS then. A held
    * key re-arms it on every repeat, so a walk past a card still warms nothing. */
+  /* ---- AND "STOPPED" MEANS THE REMOTE, NOT THIS ROW ---------------------------------------------
+   * The warm was a timer per row, armed when the row's focus COMMITTED (420ms after the press that
+   * reached it) and cancelled only when the row's loss of focus committed in turn — 420ms after the
+   * press that LEFT it. At the pace of somebody walking down the page, a press a second, it therefore
+   * fired just after the next press, every time: a detail request, a backdrop and a wordmark decoded,
+   * five faces, and for a series a season and its stills, all landing in the frames of the scroll that
+   * press had started. Measured on the first walk down a fresh home screen, that and its siblings were
+   * most of what made the first walk heavier than the second.
+   *
+   * So it waits for the REMOTE to have been still for DETAIL_WARM_MS (any key anywhere pushes it back,
+   * lib/tvQuiet), it is cancelled the moment focus leaves the row rather than a commit later, and its
+   * pictures are only decoded if the viewer is still on that card when the detail arrives. */
   const warmDetail = useWarmDetail();
-  const detailWarmId = useRef(0);
+  const detailWarmCancel = useRef<(() => void) | null>(null);
   const detailWarmLatest = useRef<() => void>(() => {});
   detailWarmLatest.current = () => {
-    if (!open || !artOn) return;
+    if (!openRef.current || !artOn) return;
     const at = liveActive.current;
     const it = at < n ? list[at] : undefined;
     if (!it) return;
@@ -1482,17 +1535,18 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * is warmed on that one — ContinueRow's `openEntry` reads the same history entry. */
     const e = resumeOf ? useHistory.getState().history.find((h) => String(h.id) === String(it.id)) : undefined;
     const resumeEp = e && e.season != null && e.episode != null ? { season: e.season, episode: e.episode } : undefined;
-    warmDetail(withArt(it), resumeEp);
+    warmDetail(withArt(it), resumeEp, () => openRef.current && liveActive.current === at);
   };
+  const cancelDetailWarm = () => { detailWarmCancel.current?.(); detailWarmCancel.current = null; };
   const armDetailWarm = () => {
-    window.clearTimeout(detailWarmId.current);
-    detailWarmId.current = window.setTimeout(() => { detailWarmId.current = 0; detailWarmLatest.current(); }, DETAIL_WARM_MS);
+    cancelDetailWarm();
+    detailWarmCancel.current = whenQuiet(() => { detailWarmCancel.current = null; detailWarmLatest.current(); }, DETAIL_WARM_MS);
   };
   /* Arriving on the row with the remote is a rest like any other. */
   useEffect(() => {
     if (!open || !artOn) return;
     armDetailWarm();
-    return () => { window.clearTimeout(detailWarmId.current); detailWarmId.current = 0; };
+    return cancelDetailWarm;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, artOn]);
 
@@ -1524,11 +1578,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       if (d === 0) urls.push(billboardSrcOf(a, !!enrich));
       urls.push(tilePictureOf(a).src, logoOf(a) || '');
     }
-    prefetchArt(urls, () => {
-      const focused = rowIndexOf((document.activeElement?.closest('.tv-spot') as HTMLElement | null) ?? null);
-      if (myRow.current < 0) return 99;
-      return focused < 0 ? myRow.current : Math.abs(myRow.current - focused);
-    });
+    prefetchArt(urls, rowDistance);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artOn, list, n]);
 
@@ -1547,7 +1597,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       const a = withArt(it);
       urls.push(tilePictureOf(a).src, logoOf(a) || '');
     }
-    prefetchArt(urls, () => 0);
+    /* Ranked like any row's: first while the remote is on this row, and no longer once it has left. */
+    prefetchArt(urls, rowDistance);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, artOn, n, list]);
 
@@ -1650,7 +1701,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * Written to the node rather than through a class, for the reason every other write in
        * this function is: a tile must not re-render to load a picture. The node is created for
        * one title at one position and destroyed with it, so it has no later fade to lose. */
-      const fade = tileFadeAlways() || firstPromote.current;
+      /* AND THE FIRST PASS ONLY FADES IF IT CAN BE SEEN. A row is now given its artwork while it is still
+       * a few rows away (the row window, and the finale of the start-up intro for the first rows), so its
+       * first pass usually happens off screen — two dozen opacity transitions per row, each with its
+       * run/start/end events and a style pass on every frame they live, on the first walk down a fresh
+       * home screen, for a fade nobody is looking at. Read in an idle callback, where layout is clean. */
+      let fade = tileFadeAlways();
+      if (!fade && firstPromote.current) {
+        const r = sectionRef.current?.getBoundingClientRect();
+        fade = !!r && r.bottom > 0 && r.top < window.innerHeight;
+      }
       firstPromote.current = false;
       for (const img of imgs) {
         if (!fade) img.style.transition = 'none';
@@ -2178,8 +2238,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     }
     /* `is-open` is owned by the node too, for the reason above: it is deliberately NOT in the
      * rendered className, so a render triggered by anything else cannot write a stale value over
-     * the class the focus handler already set. */
+     * the class the focus handler already set. `is-primed` likewise (see `primeSoon`). */
     sectionRef.current?.classList.toggle('is-open', openRef.current);
+    sectionRef.current?.classList.toggle('is-primed', primedRef.current);
   });
 
   /* ---- FOCUS PAINTS IMMEDIATELY, COMMITS LATER ----------------------------------------------
@@ -2194,6 +2255,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const setOpenNow = (v: boolean) => {
     openRef.current = v;
     sectionRef.current?.classList.toggle('is-open', v);
+    /* Leaving: nothing owed to this row's resting card is wanted any more — not in 420ms, now. */
+    if (!v) cancelDetailWarm();
+    primeSoon();
     if (openCommit.current) window.clearTimeout(openCommit.current);
     openCommit.current = window.setTimeout(() => {
       openCommit.current = 0;
@@ -2221,7 +2285,15 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * Held in a ref so a parent that rebuilds the callback every render cannot re-run the effect. */
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
-  useEffect(() => { if (open) onOpenRef.current?.(); }, [open]);
+  /* AND ONLY ONCE THE REMOTE IS STILL ON IT. "First focus" was the commit 420ms after the press that
+   * reached the row, which at a walking pace is just before the next press — so the page request, the
+   * longer list it hands back and the render of it all landed in the next press's scroll, once for every
+   * row a first walk passed through. The viewer who stops here gets it 900ms after their last press;
+   * the one walking past never asks for it. */
+  useEffect(() => {
+    if (!open) return;
+    return whenQuiet(() => onOpenRef.current?.(), OPEN_FETCH_QUIET_MS);
+  }, [open]);
 
   /* ---- LOADING MORE NO LONGER MOVES THE STRIP AT ALL ------------------------------------------
    * There used to be a layout-effect re-seat here: with the strip rendered as two copies, every
@@ -2430,7 +2502,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         if (!e.currentTarget.contains(e.relatedTarget as Node)) stageRef.current?.playFront();
         setOpenNow(true);
       }}
-      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpenNow(false); }}
+      onBlur={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        /* Leaving: its callouts stop (and stand ready to play again, with no forced restart, if the remote
+         * comes back) — a row scrolling away must not keep the main thread animating its icons. */
+        stageRef.current?.quietFront();
+        setOpenNow(false);
+      }}
     >
       {/* A plain heading. The web rail's "see all" lives here; on a TV it is the card at the end
           of the strip instead — see the note above `canSeeAll`. */}
