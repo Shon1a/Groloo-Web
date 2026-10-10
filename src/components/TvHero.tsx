@@ -72,8 +72,9 @@ const ADVANCE_MS = 7000;
 const HERO_DWELL_MS = 3000;
 /** The detail warm (OK opens a finished title screen) waits for the same kind of stillness as a row's. */
 const HERO_WARM_QUIET_MS = 900;
-/** The callouts' icons make their move once the remote is still (see tvRowStage ICON_QUIET_MS). */
-const HERO_ICON_QUIET_MS = 700;
+/** The callouts wait for a still remote, then the tab and its icon arrive together (see tvRowStage
+ *  CALLOUT_QUIET_MS). */
+const HERO_CALLOUT_QUIET_MS = 700;
 
 /* The card is at most ~1750 CSS px wide on a 1080p panel, so w1280 is the right rendition —
  * heroBgUrl's job is the web build's full-bleed hero and `original` is a 4K decode a TV cannot
@@ -265,13 +266,16 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused, restingOn?.id, warmDetail, bootedForWarm]);
 
-  /* The callouts' icons: their move waits for the remote to be still (see HERO_ICON_QUIET_MS). */
-  const [iconsGo, setIconsGo] = useState(false);
+  /* The callouts: hidden until the remote has been still a moment, then the tab and its icon arrive as
+   * one (HERO_CALLOUT_QUIET_MS) — and a slide that changes under a still remote brings its own at once.
+   * Held as the slide they were let in for, so a new slide or a new visit starts hidden on its very first
+   * render: a flag reset in an effect let the new slide mount with the old one's entrance for a render. */
+  const [calloutsFor, setCalloutsFor] = useState(-1);
   useEffect(() => {
-    setIconsGo(false);
-    if (!focused) return;
-    return whenQuiet(() => setIconsGo(true), HERO_ICON_QUIET_MS);
+    if (!focused) { setCalloutsFor(-1); return; }
+    return whenQuiet(() => setCalloutsFor(active), HERO_CALLOUT_QUIET_MS, true);
   }, [focused, active]);
+  const calloutsGo = focused && calloutsFor === active;
 
   useEffect(() => {
     setDwelt(null);
@@ -443,9 +447,10 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
         {/* INFO AT A GLANCE — "#1 in Movies This Week", "New Season", "Emmy Award Winner" — in the
             billboard's bottom-right corner, the reference's place for them: the wordmark has the
             bottom-left. They keep the copy's hours (tv.css, THE CALLOUTS GO WITH THE COPY): hidden at
-            rest and while a trailer plays, in when the remote arrives — and `rise` only then, so
-            their entrance plays where it can be seen. Keyed on the slide so they change with it. */}
-        <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} rise={focused} icons={focused && iconsGo} className="on-art" />
+            rest and while a trailer plays, in once the remote has stopped here — and `rise` only then,
+            so the tab and its icon make their entrance together, where it can be seen. Keyed on the
+            slide so they change with it. */}
+        <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} rise={calloutsGo} className="on-art" />
 
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
         <div className="tv-hero-copy" key={`copy-${active}`}>
