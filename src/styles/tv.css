@@ -657,6 +657,29 @@
     max-height .44s cubic-bezier(.2, .7, .2, 1),
     opacity .34s ease .06s;
 }
+/* ---- BUT NOT WHILE THE PAGE IS MOVING -----------------------------------------------------------
+   The fold and the unfold animate `max-height`, which is a LAYOUT on every frame — the one kind of
+   animation the compositor cannot run — and both used to coincide with the page's own scroll: Down off
+   the billboard folded it for 440ms while the page carried it off the top of the screen (traced at
+   startup: the first press of a session, every time), and Up onto it unfolded it while the page brought
+   it back down.
+     · LEAVING, it folds at once. The page is taking it off the screen; nobody watches it fold.
+     · ARRIVING, it waits out most of the scroll (~450ms) and then unfolds, so the billboard lands first
+       and its copy opens on a still card — one movement after the other rather than both at once. */
+.tv-hero:not(.is-focused) .tv-hero-meta,
+.tv-hero:not(.is-focused) .tv-hero-reveal {
+  transition: none;
+}
+.tv-hero.is-focused .tv-hero-meta {
+  transition:
+    max-height .44s cubic-bezier(.2, .7, .2, 1) .32s,
+    opacity .3s ease .32s;
+}
+.tv-hero.is-focused .tv-hero-reveal {
+  transition:
+    max-height .44s cubic-bezier(.2, .7, .2, 1) .32s,
+    opacity .34s ease .38s;
+}
 
 .tv-hero-plot {
   margin: 14px 0 0;
@@ -1133,8 +1156,16 @@
  * on the row, so they belong on the settled state rather than the instant one. `is-settled` is
  * rendered from React state and commits after the scroll (OPEN_COMMIT_MS in TvSpotlight); the
  * instant `is-open` class is left carrying only the two cheap visual rules — the heading colour
- * and the info panel. */
-.tv-spot.is-settled .tv-spot-strip { will-change: transform; }
+ * and the info panel.
+ *
+ * ---- AND NOW THEY WAIT FOR THE REMOTE, NOT FOR A COMMIT: `is-primed` ----------------------------
+ * `is-settled` committed 420ms after a vertical press — the tail of that press's own scroll — and
+ * the row being left dropped its layers in the same moment, while still on screen, so its strip went
+ * back into the page's layer to be rastered again. `is-primed` (TvSpotlight `primeSoon`) is given
+ * only once the remote has been still for PRIME_QUIET_MS and taken off the row left behind at the
+ * same quiet moment: a walk down the page builds and destroys no layers, and the row the viewer stops
+ * on is ready to slide a beat after they stop. */
+.tv-spot.is-primed .tv-spot-strip { will-change: transform; }
 .tv-spot-thumb {
   /* Absolute, at the `left` TvSpotlight writes inline for its physical position — see the note
      on `.tv-spot-strip`. Still the containing block for the picture, scrim, mark and bar inside. */
@@ -1778,7 +1809,9 @@
   background-repeat: no-repeat;
   background-position: center;
 }
-/* ---- THE PHOTOGRAPH KEEPS ITS LAYER WHILE THE ROW IS OPEN ----------------------------------
+/* ---- THE BILLBOARD'S LAYERS KEEP THEIR COMPOSITOR LAYER WHILE THE ROW IS OPEN -----------------
+ * (This promoted the photograph, `.tv-spot-art`, until the arrival moved to the layer — see the end of
+ * this note. The reasoning that follows is why there is a promotion here at all.)
  * These are driven by `Element.animate` (the parallax in TvSpotlight) — on every press when this
  * was written, on HELD presses only now that a deliberate one has no drift. An animated transform
  * with no resting transform means the same thing every time: promote a layer, animate it, throw it
@@ -1800,10 +1833,25 @@
  * IT MOVES THE CHURN RATHER THAN DELETING IT: a vertical press still promotes two elements on the
  * arriving row and releases two on the leaving one. That is the right trade only because walking
  * ALONG a row is the common motion and walking BETWEEN rows is not — which is exactly why the
- * horizontal path is the one this targets. Unmeasured as yet; it needs the four-arm treatment. */
-.tv-spot.is-settled .tv-spot-art {
-  transform: translateZ(0);
-  will-change: transform;
+ * horizontal path is the one this targets. Unmeasured as yet; it needs the four-arm treatment.
+ *
+ * ---- AND IT IS THE LAYER, NOT THE PHOTOGRAPH, BECAUSE THE LAYER IS WHAT MOVES NOW -------------------
+ * The arrival is one Web Animation on the incoming `.tv-spot-layer` (opacity and drift together —
+ * lib/tvRowStage.ts `arrive`); nothing animates `.tv-spot-art` any more. Promoting the photograph
+ * inside a layer that the engine then promotes AGAIN for every arrival kept two layers where one does
+ * the job. Measured on the desktop proxy (the set's Chromium 120, CPU 4x, raster work summed over the
+ * walk, two rounds per arm; the same 2 layers on the open row in every arm):
+ *
+ *                              vertical x6: raster / commit      horizontal x8: raster
+ *   art promoted (before)        312-355ms / 110-114ms              207-208ms
+ *   nothing promoted             333-337ms /  94-95ms               244-255ms   (+20%)
+ *   the layers promoted (this)   321-342ms / 100-101ms              183-185ms   (-11%)
+ *
+ * Both of the open row's layers, because the one not showing is where the next card is built ahead
+ * of the press (`prefill`): with its own layer it is rastered there, while it is invisible, instead of
+ * on the frame it is revealed. On `is-primed`, for the reason given at `.tv-spot-strip`. */
+.tv-spot.is-primed .tv-spot-layer {
+  will-change: transform, opacity;
 }
 
 /* ---- HOLDING THE BUTTON: THE ROW MOVES, NOTHING ELSE ANIMATES -------------------------------
@@ -1961,6 +2009,17 @@
 .tv-spot-sound .ic3 .gl-ic { width: 1.35em; height: 1.35em; }
 .tv-spot-hero.has-trailer .tv-spot-sound { opacity: 1; }
 .tv-spot-hero .gl-chips.on-art { transition: transform .4s cubic-bezier(.2, .7, .2, 1); }
+/* THE TAB RISES ON ITS OWN CLOCK ON A ROW BILLBOARD. glance.css runs a tab's rise on its icon's 1.1s
+   clock, so the pair start and end together; on a row the icon's move now waits for the remote to be
+   still (tvRowStage ICON_QUIET_MS), so the rise is its own .45s again — the same move, finished ~650ms
+   sooner, which is ~40 fewer frames of every press carrying a running animation the engine has to
+   restyle. Heavier selectors than glance.css's on purpose: the two sheets' order in the bundle is the
+   import graph's, not a promise. */
+@media (prefers-reduced-motion: no-preference) {
+  .tv-spot .tv-spot-plate .gl-chips.rise .gl-chip { animation: glRiseRow .45s cubic-bezier(.2, .8, .2, 1) backwards; }
+  .tv-spot .tv-spot-plate .gl-chips.rise .gl-chip:nth-child(2) { animation-delay: .08s; }
+}
+@keyframes glRiseRow { 0% { opacity: 0; transform: translateY(5px); } }
 .tv-spot-hero.has-trailer .gl-chips.on-art {
   transform: translateX(-2.45em);
   max-width: calc(54% - 2.45em);

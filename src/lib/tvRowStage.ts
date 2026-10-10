@@ -1,5 +1,6 @@
 import { retainImage, isDecoded } from './useImageReady';
 import { parallaxEnabled } from './tvMotionFlags';
+import { whenQuiet } from './tvQuiet';
 import { glanceIconNode, type GlanceIconName } from '../components/glance/glanceSymbols';
 
 /* THE ROW'S STAGE — everything a press changes on screen, written to the DOM directly.
@@ -104,6 +105,21 @@ const PLATE_HOLD_MS = 700;
 const PLATE_DELAY_MS = 120;
 /** How long after mounting the stage takes its one-off measurements — after the first paint. */
 const MEASURE_AFTER_MOUNT_MS = 400;
+/* ---- THE CALLOUT ICONS MOVE ONCE THE REMOTE IS STILL ---------------------------------------------
+ * An icon's entrance is its parts moving inside an inline SVG (glanceMotion.ts), and Chromium cannot
+ * hand an SVG part's transform to the compositor: every frame of the 1.1s move is a style recalc, an SVG
+ * layout, a paint and a commit on the main thread. Measured walking the rows (Chromium 120, the set's
+ * own engine, CPU slowed 4x): ~50 layouts per press with the icons moving, ~10 with them held still,
+ * and the press's layout time 40-58ms against 8. Every arrival — each row reached, each card walked to
+ * — started a second of that, in the frames of the scroll or the slide that brought it.
+ *
+ * So a card's callouts arrive with the tab's own rise (an HTML box: opacity and a transform, the
+ * compositor's) and their icons make their move once the remote has been still this long — after the
+ * slide (267ms) and the page's scroll (~450ms) are over, with room for a slower set. A viewer who
+ * stops on a card sees exactly the move they always saw, a beat later; a walk past twenty cards no
+ * longer animates twenty icons, and the next press stops an icon mid-move (`quietChips`/`quietFront`)
+ * before its own frames start. */
+const ICON_QUIET_MS = 700;
 
 /* `cubic-bezier(.33,1,.68,1)` — the strip's curve — evaluated, so the peek can continue a slide
  * from wherever it is without asking the engine (a getComputedStyle here is a forced style flush). */
@@ -260,6 +276,8 @@ export class TvRowStage {
   private peekAnim: Animation | null = null;
   private peekRun = { from: 0, end: 0, ms: 0, held: false };
   private peekShown = false;
+  /** The icons' move waiting for the remote to be still (see ICON_QUIET_MS): its cancel. */
+  private iconRun: (() => void) | null = null;
 
   constructor(parts: StageParts) {
     this.p = parts;
@@ -283,6 +301,7 @@ export class TvRowStage {
     window.clearTimeout(this.resizeId);
     this.plateTimer.forEach((t) => window.clearTimeout(t));
     this.cancelAnims();
+    this.cancelIconRun();
     this.peekAnim?.cancel();
   }
 
@@ -335,17 +354,21 @@ export class TvRowStage {
   refresh(slot: StageSlot, peek: StagePeek): boolean {
     const f = this.front;
     let changed = false;
+    /* Callouts that arrive on a row the remote is not on are simply put up: their arrival plays when the
+     * row is entered (`playFront`), where it can be seen — not now, on a row a few screens away that the
+     * walk has only just prepared. */
+    const here = document.activeElement === this.p.hero;
     if (this.layerKey[f] !== slot.key) {
       // The same card can be re-filled in place (its artwork arrived): its callouts only replay if they changed.
       const was = this.glanceKey[f];
       this.fillLayer(f, slot); this.fillPlate(f, slot);
-      if (this.glanceKey[f] !== was) this.playChips(f);
+      if (this.glanceKey[f] !== was && here) this.playChips(f);
       this.layerKey[f] = slot.key; this.markEnd(); changed = true;
     }
     /* THE CARD ON SHOW KEEPS THE CALLOUTS IT CAME UP WITH. Its awards come back a second after it comes
      * to rest and can outrank what is up — and swapping a chip under the viewer is a blink. Only a card
      * that had none gets its first ones now (with their arrival); the rest wait for its next showing. */
-    else if (!this.glanceKey[f] && glanceKeyOf(slot)) { this.fillGlance(f, slot); this.playChips(f); changed = true; }
+    else if (!this.glanceKey[f] && glanceKeyOf(slot)) { this.fillGlance(f, slot); if (here) this.playChips(f); changed = true; }
     /* NOT THE COPY WHILE A HOLD HAS LEFT IT FOR `settle`. React catches up with a hold every few steps,
      * and this used to write the synopsis for the card on screen each time — the dearest thing a step
      * can do, under a stylesheet that hides it, and the very work a hold is built to skip. Worse, it
@@ -396,10 +419,10 @@ export class TvRowStage {
     else if (this.glanceKey[b] !== glanceKeyOf(slot)) this.fillGlance(b, slot);
     const outgoing = this.front;
     this.flip(b);
-    /* The incoming card's callouts arrive with it (their icons move once). Not on a held walk — three
-     * cards a second is no time to read them; `settle` plays the card the walk stops on. */
+    /* The incoming card's callouts arrive with it (their icons move once the remote is still). Not on a
+     * held walk — three cards a second is no time to read them; `settle` plays the card the walk stops on. */
     this.quietChips(outgoing);
-    if (o.held) this.quietChips(b);
+    if (o.held) { this.cancelIconRun(); this.quietChips(b); }
     else this.playChips(b);
     /* A HELD KEY GETS THE SLIDE, THE DISSOLVE AND THE PEEK — AND NO COPY AT ALL. The synopsis under the
      * billboard is three lines of text that nobody can read at three cards a second, and putting it up
@@ -667,28 +690,43 @@ export class TvRowStage {
     if (k && slot.glance) plate.appendChild(glanceChips(slot.glance));
   }
 
-  /** Plate `i`'s callouts play their arrival — the tab rises, the icon makes its move (glance.css
-   *  `.rise` / `.gl-run`). Taking the classes off and putting them back is what restarts it. */
+  /** Plate `i`'s callouts play their arrival — the tab rises now (glance.css `.rise`, retimed for a row
+   *  in tv.css), and the icon makes its move once the remote is still (`.gl-run`, ICON_QUIET_MS).
+   *  Taking the classes off and putting them back is what restarts it. */
   private playChips(i: 0 | 1) {
     const box = this.p.plates[i].querySelector<HTMLElement>(':scope > .gl-chips');
+    this.cancelIconRun();
     if (!box) return;
     /* THE FORCED LAYOUT ONLY WHEN THERE IS SOMETHING TO RESTART. Reading `offsetWidth` here makes the
      * engine style and lay out everything the press has just written, inside the key handler — on every
      * press, because this used to do it unconditionally. A walk never needs it: the incoming card's chips
      * were either built fresh (no classes yet) or quietened when that card last left the screen
-     * (`quietChips`), so adding the classes is already a new start. Only replaying chips that are still
-     * marked running — the card on show, when its row is entered again — has to take them off first. */
+     * (`quietChips`, and `quietFront` as the remote leaves the row), so adding the class is already a new
+     * start. Only replaying chips that are still marked running has to take them off first. */
     if (box.classList.contains('gl-run') || box.classList.contains('rise')) {
       box.classList.remove('gl-run', 'rise');
       void box.offsetWidth;
     }
-    box.classList.add('gl-run', 'rise');
+    box.classList.add('rise');
+    this.iconRun = whenQuiet(() => {
+      this.iconRun = null;
+      /* Still this card's callouts, still on show, and the remote still on this row. */
+      if (this.destroyed || !box.isConnected || !box.classList.contains('rise')) return;
+      if (document.activeElement !== this.p.hero) return;
+      box.classList.add('gl-run');
+    }, ICON_QUIET_MS);
   }
   private quietChips(i: 0 | 1) {
     this.p.plates[i].querySelector(':scope > .gl-chips')?.classList.remove('gl-run', 'rise');
   }
+  private cancelIconRun() {
+    if (this.iconRun) { this.iconRun(); this.iconRun = null; }
+  }
   /** The row was entered: the card on show plays its callouts' arrival. */
   playFront() { this.playChips(this.front); }
+  /** The row was left: its callouts stop where they are (at rest, a frame later) and stand ready to
+   *  arrive again without a forced restart. */
+  quietFront() { this.cancelIconRun(); this.quietChips(this.front); }
 
   /* ---- THE COPY ------------------------------------------------------------------------------ */
   private fillInfo(i: 0 | 1, slot: StageSlot) {

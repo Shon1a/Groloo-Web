@@ -12,6 +12,7 @@ import { currentEp } from './episodeNumbering';
 import { useHistory } from '../stores/history';
 import { STILL_RENDITION, deckOpensOn, firstSeasonOf, seasonsOf, warmStill } from '../components/DetailModal/deckGeometry';
 import { castFaces, warmFace } from '../components/DetailModal/castFaces';
+import { whenQuiet } from './tvQuiet';
 
 /* Query hooks — one per backend read. The `lang` query param is threaded from
  * the active UI language so the API can localize titles/logos. As screens land
@@ -352,14 +353,26 @@ export function usePrefetchMeta() {
 const DETAIL_BACKDROP = 'w1280';
 /** Cards the TV deck shows around the one it opens on (TvEpisodeDeck DECK_ABOVE / DECK_BELOW). */
 const DECK_FIRST_SCREEN = { above: 2, below: 3 };
+/* ---- THE PICTURES ONLY FOR A TITLE THE VIEWER IS STILL ON, AND NOT INSIDE A PRESS -------------------
+ * The detail answers a few hundred milliseconds after it is asked for, and what follows it is the heavy
+ * half — a 1280px backdrop and a full-size wordmark decoded, five faces, a season's payload and its
+ * stills. A viewer who has moved on by then would have that land in the frames of the press that moved
+ * them, for a title they have left (and it would push the pictures they are walking towards out of the
+ * decoded-picture cache). So the caller can say whether the title is still wanted (`wanted`), and the
+ * pictures wait out WARM_PICTURES_QUIET_MS of a still remote (lib/tvQuiet) before they start. */
+const WARM_PICTURES_QUIET_MS = 150;
+
 export function useWarmDetail() {
   const { lang } = useLang();
   const qc = useQueryClient();
-  return useCallback((it: MediaItem | null | undefined, resumeEp?: { season: number; episode: number }) => {
+  return useCallback((it: MediaItem | null | undefined, resumeEp?: { season: number; episode: number }, wanted?: () => boolean) => {
     const id = it ? apiIdOf(it) : undefined;
     if (!it || !id) return;
     const q = metaQuery(id, it.type, lang);
-    void qc.prefetchQuery(q).then(() => {
+    void qc.prefetchQuery(q).then(() => new Promise<void>((resolve) => {
+      whenQuiet(resolve, WARM_PICTURES_QUIET_MS);
+    })).then(() => {
+      if (wanted && !wanted()) return;
       const m = qc.getQueryData<MetaDetail>(q.queryKey);
       if (!m) return;
       const backdrop = m.backdrop || it.poster;

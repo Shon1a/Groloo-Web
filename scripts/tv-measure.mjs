@@ -3,6 +3,15 @@
  *   node scripts/tv-measure.mjs verify
  *   node scripts/tv-measure.mjs measure --url=http://192.168.0.7:4173/ --label=before
  *   node scripts/tv-measure.mjs measure --url=http://192.168.0.7:4173/ --label=after --previews=off
+ *   node scripts/tv-measure.mjs cold --url=https://tv.groloo.com/ --label=x [--after=500] [--rounds=2]
+ *
+ * `cold` IS THE ONE CASE `measure` CANNOT SEE. `measure` waits 16s for the home screen to settle and
+ * scores it warm — by design, and it is exactly the case viewers complained about least: "it stutters
+ * especially when the app has just opened". `cold` relaunches the page, waits for the start-up intro to
+ * hand the remote over (`__bootRevealAt`), and walks DOWN every row straight away, then back UP, then
+ * DOWN again — so the first walk and a warm walk over the same rows are scored side by side. It also
+ * scores the COMPOSITOR's frames (PipelineReporter, presented vs dropped), which is what the page's
+ * scroll is now made of: the in-page probe sees main-thread frames only.
  *
  * Playwright cannot attach to a webOS app, so this speaks CDP over the tunnel `ares-inspect` opens.
  * It is the sibling of blits-bench/tools/drive.mjs and borrows that file's hard-won parts verbatim —
@@ -471,6 +480,16 @@ async function setArms(cdp, previewsOn, scroll, rowsMode, cards) {
 }
 
 async function connect() {
+  /* `--ws=ws://…` drives any Chromium's page socket instead of the television's tunnel — how a command
+   * is dry-run on a desktop before it is given the set (no ares-* is touched). */
+  const ws = arg('ws', '');
+  if (ws) {
+    const cdp = new CDP(ws);
+    await cdp.open();
+    await cdp.send('Runtime.enable');
+    await cdp.send('Page.enable');
+    return cdp;
+  }
   console.log(`  opening inspector on ${APP} @ ${DEVICE} …`);
   sweepInspectors();
   try { execSync(`ares-launch --device ${DEVICE} ${APP}`, { stdio: 'ignore' }); } catch { /* already up */ }
@@ -602,6 +621,94 @@ async function main() {
       for (const m of consoleMsgs.slice(0, 10)) console.log('    ' + m);
     }
     sweepInspectors();
+    return;
+  }
+
+  if (CMD === 'cold') {
+    /* ---- THE FIRST WALK AFTER A LAUNCH, AGAINST A WARM ONE (see the head of this file) ----------- */
+    const AFTER = Number(arg('after', '500'));   // ms after the hand-over before the first press
+    const GAP = Number(arg('gap', '900'));       // a deliberate press
+    const MAXR = 24;
+    /* On the target origin first, so the arms land in ITS storage (the shell may have opened another). */
+    await armAndGo(cdp, URL_);
+    await setArms(cdp, PREVIEWS === 'on', SCROLL, ROWS_MODE, CARDS);
+    let collect = null;
+    let finished = null;
+    cdp.on('Tracing.dataCollected', (p) => { if (collect) collect(p.value); });
+    cdp.on('Tracing.tracingComplete', () => { if (finished) finished(); });
+    const ROW = `(function(){var a=document.activeElement;var rows=[].slice.call(document.querySelectorAll('.tv-spot'));
+      var row=a&&a.closest?a.closest('.tv-spot'):null;return JSON.stringify({idx:row?rows.indexOf(row):-1,rows:rows.length,
+      hero:!!(a&&a.closest&&a.closest('.tv-hero')),y:Math.round(scrollY)});})()`;
+    const walk = async (tag, key, done) => {
+      await cdp.eval(`window.__gperf.reset(); window.__gperf.tag(${JSON.stringify(tag)}); console.timeStamp('walk:${tag}:start')`);
+      let last = JSON.parse(await cdp.eval(ROW)); let moves = 0;
+      for (let i = 0; i < MAXR; i++) {
+        await press(cdp, key);
+        await sleep(GAP);
+        const now = JSON.parse(await cdp.eval(ROW));
+        const moved = now.idx !== last.idx || now.hero !== last.hero || now.y !== last.y;
+        if (moved) moves++;
+        last = now;
+        if (!moved || done(now)) break;
+      }
+      await sleep(500);
+      await cdp.eval(`console.timeStamp('walk:${tag}:end')`);
+      const [s] = JSON.parse(await cdp.eval(`JSON.stringify(window.__gperf.summary([${JSON.stringify(tag)}]))`));
+      return { tag, moves, ...s };
+    };
+    const results = { label: LABEL, url: URL_, when: new Date().toISOString(), after: AFTER, gap: GAP, rounds: [] };
+    for (let round = 1; round <= ROUNDS; round++) {
+      /* A fresh document is a fresh launch of the page — with the set's own service worker and caches,
+       * exactly as opening the app again finds them. */
+      await cdp.send('Page.reload', { ignoreCache: false });
+      const t0 = Date.now();
+      let reveal = 0;
+      while (!reveal && Date.now() - t0 < 45000) {
+        reveal = Number(await cdp.eval('window.__bootRevealAt || 0').catch(() => 0));
+        if (!reveal) await sleep(100);
+      }
+      if (!reveal) { console.log('  !! the intro never handed the remote over (45s) — not scored'); break; }
+      const build = JSON.parse(await cdp.eval('JSON.stringify(window.__gperf.buildIdentity())'));
+      if (round === 1) console.log(`\n  BUILD ${build.commit}${build.dirty ? '+dirty' : '  *** CLEAN ***'}  ${build.mode}  ${build.builtAt}  ${build.url}`);
+      console.log(`\n  --- round ${round}: hand-over ${Math.round(reveal)}ms after navigation`);
+      await sleep(AFTER);
+      const events = [];
+      collect = (list) => { for (const e of list) if (e.name === 'PipelineReporter' || e.name === 'TimeStamp') events.push(e); };
+      const traced = new Promise((r) => { finished = r; });
+      await cdp.send('Tracing.start', {
+        transferMode: 'ReportEvents',
+        traceConfig: { includedCategories: ['disabled-by-default-devtools.timeline.frame', 'devtools.timeline'], excludedCategories: ['*'] },
+      });
+      const walks = [];
+      walks.push(await walk('cold', 'ArrowDown', (s) => s.idx >= s.rows - 1));
+      await sleep(1200);
+      walks.push(await walk('up', 'ArrowUp', (s) => s.hero));
+      await sleep(2500);
+      walks.push(await walk('warm', 'ArrowDown', (s) => s.idx >= s.rows - 1));
+      await cdp.send('Tracing.end');
+      await traced;
+      collect = null;
+      /* THE COMPOSITOR'S OWN VERDICT, per walk: every frame the pipeline produced, presented or dropped. */
+      const mark = (n) => events.find((e) => e.name === 'TimeStamp' && JSON.stringify(e.args || {}).includes(n))?.ts;
+      for (const w of walks) {
+        const a = mark(`walk:${w.tag}:start`), b = mark(`walk:${w.tag}:end`);
+        let presented = 0, dropped = 0;
+        for (const e of events) {
+          if (e.name !== 'PipelineReporter' || e.ph !== 'b' || !a || !b || e.ts < a || e.ts > b) continue;
+          const st = (e.args?.frame_reporter || e.args?.chrome_frame_reporter || {}).state || '';
+          if (/PRESENTED/.test(st)) presented++; else if (/DROPPED/.test(st)) dropped++;
+        }
+        w.compositorPresented = presented;
+        w.compositorDropped = dropped;
+        console.log(`    ${w.tag.padEnd(5)} moved ${String(w.moves).padStart(2)}  probe: on-time ${String(w.onTimePct).padStart(5)}%  dropped ${String(w.droppedFrames).padStart(4)}  p95 ${String(w.p95).padStart(5)}  worst ${String(w.worstFrame).padStart(6)}  >67 ${String(w.framesOver67).padStart(3)}  |  compositor: ${presented} presented, ${dropped} dropped (${presented + dropped ? ((100 * dropped) / (presented + dropped)).toFixed(1) : '?'}%)`);
+      }
+      results.rounds.push({ round, reveal, build, walks });
+    }
+    mkdirSync(OUT, { recursive: true });
+    const file = `${OUT}/cold-${LABEL}-previews-${PREVIEWS}.json`;
+    writeFileSync(file, JSON.stringify(results, null, 2));
+    console.log(`\n  wrote ${file}`);
+    shutdown();
     return;
   }
 

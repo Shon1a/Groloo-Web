@@ -126,6 +126,16 @@ export function rowIndexOf(el: HTMLElement | null): number {
   return row ? list().indexOf(row) : -1;
 }
 
+/** The row the remote is on, by document order, or -1. */
+export function focusedRowIndex(): number {
+  return rowIndexOf(typeof document !== 'undefined' ? document.activeElement as HTMLElement | null : null);
+}
+
+/** The first row on the page (`.tv-spot`), or null before any has mounted. */
+export function firstRow(): HTMLElement | null {
+  return list()[0] ?? null;
+}
+
 /** How many rows are mounted. Read by the perf overlay; also a cheap assertion in tests. */
 export function tvRowCount(): number {
   return list().length;
@@ -165,6 +175,37 @@ export function tvRowCount(): number {
 const AHEAD = 2;
 const BEHIND = 1;
 
+/* ---- AND IT IS THE RAIL THAT IS SWITCHED, BECAUSE THE RAIL IS WHAT CARRIES `content-visibility` ----
+ *
+ * This window was written onto the ROW — the `.tv-spot` section — while the stylesheet puts
+ * `content-visibility: auto` on `.tv-spot-rail` inside it (tv.css explains why it must live there and
+ * not on the row: the billboard, the focus target, is the rail's sibling). `content-visibility` is not
+ * inherited, so `visible` on the section changed nothing at all: every rail stayed `auto`, and the
+ * window this function exists to prepare was never prepared.
+ *
+ * MEASURED, what that meant (desktop, the event Chromium raises when a rail is skipped or rendered):
+ * at launch EVERY rail was skipped, including the first row's, whose top sat 44px under the fold; it
+ * was rendered 100ms into the first Down, the next row 300ms into it, and so on down the page — each
+ * row's strip styled, laid out and painted, its posters decoded and rastered, in the frames of the very
+ * scroll that brought it on screen. Walking back up re-rendered rows that had been skipped again behind
+ * the walk. And the posters' arrival fades, started under the start-up intro while the first row was
+ * skipped, were held back by the engine and ran in the first press's scroll instead.
+ *
+ * So the switch is made on the rail. The window — the row behind, the row the remote is on and two
+ * ahead — is rendered during idle, before any of it can scroll into view; everything else is left to
+ * `auto` and costs nothing. Four rails at a time, where `auto` alone settles at two or three: one or two
+ * extra rows rendered off screen, which is the price of never rendering one on screen mid-scroll (and
+ * far from the nine-rails-at-once arm that measured catastrophically — see tv.css). */
+const rails = new WeakMap<HTMLElement, HTMLElement | null>();
+function railOf(row: HTMLElement): HTMLElement | null {
+  let r = rails.get(row);
+  if (r === undefined || (r && !r.isConnected)) {
+    r = row.querySelector<HTMLElement>('.tv-spot-rail');
+    rails.set(row, r);
+  }
+  return r;
+}
+
 let idleHandle = 0;
 /** The row the latest call named — read when the callback runs, not when it was scheduled. */
 let pendingRow: HTMLElement | null = null;
@@ -176,8 +217,9 @@ type IdleWindow = Window & {
 };
 
 /**
- * Schedule the content-visibility window around `focused`. Safe to call on every press: the work is
- * coalesced into one idle callback, so a held key that fires eight times pays for it once.
+ * Schedule the content-visibility window around `focused` (a row, or anything inside one). Safe to call
+ * on every press: the work is coalesced into one idle callback, so a held key that fires eight times
+ * pays for it once.
  */
 export function prepareRowWindow(focused: HTMLElement | null): void {
   const row = focused && focused.closest ? focused.closest<HTMLElement>('.tv-spot') : null;
@@ -200,9 +242,10 @@ export function prepareRowWindow(focused: HTMLElement | null): void {
     if (at < 0) return;
     for (let i = 0; i < all.length; i++) {
       const want = i >= at - BEHIND && i <= at + AHEAD ? 'visible' : '';
-      /* `.style.contentVisibility` is the inline override; '' hands the row back to the stylesheet's
-       * `content-visibility: auto`. Read-then-write so an unchanged row is not invalidated. */
-      if (all[i].style.contentVisibility !== want) all[i].style.contentVisibility = want;
+      /* `.style.contentVisibility` is the inline override; '' hands the rail back to the stylesheet's
+       * `content-visibility: auto`. Read-then-write so an unchanged rail is not invalidated. */
+      const rail = railOf(all[i]);
+      if (rail && rail.style.contentVisibility !== want) rail.style.contentVisibility = want;
       /* AND ITS ARTWORK IS ARMED HERE TOO, in the same quiet moment. A row switched its pictures on
        * from an IntersectionObserver 800px out — which fires DURING the vertical scroll, so the
        * React render that gives its tiles a `src` and the decodes behind it landed on the frames of
@@ -213,9 +256,15 @@ export function prepareRowWindow(focused: HTMLElement | null): void {
     }
   };
   /* The timeout matters more than the idleness: a page under continuous input may never see a true
-   * idle period, and a window that is never prepared is the bug this exists to fix. 300ms is longer
-   * than a single move (280ms) and shorter than a deliberate press interval (~900ms), so it lands in
-   * the gap between presses rather than inside one. */
+   * idle period, and a window that is never prepared is the bug this exists to fix.
+   *
+   * IT RUNS EARLY IN THE PRESS'S OWN SCROLL, AND THAT WAS MEASURED AGAINST WAITING. With the page moving
+   * on the compositor, the first idle gap comes ~35ms into the scroll, and rendering the row two ahead
+   * there looks like the wrong moment. Deferring it until the scroll was over (450ms, then idle) was
+   * built and measured (the set's Chromium 120, CPU 12x, first walk down a fresh home screen, two rounds
+   * each): 71% / 79% of frames on time against 87% / 83% here — at the set's speed the deferred render
+   * and the artwork it arms ran on into the NEXT press, its key handling and the start of its scroll.
+   * Early in the move, the main thread is free again by the time the next press arrives. */
   if (w.requestIdleCallback) idleHandle = w.requestIdleCallback(run, { timeout: 300 });
   else idleHandle = window.setTimeout(run, 120);
 }
