@@ -724,10 +724,11 @@
 /* ---- THE CALLOUTS GO WITH THE COPY ---------------------------------------------------------------
    "#1 in Movies This Week", "New Release" are the same kind of thing as the meta line and the
    synopsis — detail about the title you have reached — so they keep the same hours: hidden at rest,
-   where the card is its wordmark and nothing else; in as the copy unfolds when the remote arrives;
-   out again with it when a trailer takes over. Faded rather than folded (they hang in their own
-   corner, there is no height to give back), on the copy's own timings. TvHero hands them `rise`
-   only while focused, so their entrance plays as they appear rather than unseen at rest.
+   where the card is its wordmark and nothing else; in once the remote has stopped on the card; out
+   again with the copy when a trailer takes over. Faded rather than folded (they hang in their own
+   corner, there is no height to give back). TvHero hands them `rise` only once the remote has been
+   still a moment (HERO_CALLOUT_QUIET_MS), and they show only with it — so the tab and its icon arrive
+   as one entrance, never the tab first and its icon on its own after.
 
    The trailer rule carries the extra class to outrank the focused one (it is always live when this
    has to win) — the same ordering trap as the block above, closed by weight instead of position. */
@@ -735,11 +736,11 @@
   opacity: 0;
   transition: opacity .3s ease;
 }
-.tv-hero.is-focused .tv-hero-stage .gl-chips.on-art {
+.tv-hero.is-focused .tv-hero-stage .gl-chips.on-art.rise {
   opacity: 1;
   transition: opacity .34s ease .06s;
 }
-.tv-hero.is-focused .tv-hero-stage.has-trailer .gl-chips.on-art {
+.tv-hero.is-focused .tv-hero-stage.has-trailer .gl-chips.on-art.rise {
   opacity: 0;
   transition: opacity .3s ease;
 }
@@ -2009,17 +2010,12 @@
 .tv-spot-sound .ic3 .gl-ic { width: 1.35em; height: 1.35em; }
 .tv-spot-hero.has-trailer .tv-spot-sound { opacity: 1; }
 .tv-spot-hero .gl-chips.on-art { transition: transform .4s cubic-bezier(.2, .7, .2, 1); }
-/* THE TAB RISES ON ITS OWN CLOCK ON A ROW BILLBOARD. glance.css runs a tab's rise on its icon's 1.1s
-   clock, so the pair start and end together; on a row the icon's move now waits for the remote to be
-   still (tvRowStage ICON_QUIET_MS), so the rise is its own .45s again — the same move, finished ~650ms
-   sooner, which is ~40 fewer frames of every press carrying a running animation the engine has to
-   restyle. Heavier selectors than glance.css's on purpose: the two sheets' order in the bundle is the
-   import graph's, not a promise. */
-@media (prefers-reduced-motion: no-preference) {
-  .tv-spot .tv-spot-plate .gl-chips.rise .gl-chip { animation: glRiseRow .45s cubic-bezier(.2, .8, .2, 1) backwards; }
-  .tv-spot .tv-spot-plate .gl-chips.rise .gl-chip:nth-child(2) { animation-delay: .08s; }
-}
-@keyframes glRiseRow { 0% { opacity: 0; transform: translateY(5px); } }
+/* A ROW CARD'S CALLOUTS WAIT FOR A STILL REMOTE, HIDDEN, and then the tab rises and its icon makes its
+   move as one entrance, on the icons' clock (glance.css `.rise`; tvRowStage CALLOUT_QUIET_MS has the
+   why). For a while the tab rose at once and its icon moved on its own 700ms later — two entrances for
+   one callout. `visibility`, not opacity: a hidden box is not painted at all, and the entrance's own
+   first frame is transparent, so letting it go shows nothing until the rise does. */
+.tv-spot .tv-spot-plate .gl-chips.gl-wait { visibility: hidden; }
 .tv-spot-hero.has-trailer .gl-chips.on-art {
   transform: translateX(-2.45em);
   max-width: calc(54% - 2.45em);

@@ -49,10 +49,14 @@ export function quietFor(): number {
  * Run `fn` once the remote has been still for `ms` — counted from the later of its last press and this
  * call, so it is also a plain delay when nobody has pressed anything yet. Any press in the meantime
  * pushes it back. Returns a cancel function, safe to call more than once.
+ *
+ * `fromPress` counts from the last press alone: what is owed to a remote that has ALREADY been still
+ * that long runs on the next task, not `ms` later (a callout whose words arrive after the card has come
+ * to rest makes its entrance then, not a second after).
  */
-export function whenQuiet(fn: () => void, ms: number): () => void {
+export function whenQuiet(fn: () => void, ms: number, fromPress = false): () => void {
   install();
-  const job: Job = { ms, from: performance.now(), fn };
+  const job: Job = { ms, from: fromPress ? -Infinity : performance.now(), fn };
   jobs.add(job);
   arm();
   return () => { if (jobs.delete(job) && !jobs.size) { window.clearTimeout(timer); timer = 0; } };
