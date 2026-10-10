@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { pageY, pageMax, setPageY, beginPageMove, endPageMove, usingTransformScroll } from '../lib/tvPageScroll';
-import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch } from '../lib/tvRowRegistry';
+import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch, firstRow } from '../lib/tvRowRegistry';
 import { setActiveRowIndex } from '../lib/tvRowWindow';
 import { barItemHere } from '../lib/tvBar';
+import { onBootRevealing } from '../lib/bootGate';
 
 /* REMOTE / D-PAD NAVIGATION — mounted only in the `--mode tv` build. A TV has no pointer, so
  * this turns the four arrow keys (the remote's directional pad) into spatial focus movement:
@@ -621,6 +622,18 @@ export default function TvSpatialNav() {
       (barItemHere() || document.querySelector<HTMLElement>('.tv-nav-item'))?.focus({ preventScroll: true });
     };
     seed = window.setTimeout(trySeed, 600);
+
+    /* ---- THE FIRST ROWS ARE PREPARED UNDER THE INTRO, NOT UNDER THE FIRST PRESSES -------------------
+     * A session starts on the featured billboard, and the row window (prepareRowWindow) used to be set
+     * up by the first Down — so the first presses of every session were the ones that gave the rows
+     * below their artwork and switched their rendering on, in the frames of their own scroll. The
+     * intro's finale is two seconds in which the home screen is finished, every key is held back and
+     * nothing is moving but the intro itself (on the compositor): the window around the first row is
+     * prepared then, so the first walk down starts on rows that are already built. */
+    onBootRevealing(() => {
+      const first = firstRow();
+      if (first) prepareRowWindow(first);
+    });
 
     /* ---- OPENING AND CLOSING A LAYER -------------------------------------------------------
      * Two things a remote needs that a mouse never does.

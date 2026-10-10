@@ -11,6 +11,7 @@ import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { FadeBg, FadeImg } from './FadeArt';
 import { useBootDone } from '../lib/bootGate';
 import { usePlayer } from '../stores/player';
+import { whenQuiet } from '../lib/tvQuiet';
 
 /* THE TV FEATURED BILLBOARD — the top of the TV home, and only the top.
  *
@@ -56,6 +57,23 @@ import { usePlayer } from '../stores/player';
 
 const HERO_MAX = 10;
 const ADVANCE_MS = 7000;
+
+/* ---- THE FEATURED CARD WAITS LONGER FOR ITS TRAILER, AND IT WAITS FOR THE REMOTE ---------------------
+ * This card is where every session starts: the splash hands the remote over with focus already on it.
+ * On the rows' dwell (1.2s) its trailer was asked for 1.2s after the hand-over — a detail lookup for the
+ * IMDb id this feed lacks, the trailer's address, then a 1080p file and a decoder — so the pipeline was
+ * starting up, its first frames decoding, at exactly the moment a viewer makes the first press of the
+ * session. Down then carried the page away from a picture still being built, and tore it down again.
+ * That is the start of "it stutters most when the app has just opened".
+ *
+ * 3s of a STILL remote (lib/tvQuiet: any press restarts it) is the reference's own habit with its
+ * billboard: a viewer who has already set off down the page never starts it; one who stays to look gets
+ * it a couple of seconds later than before. The rows keep their own dwell (tvPreviewPolicy). */
+const HERO_DWELL_MS = 3000;
+/** The detail warm (OK opens a finished title screen) waits for the same kind of stillness as a row's. */
+const HERO_WARM_QUIET_MS = 900;
+/** The callouts' icons make their move once the remote is still (see tvRowStage ICON_QUIET_MS). */
+const HERO_ICON_QUIET_MS = 700;
 
 /* The card is at most ~1750 CSS px wide on a 1080p panel, so w1280 is the right rendition —
  * heroBgUrl's job is the web build's full-bleed hero and `original` is a 4K decode a TV cannot
@@ -242,10 +260,18 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     // Not under the start-up splash, which would only be held up by the request (lib/bootGate.ts).
     if (!focused || !restingOn || !bootedForWarm) return;
     const it = restingOn;
-    const id = window.setTimeout(() => warmDetail(it), 600);
-    return () => window.clearTimeout(id);
+    const here = () => !!(document.activeElement && document.activeElement.closest('.tv-hero'));
+    return whenQuiet(() => warmDetail(it, undefined, here), HERO_WARM_QUIET_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused, restingOn?.id, warmDetail, bootedForWarm]);
+
+  /* The callouts' icons: their move waits for the remote to be still (see HERO_ICON_QUIET_MS). */
+  const [iconsGo, setIconsGo] = useState(false);
+  useEffect(() => {
+    setIconsGo(false);
+    if (!focused) return;
+    return whenQuiet(() => setIconsGo(true), HERO_ICON_QUIET_MS);
+  }, [focused, active]);
 
   useEffect(() => {
     setDwelt(null);
@@ -257,8 +283,7 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
      * to be silently off, and none of them announced themselves. One switch governs both surfaces:
      * `previewsAllowed`, which is the viewer's own toggle. */
     if (!heroTrailers || !booted || !focused || !onScreen || !restingOn) return;
-    const id = window.setTimeout(() => setDwelt(restingOn), previewDwellMs());
-    return () => window.clearTimeout(id);
+    return whenQuiet(() => setDwelt(restingOn), Math.max(previewDwellMs(), HERO_DWELL_MS));
     // Keyed on the title's id rather than the object: `list` is rebuilt on every render of Home,
     // so an object dependency would re-arm this timer forever and it would never fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -420,7 +445,7 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
             bottom-left. They keep the copy's hours (tv.css, THE CALLOUTS GO WITH THE COPY): hidden at
             rest and while a trailer plays, in when the remote arrives — and `rise` only then, so
             their entrance plays where it can be seen. Keyed on the slide so they change with it. */}
-        <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} rise={focused} className="on-art" />
+        <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} rise={focused} icons={focused && iconsGo} className="on-art" />
 
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
         <div className="tv-hero-copy" key={`copy-${active}`}>

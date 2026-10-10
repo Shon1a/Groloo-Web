@@ -22,8 +22,10 @@
  * so a prefetched picture outlives the session. An add-on's poster host is left to the row.
  * ========================================================================== */
 
-import { bootDone } from './bootGate';
+import { bootDone, bootRevealing } from './bootGate';
 import { usePlayer } from '../stores/player';
+import { quietFor, whenQuiet } from './tvQuiet';
+import { focusedRowIndex } from './tvRowRegistry';
 
 /** Our art worker's urls exactly — the same test as the groloo-art rule in vite.config.ts. */
 const ART_PATH = /^\/(crop|img|logo)\/(w\d+|original)\/(f\d+\/)?[A-Za-z0-9]{8,64}\.webp$/;
@@ -33,8 +35,21 @@ const START_AFTER_MS = 2500;
 /** A bound on the whole session: a home screen is ~13 rows x 12 titles x 2 pictures, plus the rest of
  *  each row the remote actually walks (TvSpotlight). Bytes in the cache, never bitmaps. */
 const MAX_URLS = 900;
+/* ---- NOT WHILE THE REMOTE IS MOVING ----------------------------------------------------------------
+ * A download is cheap on its own, and hundreds of them are not: each one is a request built on the main
+ * thread, a body read into a Blob, a service-worker fetch and a cache write. Measured on the first walk
+ * down a freshly opened home screen, this queue put ~400 of them into fourteen presses — the single
+ * largest thing the first walk did that the second did not. So a new download only starts once the
+ * remote has been still this long (a vertical press has finished scrolling by then, a deliberate walk
+ * has paused); the ones already in flight are left to finish. A viewer who never stops still gets every
+ * row's pictures — the row asks for them itself when the walk comes near (TvSpotlight's art window) —
+ * they simply do not also get hundreds of pictures for rows nobody has reached, in the same second. */
+const QUIET_MS = 900;
 
-type Job = { url: string; rank: () => number };
+/** `rank(focused)` — how far the job's row is from the row the remote is on (`focused`, -1 when the
+ *  remote is not on a row). Lower goes first. Handed the focused row rather than finding it, because it
+ *  is asked of every queued job at every pick. */
+type Job = { url: string; rank: (focused: number) => number };
 
 const seen = new Set<string>();
 const queue: Job[] = [];
@@ -68,8 +83,15 @@ function holdForPlayer(): void {
   });
 }
 
+/** A pump is waiting for the remote to be still (see QUIET_MS); its cancel. */
+let waitQuiet: (() => void) | null = null;
+
 function schedule(): void {
-  if (pumpId || !started) return;
+  if (pumpId || waitQuiet || !started) return;
+  if (quietFor() < QUIET_MS) {
+    waitQuiet = whenQuiet(() => { waitQuiet = null; schedule(); }, QUIET_MS);
+    return;
+  }
   const w = window as IdleWindow;
   pumpId = w.requestIdleCallback
     ? w.requestIdleCallback(pump, { timeout: 1500 })
@@ -82,13 +104,19 @@ function pump(): void {
    * television's Wi-Fi, and a background download of rows nobody is looking at is the one thing that
    * can starve them. The queue simply waits; the player closing (a store change) wakes it. */
   if (usePlayer.getState().source) { holdForPlayer(); return; }
+  /* The remote moved between the schedule and the idle moment: wait for it to be still again. */
+  if (quietFor() < QUIET_MS) { schedule(); return; }
+  /* WHERE THE REMOTE IS, ONCE. It was found again inside every job's rank — a DOM lookup and a walk of
+   * the row list, for each of hundreds of queued pictures, at every pick: O(queue x rows) per download,
+   * ~600ms of main thread over one walk at the set's speed. Nothing moves within one pump. */
+  const focused = focusedRowIndex();
   while (inFlight < CONCURRENCY && queue.length) {
     // Nearest row to the remote wins — read NOW, since the remote has moved since it was queued.
     let best = 0;
     let bestRank = Infinity;
     for (let i = 0; i < queue.length; i++) {
-      const r = queue[i].rank();
-      if (r < bestRank) { bestRank = r; best = i; }
+      const r = queue[i].rank(focused);
+      if (r < bestRank) { bestRank = r; best = i; if (r <= 0) break; }
     }
     const [job] = queue.splice(best, 1);
     inFlight++;
@@ -112,10 +140,10 @@ function pump(): void {
 
 /**
  * Queue pictures a row will show as soon as it is reached. `rank` is asked each time a download
- * is picked, so it can answer with the row's distance from wherever the remote is by then.
+ * is picked, with the row the remote is on by then, so it can answer with its distance from it.
  * Idempotent per URL for the life of the page.
  */
-export function prefetchArt(urls: Array<string | undefined | null>, rank: () => number): void {
+export function prefetchArt(urls: Array<string | undefined | null>, rank: (focused: number) => number): void {
   if (typeof window === 'undefined' || typeof fetch !== 'function') return;
   for (const url of urls) {
     if (!url || seen.has(url) || seen.size >= MAX_URLS || !prefetchable(url)) continue;
@@ -124,14 +152,21 @@ export function prefetchArt(urls: Array<string | undefined | null>, rank: () => 
   }
   if (!armed) {
     armed = true;
-    /* AND NOT UNDER THE START-UP SPLASH: the first screen's own pictures are what the splash is waiting
-     * for, and these would only compete with them for the network (lib/bootGate.ts). */
+    /* AND NOT UNDER THE START-UP SPLASH WHILE IT IS STILL WAITING: the first screen's own pictures are
+     * what it waits for, and these would only compete with them for the network (lib/bootGate.ts).
+     * ITS FINALE IS ANOTHER MATTER. From the moment the screen is ready, the intro spends two seconds
+     * flooding the screen with every remote key held back — the one stretch of a launch guaranteed to
+     * have an idle network and nobody pressing anything. The rows nearest the top download their first
+     * screen then, instead of under the viewer's first presses. */
+    const from = performance.now();
     const go = () => {
-      if (!bootDone()) { window.setTimeout(go, 300); return; }
+      /* The finale needs no extra grace: it only begins once the first screen is complete. */
+      const ready = bootRevealing() || (bootDone() && performance.now() - from >= START_AFTER_MS);
+      if (!ready) { window.setTimeout(go, 150); return; }
       started = true;
       schedule();
     };
-    window.setTimeout(go, START_AFTER_MS);
+    go();
   }
   schedule();
 }
