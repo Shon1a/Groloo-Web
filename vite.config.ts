@@ -363,11 +363,11 @@ export default defineConfig(({ mode }) => ({
             },
           },
           {
-            // Everything else public: genres, per-title meta, episode lists, introdb. No admin
+            // Everything else public: genres, per-title meta, episode lists, skip markers. No admin
             // art rides in these, the server declares them stale-while-revalidate for 24h, so
             // mirror that: serve instantly from cache, refresh in the background. If the backend
             // is cold or down the refresh just fails and the cached copy stands.
-            urlPattern: ({ url }) => url.hostname.endsWith('.onrender.com') && /^\/api\/(genres|meta\/|tv\/|introdb\/)/.test(url.pathname),
+            urlPattern: ({ url }) => url.hostname.endsWith('.onrender.com') && /^\/api\/(genres|meta\/|tv\/|introdb\/|segments)/.test(url.pathname),
             handler: 'StaleWhileRevalidate',
             options: {
               cacheName: 'groloo-api-catalog',
