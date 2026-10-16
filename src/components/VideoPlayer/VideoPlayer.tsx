@@ -72,6 +72,8 @@ const IcEpisodes = (
     <rect x="3" y="16.6" width="3" height="2.4" rx=".7" /><rect x="8.5" y="16.6" width="12.5" height="2.4" rx="1.2" />
   </svg>
 );
+// The solid play triangle on the Next Episode prompt — filled, not the stroked transport glyph.
+const IcPlaySolid = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z" /></svg>;
 const IcNext = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M5.5 5.6v12.8L15 12 5.5 5.6zM16.6 5.6h2.4v12.8h-2.4z" /></svg>;
 const IcSubs = (
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -189,25 +191,6 @@ const nativeAudioList = (l: NativeAudioTrackList): NativeAudioTrack[] => Array.f
  * vertical drag for volume (right half) / brightness (left half), and a
  * horizontal drag to scrub — mirroring the native mobile players. */
 
-const Worm = (
-  <svg className="vp-pl" viewBox="0 0 128 128" width="128" height="128" aria-hidden="true">
-    {/* THE SAME FOUR STOPS THE SCRUBBER'S PLAYED FILL USES, and horizontal for the same reason it
-        is there: the worm travels a circle, so a gradient laid across the box paints it by
-        POSITION — the dash cools from cyan through blue to indigo as it comes round, which is the
-        one thing a static two-tone sweep could never do. Vertical (the grey it replaces) would
-        have given a top half and a bottom half and looked like a lighting error. */}
-    <defs>
-      <linearGradient id="vpPlGrad" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0%" stopColor="#64f8ff" />
-        <stop offset="42%" stopColor="#1fa5f0" />
-        <stop offset="72%" stopColor="#060eff" />
-        <stop offset="100%" stopColor="#280880" />
-      </linearGradient>
-    </defs>
-    <circle className="vp-pl__ring" r="56" cx="64" cy="64" fill="none" strokeWidth="16" strokeLinecap="round" />
-    <path className="vp-pl__worm" d="M92,15.492S78.194,4.967,66.743,16.887c-17.231,17.938-28.26,96.974-28.26,96.974L119.85,59.892l-99-31.588,57.528,89.832L97.8,19.349,13.636,88.51l89.012,16.015S81.908,38.332,66.1,22.337C50.114,6.156,36,15.492,36,15.492a56,56,0,1,0,56,0Z" fill="none" stroke="url(#vpPlGrad)" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="44 1111" strokeDashoffset="10" />
-  </svg>
-);
 /* PLAY AND PAUSE, WITH ROUNDED CORNERS — the two glyphs that get drawn biggest and looked at
  * hardest, so they are the two worth building properly.
  *
@@ -322,6 +305,10 @@ const TV_SEEK_TAP = 10;         // one deliberate press, in seconds of film
 const TV_RAMP_V0 = 45;          // seconds of film per second at the instant a hold takes over
 const TV_RAMP_GROWTH = 3.2;     // and how that rate multiplies per further second of holding
 const TV_HIDE_MS = 5000;        // chrome auto-hide — longer than the desktop's 3s; reading is slower from a sofa
+
+/* THE SKIP PROMPTS COUNT DOWN, in seconds of PLAYBACK — the fill pauses with the film. */
+const SKIP_SHOW_S = 10;         // Skip Intro / Skip Recap fills, then steps aside
+const NEXT_COUNT_S = 10;        // Next Episode fills, then starts the next episode
 
 
 /* The tick sits at the row's far end, after the label — where the big apps put it. A row with a
@@ -904,8 +891,19 @@ export default function VideoPlayer() {
    * id, so the second key travels alongside (`iimdb`, `is`, `ie`).
    *
    * A server that predates /api/segments answers 404; an episode then falls back to the old
-   * IntroDB-only route, so the player can ship before the server does. */
+   * IntroDB-only route, so the player can ship before the server does.
+   *
+   * THE ANSWER BELONGS TO THE SOURCE IT WAS ASKED FOR, and nothing else may cancel it. It used to
+   * be dropped by this effect's cleanup, which runs on every change of `dur` — and on a real
+   * stream the length is written more than once (reset to 0 when the source attaches, set again
+   * on each loadedmetadata as the stream is probed and re-attached). The first write sent the
+   * request, the next one threw its answer away, and `segAsked` stopped it being asked again: a
+   * title with markers in both databases played with none. A local test file, whose length is
+   * written once, could never show it. So the guard is the source itself, read when the answer
+   * lands. */
   const segAsked = useRef<typeof source | null>(null);
+  const segSource = useRef<typeof source | null>(null);
+  useEffect(() => { segSource.current = source; }, [source]);
   useEffect(() => {
     if (segAsked.current !== source) setSegments(null);
     if (!source || !dur || segAsked.current === source) return;
@@ -927,9 +925,9 @@ export default function VideoPlayer() {
     } else return;
     if (!q.get('tmdb') && !q.get('imdb')) return;
     q.set('dur', String(Math.round(dur)));
-    let alive = true;
+    const asked = source;
     const take = (d: { intro?: Segments['intro']; recap?: Segments['recap']; credits?: Segments['outro']; outro?: Segments['outro']; preview?: Segments['preview'] } | null) => {
-      if (!alive || !d) return;
+      if (!d || segSource.current !== asked) return;
       const seg: Segments = { intro: d.intro, recap: d.recap, outro: d.credits ?? d.outro, preview: d.preview };
       if (seg.intro || seg.recap || seg.outro || seg.preview) setSegments(seg);
     };
@@ -946,7 +944,6 @@ export default function VideoPlayer() {
       })
       .then(take)
       .catch(() => {});
-    return () => { alive = false; };
   }, [source, dur]);
 
 
@@ -1305,7 +1302,7 @@ export default function VideoPlayer() {
         ?? (tvWantFocus.current === 'audio' ? root.querySelector<HTMLElement>('#vpAudio') : null)
         ?? (tvWantFocus.current === 'episodes' ? root.querySelector<HTMLElement>('#vpEpisodes') : null)
         ?? (tvWantFocus.current === 'scrubber' ? barRef.current : null)
-        ?? root.querySelector<HTMLElement>('.vp-skip.show')
+        ?? root.querySelector<HTMLElement>('.vp-prompt.show .vp-pbtn.sel')
         ?? barRef.current
         ?? root.querySelector<HTMLElement>('#vpPlay');
       tvWantFocus.current = 'bar';
@@ -1785,6 +1782,17 @@ export default function VideoPlayer() {
       // exists to prevent.
       if (menuOpen || audioOpen || epPanelOpen) return;
 
+      /* 2b. A PROMPT ON SCREEN TAKES OK, as it does on every streaming app: Skip Intro is pressed
+       * with the button the viewer's thumb is already on, without summoning the controls first.
+       * With the credits pair up, Left and Right choose between Watch Credits and Next Episode
+       * instead of seeking — the one stretch of a film where nobody is scrubbing. A scrub still
+       * waiting to be committed keeps OK. */
+      const pr = promptRef.current;
+      if (!tvNav && pr) {
+        if ((k === 'Enter' || k === ' ') && seekPreviewRef.current == null) { consume(); pr.act(); bump(); return; }
+        if (pr.kind === 'next' && (k === 'ArrowLeft' || k === 'ArrowRight')) { consume(); setPromptSel(k === 'ArrowLeft' ? 'ghost' : 'main'); return; }
+      }
+
       // 3. THE SCRUBBER, whether it holds focus or nothing does. Same two keys, same job — which
       // is the point: Left is "back a bit" in both modes, so there is nothing to learn.
       if (!tvNav || onBar) {
@@ -1880,7 +1888,8 @@ export default function VideoPlayer() {
        * THE ENDS STOP RATHER THAN WRAP, and the press is consumed either way — that is the whole
        * point. Letting a press at the end fall through is precisely how the scrubber captured it. */
       const ae = document.activeElement as HTMLElement | null;
-      const skipEl = overlayRef.current?.querySelector<HTMLElement>('.vp-skip.show') ?? null;
+      const prompts = Array.from(overlayRef.current?.querySelectorAll<HTMLElement>('.vp-prompt.show .vp-pbtn') ?? []);
+      const atPrompt = ae ? prompts.indexOf(ae) : -1;
 
       /* 6a. THE ROW SITS DIRECTLY ON TOP OF THE SCRUBBER, so Down from any icon is the bar and Up
        * from one is nothing — the top of the screen is empty on a television, and a press that
@@ -1890,15 +1899,16 @@ export default function VideoPlayer() {
         if (k === 'ArrowDown') barRef.current?.focus({ preventScroll: true });
         return;
       }
-      /* SKIP INTRO stands at the row's right end, at the row's height, so it joins the row: Right
-       * off the last icon reaches it, Left from it comes back, and Down from it is the bar like
-       * Down from any icon. */
-      if (ae && ae === skipEl && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowDown' || k === 'ArrowUp')) {
+      /* THE PROMPT stands at the row's right end, at the row's height, so it joins the row: Right
+       * off the last icon reaches it, Left and Right walk its buttons (Watch Credits, Next Episode)
+       * and Left off the first comes back, and Down from it is the bar like Down from any icon. */
+      if (atPrompt >= 0 && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowDown' || k === 'ArrowUp')) {
         consume();
         if (k === 'ArrowDown') barRef.current?.focus({ preventScroll: true });
+        else if (k === 'ArrowRight') prompts[atPrompt + 1]?.focus({ preventScroll: true });
         else if (k === 'ArrowLeft') {
           const items = rowIcons(overlayRef.current);
-          (items.find((el) => el.id === rowLast.current) ?? items[items.length - 1])?.focus({ preventScroll: true });
+          (prompts[atPrompt - 1] ?? items.find((el) => el.id === rowLast.current) ?? items[items.length - 1])?.focus({ preventScroll: true });
         }
         return;
       }
@@ -1911,7 +1921,7 @@ export default function VideoPlayer() {
           const at = items.indexOf(ae);
           if (at >= 0) {
             consume();
-            const to = items[at + (k === 'ArrowRight' ? 1 : -1)] ?? (k === 'ArrowRight' ? skipEl : null);
+            const to = items[at + (k === 'ArrowRight' ? 1 : -1)] ?? (k === 'ArrowRight' ? prompts[0] : null);
             to?.focus({ preventScroll: true });
           }
         }
@@ -2014,6 +2024,69 @@ export default function VideoPlayer() {
    * post-play holding the screen. Paused — or stopped on an error — is not watching, so after ten
    * idle minutes the slideshow may come up over it, and goes again with the next press. */
   useKeepAwake(!!source && ((playing && !errKind) || ppOpen));
+
+  /* THE CONTEXTUAL PROMPT — "Skip Recap", "Skip Intro", or "Watch Credits" + "Next Episode" once a
+   * series' credits start. Markers when there are some (films too — a film's opening titles are as
+   * skippable as a series intro); without them a series falls back to a heuristic intro window and
+   * a fixed tail, and a film offers nothing, because guessing where a film's titles are is how a
+   * button lands on the opening scene. Worked out above the early return because the prompt has
+   * state of its own (below) and hooks cannot follow a return. */
+  let skipMode: 'intro' | 'recap' | 'next' | null = null;
+  let skipTo = INTRO_TO;
+  if (source && dur >= 300) {
+    const intro = segments?.intro && segments.intro.end < dur ? segments.intro : null;
+    const recap = segments?.recap && segments.recap.end < dur ? segments.recap : null;
+    const outroStart = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro.start : null;
+    const nextAt = outroStart != null ? outroStart : dur - CREDITS_TAIL;
+    if (source.series && source.next && cur >= nextAt && dur - cur > 0.5) skipMode = 'next';
+    else if (recap && cur >= recap.start && cur <= recap.end) { skipMode = 'recap'; skipTo = recap.end; }
+    else if (intro ? (cur >= intro.start && cur <= intro.end) : (!!source.series && !segments && cur >= INTRO_FROM && cur <= INTRO_TO)) {
+      skipMode = 'intro'; skipTo = intro ? intro.end : INTRO_TO;
+    }
+  }
+
+  /* THE PROMPTS COUNT DOWN, the way the big streaming apps' do. Each one carries a white fill that
+   * sweeps across it:
+   *
+   *   Skip Intro / Skip Recap   fills over SKIP_SHOW_S and then steps aside — it was offered, the
+   *                             viewer let it pass. It comes back whenever the controls are up,
+   *                             for as long as the intro lasts, solid.
+   *   Next Episode              fills over NEXT_COUNT_S and then STARTS the next episode, unless
+   *                             the viewer pressed Watch Credits beside it (or has auto-play-next
+   *                             off, when it waits, solid, to be pressed).
+   *
+   * The fill is a CSS animation on a transform, so it costs the compositor and not a render per
+   * frame, and it is paused with the film (`animation-play-state`), so a viewer who pauses on the
+   * credits is not carried into the next episode behind their back. `promptRun` restarts it: a
+   * prompt that appears again (a seek back into the intro) counts from the beginning. */
+  const [promptGone, setPromptGone] = useState(false);
+  const [creditsDismissed, setCreditsDismissed] = useState(false);
+  const [promptSel, setPromptSel] = useState<'main' | 'ghost'>('main');
+  const [promptRun, setPromptRun] = useState(0);
+  useEffect(() => { setPromptGone(false); setPromptSel('main'); setPromptRun((n) => n + 1); }, [skipMode]);
+  useEffect(() => { setCreditsDismissed(false); }, [source]);
+  const promptShown = skipMode === 'next' ? !creditsDismissed : !!skipMode && (!promptGone || !hideUi);
+  /* A pressed prompt takes the remote with it when it goes: focus would otherwise fall to <body> as
+   * the button unmounts, and the next arrow would restart from wherever spatial navigation likes. */
+  const promptLeft = () => {
+    if (IS_TV && document.activeElement?.closest('.vp-prompt')) barRef.current?.focus({ preventScroll: true });
+  };
+  const skipAhead = () => {
+    const v = videoRef.current;
+    if (v) v.currentTime = Math.min((v.duration || 0) - 1, Math.max(v.currentTime, skipTo));
+    promptLeft();
+    bump();
+  };
+  const goNext = () => { promptLeft(); source?.next?.(); };
+  const watchCredits = () => { promptLeft(); setCreditsDismissed(true); bump(); };
+  /* What OK does in transport mode while a prompt is up — read by the remote's handler, which is
+   * bound once per mode and would otherwise see the prompt as it was when it was bound. */
+  const promptRef = useRef<{ kind: 'intro' | 'recap' | 'next'; act: () => void } | null>(null);
+  useEffect(() => {
+    promptRef.current = promptShown && skipMode
+      ? { kind: skipMode, act: skipMode === 'next' ? (promptSel === 'ghost' ? watchCredits : goNext) : skipAhead }
+      : null;
+  });
 
   if (!source) return <div className="vp-overlay" id="playerOverlay" />;
 
@@ -2138,25 +2211,6 @@ export default function VideoPlayer() {
   const ow = settings.subOutlineW, oc = settings.subOutline;
   const cueOutline = ow > 0 ? `text-shadow:${-ow}px ${-ow}px 0 ${oc},${ow}px ${-ow}px 0 ${oc},${-ow}px ${ow}px 0 ${oc},${ow}px ${ow}px 0 ${oc};` : '';
   const cueCss = `#playerVideo::cue{color:${settings.subColor};background-color:${settings.subBg};font-size:${settings.subSize}%;${cueOutline}}`;
-
-  /* THE CONTEXTUAL SKIP BUTTON — "Skip Recap", "Skip Intro", or "Next Episode" once the credits
-   * start. Markers when there are some (films too — a film's opening titles are as skippable as a
-   * series intro); without them a series falls back to a heuristic intro window and a fixed tail,
-   * and a film offers nothing, because guessing where a film's titles are is how a button lands
-   * on the opening scene. */
-  let skipMode: 'intro' | 'recap' | 'next' | null = null;
-  let skipTo = INTRO_TO;
-  if (dur >= 300) {
-    const intro = segments?.intro && segments.intro.end < dur ? segments.intro : null;
-    const recap = segments?.recap && segments.recap.end < dur ? segments.recap : null;
-    const outroStart = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro.start : null;
-    const nextAt = outroStart != null ? outroStart : dur - CREDITS_TAIL;
-    if (source.series && source.next && cur >= nextAt && dur - cur > 0.5) skipMode = 'next';
-    else if (recap && cur >= recap.start && cur <= recap.end) { skipMode = 'recap'; skipTo = recap.end; }
-    else if (intro ? (cur >= intro.start && cur <= intro.end) : (!!source.series && !segments && cur >= INTRO_FROM && cur <= INTRO_TO)) {
-      skipMode = 'intro'; skipTo = intro ? intro.end : INTRO_TO;
-    }
-  }
 
   /* THE TAIL OF THE ICON ROW — web only. Three controls a television has no use for and a
    * browser cannot do without: NEITHER fullscreen nor picture-in-picture means anything on a set
@@ -2616,23 +2670,14 @@ export default function VideoPlayer() {
         </div>
       )}
 
+      {/* NO SPINNER WHILE IT LOADS, on either build. The ring sat in the middle of the picture and
+          dimmed the frame behind it for every rebuffer, which on a slow source was most of the
+          film. The title stack and the bar are already up while a source starts, and a stalled
+          picture with the clock not moving says "loading" without anything drawn over the film.
+          The status stays for screen readers, unpainted (`.sr-only`), so the wait is still
+          announced. */}
       {loading && !errKind && (
-        <div className="vp-loading show" id="vpLoading" role="status" aria-live="polite">
-          {Worm}
-          {/* THE WORM SAYS IT, THE CAPTION ONLY REPEATED IT — on the TV. A spinner over a black
-              screen already means "wait"; "Preparing stream…" underneath is the same information
-              spelled out, and it is the part that dates badly, because it names a stage the viewer
-              has no use for and cannot act on. The web keeps it: a browser tab can be one of many
-              things doing one of many things, and the words say which. A television is showing one
-              film and nothing else.
-              UNPAINTED RATHER THAN DELETED, the same call as the panel headings in TvDetail. The
-              wrapper is a `role="status"` live region and the worm is a CSS animation — with the
-              text gone outright there is nothing in it to announce, so a reader would meet a
-              silent region and the wait would be invisible twice over. `.sr-only` takes the
-              pixels and keeps the announcement. */}
-          <div className={IS_TV ? 'lt sr-only' : 'lt'}>{t('player.preparing')}</div>
-          <div className="ls" />
-        </div>
+        <div className="sr-only" id="vpLoading" role="status" aria-live="polite">{t('player.preparing')}</div>
       )}
 
       {errKind && (
@@ -2771,20 +2816,36 @@ export default function VideoPlayer() {
         </div>
       </div>
 
-      {/* Contextual skip button — "Skip Recap" / "Skip Intro" in their windows, "Next Episode"
-          once a series' credits start */}
-      <button
-        className={`vp-skip${skipMode ? ' show' : ''}`}
-        id="vpSkip"
-        type="button"
-        onClick={() => {
-          if (skipMode === 'next') source.next?.();
-          else if (skipMode === 'intro' || skipMode === 'recap') { const v = videoRef.current; if (v) v.currentTime = Math.min((v.duration || 0) - 1, Math.max(v.currentTime, skipTo)); }
-          bump();
-        }}
-      >
-        {skipMode === 'next' ? `${t('player.next_episode')} ›` : skipMode === 'intro' ? t('player.skip_intro') : skipMode === 'recap' ? t('player.skip_recap') : ''}
-      </button>
+      {/* THE PROMPT — see "THE PROMPTS COUNT DOWN" above. Bottom right, at the icon row's height. The
+          selected button is the white one (`.sel`): the one OK presses, with the fill sweeping it. */}
+      <div className={`vp-prompt${promptShown ? ' show' : ''}`}>
+        {skipMode === 'next' ? (
+          <>
+            <button type="button" className={`vp-pbtn${promptSel === 'ghost' ? ' sel full' : ''}`} id="vpWatchCredits"
+              onFocus={() => setPromptSel('ghost')} onClick={watchCredits}>
+              <span>{t('player.watch_credits')}</span>
+            </button>
+            <button type="button" className={`vp-pbtn vp-pbtn-main${promptSel === 'main' ? ' sel' : ''}${settings.autoplayNext ? '' : ' full'}`} id="vpSkip"
+              onFocus={() => setPromptSel('main')} onClick={goNext}>
+              {settings.autoplayNext && promptShown && (
+                <span className="vp-pfill" key={promptRun} aria-hidden="true"
+                  style={{ animationDuration: `${NEXT_COUNT_S}s`, animationPlayState: playing ? 'running' : 'paused' }}
+                  onAnimationEnd={goNext} />
+              )}
+              {IcPlaySolid}<span>{t('player.next_episode')}</span>
+            </button>
+          </>
+        ) : skipMode ? (
+          <button type="button" className={`vp-pbtn vp-pbtn-main sel${promptGone ? ' full' : ''}`} id="vpSkip" onClick={skipAhead}>
+            {!promptGone && (
+              <span className="vp-pfill" key={promptRun} aria-hidden="true"
+                style={{ animationDuration: `${SKIP_SHOW_S}s`, animationPlayState: playing ? 'running' : 'paused' }}
+                onAnimationEnd={() => setPromptGone(true)} />
+            )}
+            <span>{t(skipMode === 'recap' ? 'player.skip_recap' : 'player.skip_intro')}</span>
+          </button>
+        ) : null}
+      </div>
 
       {/* IN-PLAYER EPISODES (series) — THE SHELF, ON BOTH BUILDS. `epPanelOpen` drives it, so
           the Episodes button, the keyboard's Down, the remote's Down, the Back chain and the
