@@ -2204,6 +2204,10 @@
      names the coming episode; opacity, not visibility, so the remote keeps its place on the bar. */
   .vp-overlay video{transition:opacity .3s ease}
   .vp-overlay:is(.vp-switching,.vp-jumping) video{opacity:0;transition-duration:.16s}
+  /* HELD (VideoPlayer `held`): the bottom stack and the skip prompt wait, unseen, until the wordmark,
+     the icons and the bar with its gaps can arrive together; letting go fades them in on the stack's
+     own transition while the wordmark pops (its block is re-keyed at that moment). */
+  .vp-overlay.vp-held :is(.vp-bottom,.vp-prompt){opacity:0 !important;pointer-events:none !important;transition:none}
   .vp-overlay.vp-switching :is(.vp-controls,.vp-progress,.vp-times){opacity:0;pointer-events:none;transition:opacity .16s ease}
   .vp-overlay.vp-switching .vp-epline-next{animation:vp-next-pop .52s cubic-bezier(.34,1.56,.64,1) both}
   @keyframes vp-next-pop{0%{opacity:0;transform:translateY(12px) scale(.9)}100%{opacity:1;transform:none}}
@@ -2213,6 +2217,16 @@
      so they read sharper. display:none when off so it costs zero; opacity is driven by --grain (set
      from the intensity slider). Sits above the video image (z1) but below gestures(z2)/loading(z3)/UI.
      overlay blend leaves the black letterbox bars untouched (it only lifts mid-tones). */
+  /* THE SUBTITLE LAYER (VideoPlayer `cueBox`): over the picture AND the controls' shade, so a line
+     beside the controls is not dimmed, and taking no clicks. The bottom block hangs from the middle
+     of the screen's foot and is moved by transform, so its step up beside the controls is one
+     animated move; its width is set in pixels, which is where its lines wrap. */
+  .vp-cues{position:absolute;inset:0;z-index:5;pointer-events:none;overflow:hidden}
+  .vp-cues-bottom,.vp-cues-top{position:absolute;left:50%;display:flex;flex-direction:column;align-items:center;text-align:center;line-height:1.22}
+  .vp-cues-bottom{bottom:0;transition:transform .32s cubic-bezier(.25,1.2,.5,1)}
+  .vp-cues-top{top:6%;max-width:88%;transform:translateX(-50%)}
+  .vp-cue span{white-space:pre-line;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+  @media (prefers-reduced-motion:reduce){.vp-cues-bottom{transition:none}}
   .vp-grain{position:absolute;inset:0;z-index:1;pointer-events:none;display:none;opacity:var(--grain,0);
     mix-blend-mode:overlay;background-size:160px 160px;will-change:background-position;
     animation:vpGrain .55s steps(4) infinite;
