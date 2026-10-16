@@ -77,6 +77,9 @@ export interface PlaySource {
   subsQuery?: { videoId: string; type: 'movie' | 'series' };
   media?: PlayMedia;      // for history + resume
   next?: () => void;      // play the next episode (series) — used by auto-play-next + the Next button
+  /* Ask for the next episode's sources now, while this one plays, so Next Episode has them in
+   * hand when it is pressed — see `sharedAddonStreams`. The player calls it once per episode. */
+  prefetchNext?: () => void;
   series?: PlaySeries;    // series context → the in-player Episodes button + panel
   /* The other sources for this same title or episode, for switching from inside the player
    * (the Audio box). Built by the title screen, which owns the add-on fan-out and its ranking,
