@@ -119,6 +119,8 @@ const SEED: Record<string, string> = {
   'attrib.tmdb_body': 'Titles, synopses, cast and crew, ratings, posters, and backdrops come from The Movie Database. TMDB does not operate GROLOO, has no involvement in which add-ons you install, and has no connection to anything those add-ons make available.',
   'attrib.jw_head': 'Streaming availability — JustWatch',
   'attrib.jw_body': 'The “watch on” services listed against a title come from TMDB’s watch-provider data, which is sourced from JustWatch. Availability is per-country and changes without notice; GROLOO neither verifies nor resells any subscription, and links out to the service itself.',
+  'attrib.skip_head': 'Skip intro & credits markers',
+  'attrib.skip_body': 'Where an episode’s intro, recap and credits are comes from community databases, checked against the length of the file you are playing: SkipDB, TheIntroDB, IntroDB and AniSkip, with OpenSubtitles subtitles as a last resort for the credits.',
   'attrib.heart_head': 'Groloo Heart — MIT licence',
   'attrib.heart_body': 'The catalog and library engine that runs inside your browser is Groloo Heart, released under the MIT licence. Its full notice is reproduced below.',
   'attrib.addons_head': 'Add-ons',

@@ -4364,6 +4364,20 @@
   width: clamp(24px, 3.2vh, 34px);
   height: clamp(24px, 3.2vh, 34px);
   transform: translate(-50%, -50%) scale(1);
+  background: none;
+  box-shadow: none;
+}
+/* The disc itself is drawn by a child layer, so the landing squash (see "THE DOT" below) can run on
+   it while the element's own transform carries focus and scrub sizes — two scales that multiply
+   rather than one animation fighting one transition for the same property. */
+.vp-overlay.tv .vp-thumb::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 6px rgba(0, 0, 0, .4);
 }
@@ -4396,27 +4410,48 @@
    layout — the bar is the same object focused or not, so nothing under it shifts and the playhead
    does not jump position when the remote lands on the timeline.
 
-   The track brightens a step, and the playhead takes a soft white halo ring — a ring with an edge,
-   not a glow, so it reads as "selected" rather than as a rendering artefact. The old sweeping sheen
-   went with the coloured fill it travelled across: a band of white light over a white bar is
-   invisible. */
-.vp-overlay.tv .vp-seg,
+   The track brightens a step and the dot grows a little. It used to take a white halo ring as
+   well, and on a rewind that ring went solid — a stroke round the dot that read as a rendering
+   fault on the one control being watched. No rings on the dot, anywhere. */
+.vp-overlay.tv .vp-seg {
+  transition: background-color .3s cubic-bezier(.22, .61, .36, 1);
+}
 .vp-overlay.tv .vp-thumb {
-  transition: background-color .3s cubic-bezier(.22, .61, .36, 1), box-shadow .3s cubic-bezier(.22, .61, .36, 1);
+  transition: transform .36s cubic-bezier(.34, 1.56, .64, 1);
 }
 .vp-overlay.tv .vp-progress:focus-visible .vp-seg { background: rgba(255, 255, 255, .55); }
 .vp-overlay.tv .vp-progress:focus-visible .vp-thumb {
-  box-shadow: 0 0 0 clamp(5px, .7vh, 8px) rgba(255, 255, 255, .3), 0 1px 6px rgba(0, 0, 0, .45);
+  transform: translate(-50%, -50%) scale(1.14);
 }
 @media (prefers-reduced-motion: reduce) {
   .vp-overlay.tv .vp-seg,
   .vp-overlay.tv .vp-thumb { transition: none; }
 }
-/* MID-SCRUB, and it has to be told apart from a focused disc sitting still: the halo goes solid.
-   Scrubbing always happens while focused, and this rule wins on document order alone (same
-   specificity as the focus rule, declared after it), so the two never need to fight. */
+
+/* ---- THE DOT, WHILE IT IS BEING MOVED. Bouncy, not glowing, and a CIRCLE throughout: it pops up a
+   size on a spring the moment a scrub starts and stays that size for as long as the button is held,
+   and on release it lands — the element springs back to its focused size and the disc gives one
+   squash-and-settle, the "plop" that says the seek has been taken. Every rule after the focus one on document order,
+   so mid-scrub always wins over merely focused.
+
+   The user picked this from four (Oct 16): a held scrub used to stretch the dot into an oval, then
+   into a water drop with a tail — both rejected. Plain pop won over a capsule, a soft drop and a
+   liquid trail. Keep it a circle. */
 .vp-overlay.tv .vp-progress.seeking .vp-thumb {
-  box-shadow: 0 0 0 clamp(5px, .7vh, 8px) rgba(255, 255, 255, .62), 0 0 16px rgba(0, 0, 0, .6);
+  transform: translate(-50%, -50%) scale(1.3);
+}
+.vp-overlay.tv .vp-progress.landed .vp-thumb::after {
+  animation: tv-vp-thumb-land .5s cubic-bezier(.3, .7, .4, 1) both;
+}
+@keyframes tv-vp-thumb-land {
+  0% { transform: scale(1); }
+  28% { transform: scale(1.16, .84); }
+  58% { transform: scale(.95, 1.06); }
+  80% { transform: scale(1.02, .99); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vp-overlay.tv .vp-progress.landed .vp-thumb::after { animation: none; }
 }
 
 /* ---- The icon row. 34px is a mouse target; these are sized to be seen, not clicked. The row is
@@ -4455,9 +4490,9 @@
  * It is scoped to `.seeking` on purpose. During ordinary playback the same properties are rewritten
  * on every timeupdate, and a transition there would have the playhead permanently chasing the
  * video — smooth, and wrong by a fifth of a second forever. */
-.vp-overlay.tv .vp-progress.seeking :is(.vp-played, .vp-seek-span, .vp-thumb, .vp-seek-cue) {
+.vp-overlay.tv .vp-progress.seeking :is(.vp-played, .vp-seek-span, .vp-thumb) {
   transition: left .19s cubic-bezier(.25, .8, .3, 1), width .19s cubic-bezier(.25, .8, .3, 1),
-              box-shadow .3s cubic-bezier(.22, .61, .36, 1);
+              transform .36s cubic-bezier(.34, 1.56, .64, 1);
 }
 
 /* WHILE THE BUTTON IS HELD, THE EASING CHANGES CHARACTER, and it has to. The curve above is an
@@ -4467,8 +4502,8 @@
    of half-finished stops reads as rubber-banding: the playhead appears to drag behind the number.
    Linear, at just over the paint interval, is what makes those samples read as constant velocity —
    the browser interpolates straight through them and the motion has no texture at all. */
-.vp-overlay.tv .vp-progress.ramping :is(.vp-played, .vp-seek-span, .vp-thumb, .vp-seek-cue) {
-  transition: left .07s linear, width .07s linear, box-shadow .3s cubic-bezier(.22, .61, .36, 1);
+.vp-overlay.tv .vp-progress.ramping :is(.vp-played, .vp-seek-span, .vp-thumb) {
+  transition: left .07s linear, width .07s linear, transform .36s cubic-bezier(.34, 1.56, .64, 1);
 }
 
 /* ---- NO LANDING RING. There was one here — a white circle thrown off the playhead when a seek
@@ -4476,27 +4511,15 @@
    around the playhead at the exact moment the picture stalls to decode is the universal sign that
    something is WAITING, so the one frame it was supposed to reassure on is the one where it looked
    like a fault. The commit is punctuated by the preview markers clearing and the picture cutting,
-   which is enough. `.landed` is still set on the element for anything that wants it. */
+   which is enough. `.landed` now drives the dot's squash-and-settle instead — see "THE DOT". */
 
-/* ---- THE SCRUB READOUT ---------------------------------------------------------------------
- *
- * The old one was a red "−0:10" printed inline next to the elapsed time, and it was wrong twice.
- * Structurally: it lived in the flex row that also holds the bar, so the bar lost length the
- * moment the number appeared — the viewer was aiming at an element that resized under them. And
- * visually: a saturated red number flashing on and off is an error colour on a control that is
- * working perfectly, which is the cheapest thing an interface can do.
- *
- * The replacement is three quiet pieces that all sit OUT OF FLOW, so nothing in the row moves:
- *
- *   .vp-seek-span    the ground being covered, painted along the bar between where the video is
- *                    and where it would land. The skip gets a LENGTH, not just a number — hold
- *                    the button and the band grows, which is the actual feedback a viewer wants.
- *   .vp-seek-origin  a hairline at the true playback position, so the band has a visible start
- *                    and "back to here" stays legible while the playhead runs away from it.
- *   .vp-seek-cue     the offset itself, floating above the playhead on smoked glass — white,
- *                    tabular, with a single chevron for direction. It rides with the playhead
- *                    rather than sitting in a corner, so the number is always where the eye is.
- */
+/* ---- THE SCRUB READOUT is the bar itself. `.vp-seek-span` paints the ground being covered,
+ * between where the video is and where it would land — hold the button and the band grows, which
+ * is the feedback a viewer actually wants. There used to be two more pieces: a white hairline at
+ * the true position, and the offset ("−1:30") floating over the playhead on smoked glass. Both were
+ * taken off: the number sat on top of the very thing being aimed, and the hairline was one more
+ * stroke on a bar that should read as one clean line. The clock under the bar's left end already
+ * shows where the scrub would land. */
 .vp-overlay.tv .vp-seek-span {
   position: absolute;
   top: 0;
@@ -4505,55 +4528,8 @@
   background: rgba(255, 255, 255, .55);
   pointer-events: none;
 }
-.vp-overlay.tv .vp-seek-origin {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  margin-left: -1px;
-  border-radius: 1px;
-  background: rgba(255, 255, 255, .85);
-  pointer-events: none;
-}
-.vp-overlay.tv .vp-seek-cue {
-  position: absolute;
-  bottom: calc(100% - 2px);
-  transform: translateX(-50%);
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 8px clamp(13px, 1.3vw, 19px);
-  border-radius: 999px;
-  background: rgba(10, 14, 22, .62);
-  /* Hairline top edge only — a full border rings the pill and turns it into a box; a single lit
-     edge reads as a pane of glass catching the light above it. */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 6px 20px rgba(0, 0, 0, .45);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  color: #fff;
-  font-variant-numeric: tabular-nums;
-  font-size: clamp(17px, 2.3vh, 26px);
-  font-weight: 500;
-  letter-spacing: .01em;
-  line-height: 1;
-  white-space: nowrap;
-  pointer-events: none;
-  /* Rises into place. Only the pill animates — the bar underneath is untouched. */
-  animation: tv-vp-seek-cue-in .22s cubic-bezier(.22, .61, .36, 1) both;
-}
-/* NO DIRECTION GLYPH. There was a chevron here, then an animated arrow, and neither earned its
-   place: the pill rides the playhead, and the playhead is already visibly travelling one way with
-   the covered band growing behind it. A symbol on top of that restates in 24px what the whole
-   width of the bar is saying, and it cost the pill a second element to keep sized, aligned and
-   mirrored. The number is the reading; the bar says which way. */
-
-@keyframes tv-vp-seek-cue-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
 @media (prefers-reduced-motion: reduce) {
-  .vp-overlay.tv .vp-seek-cue { animation: none; }
-  .vp-overlay.tv .vp-progress:is(.seeking, .ramping) :is(.vp-played, .vp-seek-span, .vp-thumb, .vp-seek-cue) { transition: none; }
+  .vp-overlay.tv .vp-progress:is(.seeking, .ramping) :is(.vp-played, .vp-seek-span, .vp-thumb) { transition: none; }
 }
 
 /* ---- FOCUS IS A FILL, NOT A RING ----------------------------------------------------------
