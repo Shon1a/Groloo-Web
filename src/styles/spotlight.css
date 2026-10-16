@@ -31,7 +31,7 @@
     width:0;height:0;opacity:0;box-shadow:none;transition:left .8s var(--pp-shrink),top .8s var(--pp-shrink),width .8s var(--pp-shrink),
     height .8s var(--pp-shrink),opacity .6s ease,box-shadow .3s ease}
   /* Everything the film's own chrome draws goes while post-play holds the screen. */
-  .vp-overlay.pp-on .vp-ui,.vp-overlay.pp-on .vp-skip,.vp-overlay.pp-on .vp-loading,.vp-overlay.pp-on .vp-grain,
+  .vp-overlay.pp-on .vp-ui,.vp-overlay.pp-on .vp-prompt,.vp-overlay.pp-on .vp-loading,.vp-overlay.pp-on .vp-grain,
   .vp-overlay.pp-on .vp-gestures,.vp-overlay.pp-on .vp-silent,.vp-overlay.pp-on .vp-eprail{display:none!important}
   .vp-overlay.pp-on{cursor:default}
 
