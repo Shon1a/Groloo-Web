@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { SeasonInfo } from '../lib/types';
+import type { AddonStream } from '../lib/addonClient';
 
 /* What the video player is currently playing. null → closed. A source can be an
  * HLS manifest (.m3u8) or a progressive file (mp4/mkv/webm); the player probes
@@ -63,6 +64,9 @@ export interface PlaySource {
    * instead of silently not being there. */
   langs?: string[];
   title?: string;
+  /* The title's own wordmark (TMDB logo art). The player sets it over the transport in place of
+   * the plain-text title; absent, or failing to load, the text title stands in. */
+  logo?: string;
   subtitle?: string;      // shown under the title (e.g. "S1 · E1 — The Heirs of the Dragon")
   subtitles?: SubtitleTrack[];
   /* What to ask SUBTITLE add-ons for, so the player can fetch tracks the stream itself
@@ -74,6 +78,24 @@ export interface PlaySource {
   media?: PlayMedia;      // for history + resume
   next?: () => void;      // play the next episode (series) — used by auto-play-next + the Next button
   series?: PlaySeries;    // series context → the in-player Episodes button + panel
+  /* The other sources for this same title or episode, for switching from inside the player
+   * (the Audio box). Built by the title screen, which owns the add-on fan-out and its ranking,
+   * so the player lists them in exactly the order the title screen would. */
+  sources?: PlaySources;
+  /* Where to start, in seconds — set when the viewer switches source mid-film, so the new one
+   * picks up where the old one was rather than at the last saved resume point (up to 5s back). */
+  startAt?: number;
+}
+
+export interface PlaySources {
+  /** The language buckets, in the title screen's order. */
+  langs: string[];
+  /** One bucket's sources, ranked as the title screen ranks its rows ('' = all of them). */
+  list: (lang: string) => AddonStream[];
+  /** The one playing now. */
+  current: AddonStream;
+  /** Start `s` (as the `lang` playback) from `at` seconds. */
+  play: (s: AddonStream, lang: string, at: number) => void;
 }
 
 /* Series context for the in-player episodes panel: the season list + the currently-

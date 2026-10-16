@@ -290,6 +290,10 @@ export default function DetailModal() {
   const [copied, setCopied] = useState(false);
   const [pickedEp, setPickedEp] = useState<{ season: number; ep: number } | null>(null);
   const [streams, setStreams] = useState<AddonStream[]>([]);
+  /* The list as it stands NOW, for the player's source picker. A film started while the add-ons
+     were still answering would otherwise offer only the sources that had arrived by the press. */
+  const streamsNow = useRef<AddonStream[]>([]);
+  useEffect(() => { streamsNow.current = streams; }, [streams]);
   const [streamsLoading, setStreamsLoading] = useState(false);
   const [lang, setLang] = useState<string>('');
   const [srcTab, setSrcTab] = useState<'services' | 'addons'>('services');
@@ -664,7 +668,10 @@ export default function DetailModal() {
   const seriesFor = (ep: Ep | null) => (ep && meta?.seasonList?.length
     ? { seasons: meta.seasonList, metaId: target.id, imdb: meta.imdb, season: ep.season, ep: ep.ep, title, playEp: (s: number, e: number) => { void playEpisode(s, e); } }
     : undefined);
-  const playStreamFor = (s: AddonStream, ep: Ep | null, langTag?: string) => {
+  /* `pool` is the list `s` was chosen from — the episode's own fan-out when the player moved on
+   * to the next episode by itself, the modal's live list otherwise — and it is what the player's
+   * source picker offers. `startAt` is set when the viewer switched source from inside the player. */
+  const playStreamFor = (s: AddonStream, ep: Ep | null, langTag?: string, pool?: AddonStream[], startAt?: number) => {
     /* A LINK IS NOT A STREAM. `externalUrl` sources exist to be opened elsewhere — a
      * broadcaster's own player, a shop page — and `ytId` ones are YouTube embeds this
      * player has no path for (its whole surface is a <video> element; the trailer hero is
@@ -698,11 +705,22 @@ export default function DetailModal() {
       // range-supporting progressive file, which is exactly what 'url' means here.
       kind: s.kind === 'hls' ? 'hls' : 'url',
       notWebReady: s.notWebReady,
-      title, lang: chosen, langs: s.langs,
+      title, logo: titleLogo, lang: chosen, langs: s.langs,
       subtitle: ep ? epLabel(ep.season, ep.ep) : undefined,
       media: buildMediaFor(ep, chosen), subtitles: subsOf(s), subsQuery: subsQueryFor(ep),
       next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined,
       series: seriesFor(ep),
+      sources: {
+        langs: langTabs(pool ?? streamsNow.current),
+        /* The same filter-then-quality-sort as `shownStreams`, then `forRender`'s ranking — the
+           rows the title screen would show under that language tab, in its order. */
+        list: (l) => forRender((pool ?? streamsNow.current)
+          .filter((x) => !l || x.langs.includes(l))
+          .sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality)), l),
+        current: s,
+        play: (x, l, at) => playStreamFor(x, ep, l, pool, at),
+      },
+      startAt,
     });
   };
   const playStream = (s: AddonStream) => playStreamFor(s, pickedEp);
@@ -738,9 +756,9 @@ export default function DetailModal() {
     const want = prev?.lang && langs.includes(prev.lang) ? prev.lang
       : langs.includes(lang) ? lang : langs[0];
     const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want, prev) ?? bestFor(list, '', prev);
-    if (best) { playStreamFor(best, { season, ep }, want); return; }
+    if (best) { playStreamFor(best, { season, ep }, want, list); return; }
     const nxt = nextEpOf({ season, ep });
-    playSource({ url: '/assets/demo.mp4', title, subtitle: epLabel(season, ep), media: buildMediaFor({ season, ep }), subsQuery: subsQueryFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
+    playSource({ url: '/assets/demo.mp4', title, logo: titleLogo, subtitle: epLabel(season, ep), media: buildMediaFor({ season, ep }), subsQuery: subsQueryFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, series: seriesFor({ season, ep }) });
   };
   // language buckets (from the sources) + the sources for the picked language, sorted
   // best-quality first
