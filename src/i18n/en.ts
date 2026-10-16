@@ -206,6 +206,7 @@ const SEED: Record<string, string> = {
   // The pop-up boxes over the icon row: their headings, and the values the ⋯ box shows beside
   // each of its sections.
   'menu.audio': 'Audio',
+  'menu.audio_tracks': 'Audio tracks',
   'menu.sources': 'Sources',
   'menu.settings': 'Settings',
   'menu.on': 'On',
@@ -302,6 +303,7 @@ const SEED: Record<string, string> = {
   'settings.language': 'Audio language',
   'settings.autoplay_next': 'Auto-play next episode',
   'settings.sub_size': 'Subtitle size',
+  'settings.sub_italic': 'Italic subtitles',
   'settings.blur_unwatched': 'Blur unwatched episode stills',
   // TV build only — the row-preview switch. Worded as what it does on screen, not as the
   // performance trade-off behind it (see the note in stores/settings.ts).

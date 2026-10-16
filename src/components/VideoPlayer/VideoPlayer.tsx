@@ -5,7 +5,7 @@ import { useHistory } from '../../stores/history';
 import { useSettings } from '../../stores/settings';
 import { useT } from '../../i18n/i18n';
 import { loadHls, isHlsUrl, type HlsInstance } from '../../lib/hls';
-import { toVttBlobUrl } from '../../lib/subtitles';
+import { toVttBlobUrl, cueLook, subPickKey, loadSubPick, saveSubPick, autoSubIndex, bareSubLabel, type SubPick } from '../../lib/subtitles';
 import { isDecodingSilently, SILENT_AFTER } from '../../lib/codecs';
 import { resolvePlayback } from '../../lib/streamingServer';
 import { playDemuxed, probeUrl, type DemuxHandle } from '../../lib/browserDemux';
@@ -83,15 +83,21 @@ const IcSubs = (
   </svg>
 );
 
-// friendly name for an HLS audio rendition + a snapped quality label (matches vanilla)
-const AUDIO_NAMES: Record<string, string> = { eng: 'English', en: 'English', rus: 'Russian', ru: 'Russian', ka: 'ქართული', kat: 'ქართული', geo: 'ქართული', ukr: 'Ukrainian', uk: 'Ukrainian', tur: 'Turkish', fre: 'French', fr: 'French', ger: 'German', de: 'German', ita: 'Italian', jpn: 'Japanese', ja: 'Japanese', kor: 'Korean', spa: 'Spanish', es: 'Spanish' };
-/* Accepts both track shapes: hls.js renditions ({name, lang}) and native
- * AudioTrack ({label, language}). The code lookup strips any region subtag so
- * "ru-RU" still resolves to "Russian" rather than falling through to the raw tag. */
-function audioName(a: { name?: string; lang?: string; label?: string; language?: string }, i: number): string {
-  const raw = a.lang || a.language || '';
-  const tag = raw.toLowerCase().replace(/_/g, '-').split('-')[0];
-  return a.name || a.label || AUDIO_NAMES[tag] || raw || `Track ${i + 1}`;
+/* A track's name for the Audio box. Accepts both track shapes: hls.js renditions ({name, lang})
+ * and native AudioTrack ({label, language}).
+ *
+ * THE LANGUAGE IS NAMED THE WAY THE SOURCES BELOW IT ARE — "Русский", not "Russian" — through the
+ * same `langName`, after `normalizeSubLang` has turned "rus" / "ru-RU" into "ru". A title the file
+ * gives its own track ("Commentary", "Dub · Studio") wins over that, since it says more. A track
+ * tagged with no language at all ("und", which is what most rips carry) answers '' — the box then
+ * names it by what this playback is in, or "Track 2". */
+const NO_LANG = ['', 'und', 'mul', 'zxx', 'mis'];
+function audioName(a: { name?: string; lang?: string; label?: string; language?: string }, _i: number): string {
+  const tag = (a.lang || a.language || '').toLowerCase().replace(/_/g, '-').split('-')[0].trim();
+  const code = NO_LANG.includes(tag) ? '' : normalizeSubLang(tag).code;
+  const own = (a.name || a.label || '').trim();
+  if (own && !NO_LANG.includes(own.toLowerCase()) && own.toLowerCase() !== tag && !/^audio ?\d*$/i.test(own)) return own;
+  return code ? langName(code) : '';
 }
 function levelLabel(l: { height?: number; width?: number; bitrate?: number }): string {
   const eq = Math.max(l.height || 0, l.width ? Math.round((l.width * 9) / 16) : 0);
@@ -348,6 +354,29 @@ interface Level { i: number; height?: number }
  * second line so two identical "English" rows are still telling the user something. */
 interface SubCandidate { lang: string; label: string; url: string; source?: string }
 
+/* A <track> TAKEN OUT WHILE IT IS SHOWING LEAVES ITS LINE ON THE PICTURE. Chrome does not repaint the
+ * cue display when the element is removed, so the old line stays under the new one — one more per
+ * episode, source or file swap. Switching the outgoing track off first clears it; called before
+ * every setVtt that replaces or drops the mounted track (`keep` = the url staying mounted). */
+/* One subtitle line as the player draws it: the cue's own markup (<i>, <b>…, built by the browser's
+ * `getCueAsHTML`, which makes nothing but text and those few tags) and whether the file asked for it
+ * at the TOP — a sign or an on-screen caption, as VTT `line` or as the `{\an8}` tag SRT files carry.
+ * Those tags are taken out of the text either way: printed, they read as "{\an8}". */
+interface CueLine { html: string; top: boolean }
+const ASS_TAG = /\{\\[^}]*\}/g;
+function cueLine(c: VTTCue): CueLine {
+  const an = /\{\\an([1-9])\}/.exec(c.text)?.[1];
+  const top = an ? +an >= 7 : typeof c.line === 'number' && (c.snapToLines ? c.line >= 0 && c.line < 4 : c.line < 40);
+  const d = document.createElement('div');
+  d.appendChild(c.getCueAsHTML());
+  return { html: d.innerHTML.replace(ASS_TAG, ''), top };
+}
+
+function retireTrack(v: HTMLVideoElement | null, keep?: string) {
+  const el = v?.querySelector('track');
+  if (el && el.getAttribute('src') !== keep) el.track.mode = 'disabled';
+}
+
 export default function VideoPlayer() {
   const t = useT();
   const source = usePlayer((s) => s.source);
@@ -375,6 +404,7 @@ export default function VideoPlayer() {
   const startedRef = useRef(false);
   const audioPrefDone = useRef(false); // audio-language preference applied once per source
   const subPicked = useRef(false);     // the USER chose a subtitle → stop applying the preference
+  const subMemo = useRef<SubPick | null>(null); // what the viewer last picked for this TITLE (lib/subtitles)
   const vttCache = useRef(new Map<string, string>()); // add-on subtitle url → converted blob: url
   const demuxRef = useRef<DemuxHandle | null>(null); // in-page demuxer, when one is driving playback
   const wasmRef = useRef<WasmAudioHandle | null>(null); // in-page Dolby/DTS decoder, likewise
@@ -409,6 +439,7 @@ export default function VideoPlayer() {
   const [subs, setSubs] = useState<SubCandidate[]>([]);
   const [subsLoading, setSubsLoading] = useState(false);   // add-ons still being asked
   const [subFailed, setSubFailed] = useState(false);       // the chosen track would not load
+  const [subBad, setSubBad] = useState<Set<string>>(() => new Set()); // auto-picked urls that would not load
   // the one track currently converted to VTT and mounted as a <track>; null = none showing
   const [vtt, setVtt] = useState<{ lang: string; label: string; url: string } | null>(null);
   const [epPanelOpen, setEpPanelOpen] = useState(false);
@@ -426,6 +457,7 @@ export default function VideoPlayer() {
   const [railMounted, setRailMounted] = useState(false);
   const [railShown, setRailShown] = useState(false);
   const [segments, setSegments] = useState<Segments | null>(null);
+  const [segDone, setSegDone] = useState(false);   // the markers answer is in (or there was none to ask)
   const [silent, setSilent] = useState(false); // playing video, decoding no audio at all
   const [audioOpen, setAudioOpen] = useState(false); // the audio-track popup
   /* WHICH DOOR OPENED THE SETTINGS SHEET. Two buttons in the row lead to it: Subtitles, which opens
@@ -615,8 +647,8 @@ export default function VideoPlayer() {
               hls.levels.forEach((l, i) => { const h = l.height ?? 0; if (h <= want && h > bestH) { bestH = h; best = i; } });
               if (best >= 0) hls.currentLevel = best;
             }
-            // audio renditions + preferred audio language
-            if (hls.audioTracks && hls.audioTracks.length > 1) {
+            // audio renditions + preferred audio language (a single one is still listed, by name)
+            if (hls.audioTracks && hls.audioTracks.length > 0) {
               if (!audioPrefDone.current) { applyAudioPref(hls, wantLang); audioPrefDone.current = true; }
               setAudioTracks(hls.audioTracks.map((a, i) => ({ i, name: audioName(a, i) })));
               setCurAudio(hls.audioTrack);
@@ -631,7 +663,7 @@ export default function VideoPlayer() {
            * exactly the multi-audio streams it exists for. `audioPrefDone` keeps it to one
            * application per source so it can't stomp a manual choice from the menu. */
           hls.on('hlsAudioTracksUpdated', () => {
-            if (hls.audioTracks && hls.audioTracks.length > 1) {
+            if (hls.audioTracks && hls.audioTracks.length > 0) {
               if (!audioPrefDone.current) { applyAudioPref(hls, wantLang); audioPrefDone.current = true; }
               setAudioTracks(hls.audioTracks.map((a, i) => ({ i, name: audioName(a, i) })));
               setCurAudio(hls.audioTrack);
@@ -683,6 +715,11 @@ export default function VideoPlayer() {
               if (import.meta.env.DEV) console.info('[wasm-audio] falling back:', (e as Error).message);
             }
           }
+          // ONE TRACK: nothing to switch, but the Audio box can still say which language it is.
+          if (probe.reason === 'single-track' && probe.tracks?.length) {
+            setAudioTracks(probe.tracks.map((t) => ({ i: t.index, name: audioName({ lang: t.language }, t.index) })));
+            setCurAudio(0);
+          }
           v.src = url; v.play().catch(() => {});
           return;
         }
@@ -711,7 +748,7 @@ export default function VideoPlayer() {
     const syncNativeAudio = () => {
       if (cancelled || hlsRef.current) return;
       const list = nativeAudioTracks(v);
-      if (!list || list.length < 2) return;
+      if (!list || list.length < 1) return;
       const tracks = nativeAudioList(list);
       if (!audioPrefDone.current) {
         const want = pickAudioTrack(tracks, wantLang);
@@ -803,9 +840,14 @@ export default function VideoPlayer() {
      * yet and it does not run — leaving one rendered frame in which the <track> still
      * points at a blob the cleanup has just revoked, and the browser fetches it and logs
      * the failure. Dropping it in the same pass as the list is what closes that frame. */
+    retireTrack(videoRef.current);
     setVtt(null);
     setSubFailed(false);
+    setSubBad(new Set());
     subPicked.current = false;
+    subMemo.current = loadSubPick(subPickKey(source?.media));
+    // The subtitle face loads on first use; asked now, the first line is not drawn in a stand-in.
+    if (source) void document.fonts?.load('italic 600 32px Inter').catch(() => {});
 
     const q = source?.subsQuery;
     if (!q) { setSubsLoading(false); return; }
@@ -818,21 +860,20 @@ export default function VideoPlayer() {
     return () => { alive = false; };
   }, [source]);
 
-  /* Honour the default-subtitles-language setting — ONCE, and only until the user disagrees.
+  /* TURN A TRACK ON BY ITSELF — the one picked for this title last time (same language, same
+   * add-on: the next episode carries the choice on), else the default language from Settings
+   * (English). `autoSubIndex` in lib/subtitles has the ranking.
    *
    * `subPicked` is why this is not simply keyed on the list: the add-on tracks arrive after
    * the menu is already usable, so this effect necessarily re-runs on a list the user may
    * have already made a choice in, and without the flag it would overrule them a second or
-   * two into playback. It also lets an add-on's Georgian win when the stream carried none:
-   * the preference is re-evaluated against the grown list precisely while the user has
-   * expressed no preference of their own. */
+   * two into playback. Until then it re-runs on the grown list, which is how a remembered
+   * add-on's file wins over the stream's own once its answer lands. */
   useEffect(() => {
-    if (subPicked.current || !subs.length) return;
-    const want = settings.subLang;
-    if (want === 'off') return;
-    const i = subs.findIndex((s) => s.lang?.toLowerCase().startsWith(want));
-    if (i >= 0) setCurrentSub(i);
-  }, [subs, settings.subLang]);
+    if (subPicked.current) return;
+    const i = autoSubIndex(subs, subMemo.current, settings.subLang, subBad, subsLoading);
+    if (i != null) setCurrentSub(i);
+  }, [subs, subsLoading, subBad, settings.subLang]);
 
   /* DOWNLOAD THE ONE TRACK THAT IS SHOWING, and cache it for the rest of the playback.
    *
@@ -849,30 +890,93 @@ export default function VideoPlayer() {
    * binge-watch is a hundred episodes in one document. */
   useEffect(() => {
     const c = subs[currentSub];
-    if (!c) { setVtt(null); return; }
+    if (!c) { retireTrack(videoRef.current); setVtt(null); return; }
     const hit = vttCache.current.get(c.url);
-    if (hit) { setVtt({ lang: c.lang, label: c.label, url: hit }); setSubFailed(false); return; }
+    if (hit) { retireTrack(videoRef.current, hit); setVtt({ lang: c.lang, label: c.label, url: hit }); setSubFailed(false); return; }
     let alive = true;
     setSubFailed(false);
     void toVttBlobUrl(c.url).then((url) => {
       if (!alive) return;
       if (!url) {
         /* A subtitle host without permissive CORS cannot be read from a browser at all, and
-         * that is most of them. Saying so beats a row that ticks and shows nothing. */
-        setVtt(null); setSubFailed(true); return;
+         * that is most of them. Saying so beats a row that ticks and shows nothing. A track
+         * that was turned on BY ITSELF says nothing: the next one in its language is tried. */
+        retireTrack(videoRef.current);
+        setVtt(null);
+        if (subPicked.current) { setSubFailed(true); return; }
+        setSubBad((b) => new Set(b).add(c.url));
+        setCurrentSub(-1);
+        return;
       }
       vttCache.current.set(c.url, url);
+      retireTrack(videoRef.current, url);
       setVtt({ lang: c.lang, label: c.label, url });
     });
     return () => { alive = false; };
   }, [subs, currentSub]);
 
-  // one mounted <track> at a time, so showing it is not an index lookup
+  /* THE SUBTITLES ARE DRAWN BY THE PLAYER, in a layer of their own over the picture and the
+   * controls' shade, not by the browser inside the <video>. The browser still loads the track and
+   * says which cues are on (the track is `hidden`, so `cuechange` keeps firing); the player prints
+   * them. Two things only that way:
+   *   · NOT DIMMED. Anything the browser draws is part of the video, so the bottom bar's dark
+   *     gradient lay over it — a line placed beside the controls came out grey.
+   *   · PLACED. While the controls are up the line moves into the open space beside them: just above
+   *     the progress bar, to the right of the title, the episode line and the icons, and it WRAPS
+   *     inside that space. The browser's own cues can be pushed around a little but always wrap at
+   *     the full width, so a long line ran into the title or off the screen. (Lifting it over the
+   *     whole stack, the first try, put it half way up the picture.)
+   * In picture-in-picture and the iPhone's own fullscreen the page is not on screen, so there the
+   * browser draws them again (`nativeCues`).
+   *
+   * MEASURED, NOT A FIXED NUMBER: the stack's size is a clamp() of the screen, the wordmark's width
+   * is the art's, the web build has volume/PiP/fullscreen at the far end of the row, and the episodes
+   * shelf moves it all. Read once the stack has settled (its entrance is a transform) and again when
+   * the wordmark arrives; the last reading is used at once the next time the controls come up. When
+   * a long title leaves too little room beside it, the line goes over the whole stack instead.
+   *
+   * `x` moves the line's centre from the middle of the screen, `y` is its bottom's height above the
+   * bottom of the screen, `w` the width it wraps at, `vh` the picture's height (the type is 5% of it,
+   * the size browsers give subtitles, times the Settings size). */
+  const [cueBox, setCueBox] = useState({ x: 0, y: 0, w: 0, vh: 0 });
+
+  /* WHICH LINES ARE ON NOW, read from the mounted track. `load` as well as `cuechange`, because a
+   * track mounted while paused has its first cue on before any time has passed. */
+  const [cueLines, setCueLines] = useState<CueLine[]>([]);
+  useEffect(() => {
+    const el = videoRef.current?.querySelector('track');
+    if (!el || !vtt) { setCueLines([]); return; }
+    const tt = el.track;
+    const read = () => setCueLines(Array.from(tt.activeCues ?? []).map((c) => cueLine(c as VTTCue)));
+    read();
+    tt.addEventListener('cuechange', read);
+    el.addEventListener('load', read);
+    return () => { tt.removeEventListener('cuechange', read); el.removeEventListener('load', read); };
+  }, [vtt]);
+
+  /* PICTURE-IN-PICTURE AND THE IPHONE'S OWN FULLSCREEN show the <video> without the page, and so
+   * without the player's subtitle layer: there the browser draws the cues itself. */
+  const [nativeCues, setNativeCues] = useState(false);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const sync = () => {
+      const mode = (v as HTMLVideoElement & { webkitPresentationMode?: string }).webkitPresentationMode;
+      setNativeCues(document.pictureInPictureElement === v || mode === 'picture-in-picture' || mode === 'fullscreen');
+    };
+    const evs = ['enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged', 'webkitbeginfullscreen', 'webkitendfullscreen'];
+    evs.forEach((e) => v.addEventListener(e, sync));
+    return () => evs.forEach((e) => v.removeEventListener(e, sync));
+  }, [source]);
+
+  /* One mounted <track> at a time, so turning it on is not an index lookup. `hidden`, not `showing`:
+   * the cues still load and change, and the player draws them (see `cueLines`) — except where the
+   * page is not on screen and the browser has to (`nativeCues`). */
   useEffect(() => {
     const v = videoRef.current; if (!v) return;
     const tt = v.textTracks[0];
-    if (tt) tt.mode = vtt ? 'showing' : 'hidden';
-  }, [vtt]);
+    if (tt) tt.mode = vtt ? (nativeCues ? 'showing' : 'hidden') : 'disabled';
+  }, [vtt, nativeCues]);
 
   // drop every converted subtitle when the source changes (and on unmount)
   useEffect(() => () => {
@@ -907,7 +1011,7 @@ export default function VideoPlayer() {
   const segSource = useRef<typeof source | null>(null);
   useEffect(() => { segSource.current = source; }, [source]);
   useEffect(() => {
-    if (segAsked.current !== source) setSegments(null);
+    if (segAsked.current !== source) { setSegments(null); setSegDone(false); }
     if (!source || !dur || segAsked.current === source) return;
     segAsked.current = source;
     const m = source.media, s = source.series;
@@ -924,13 +1028,14 @@ export default function VideoPlayer() {
       q.set('type', 'movie');
       if (tmdbOf(m.id)) q.set('tmdb', tmdbOf(m.id));
       if (m.imdb) q.set('imdb', m.imdb);
-    } else return;
-    if (!q.get('tmdb') && !q.get('imdb')) return;
+    } else { setSegDone(true); return; }
+    if (!q.get('tmdb') && !q.get('imdb')) { setSegDone(true); return; }
     q.set('dur', String(Math.round(dur)));
     /* The answer's VERSION. The service worker keeps these a day and serves the kept copy first, so
-       when the server's sources change (SkipDB, Oct 16) an old wrong answer would still be shown
+       when the server's sources change (SkipDB added Oct 16 = v3; SkipDB made the main source = v4)
+       an old wrong answer would still be shown
        once per episode. A new value is a new cache key; the server ignores it. */
-    q.set('v', '3');
+    q.set('v', '4');
     const asked = source;
     const take = (d: { intro?: Segments['intro']; recap?: Segments['recap']; credits?: Segments['outro']; outro?: Segments['outro']; preview?: Segments['preview'] } | null) => {
       if (!d || segSource.current !== asked) return;
@@ -949,7 +1054,8 @@ export default function VideoPlayer() {
         return null;
       })
       .then(take)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (segSource.current === asked) setSegDone(true); });
   }, [source, dur]);
 
 
@@ -1398,7 +1504,13 @@ export default function VideoPlayer() {
    * more: only the chosen track is ever mounted, so which one shows follows from which one
    * was fetched, and the effect that mounts it also sets its mode. Setting a mode here
    * would be setting it on the OUTGOING track, one commit before the incoming one exists. */
-  const selectSub = (i: number) => { subPicked.current = true; setCurrentSub(i); };
+  const selectSub = (i: number) => {
+    subPicked.current = true;
+    setCurrentSub(i);
+    // Remembered for the TITLE, so the next episode (and a source switch) opens on the same track.
+    const c = subs[i];
+    saveSubPick(subPickKey(source?.media), c ? { lang: c.lang, source: c.source ?? '', label: bareSubLabel(c.label), url: c.url } : { off: true });
+  };
   /* Manual audio switch. hls.js owns the list when it is attached; otherwise the list came
    * from the element itself, where switching means enabling one track and disabling the
    * rest (a native AudioTrackList permits several enabled at once, which would mix them). */
@@ -2112,6 +2224,91 @@ export default function VideoPlayer() {
   useEffect(() => { setPromptGone(false); setPromptSel('main'); setPromptRun((n) => n + 1); }, [skipMode]);
   useEffect(() => { setCreditsDismissed(false); }, [source]);
   const promptShown = (skipMode === 'next' ? !creditsDismissed : !!skipMode && (!promptGone || !hideUi)) && switching == null;
+  /* THE BOTTOM STACK ARRIVES IN ONE PIECE: the wordmark, the episode line, the icons and the bar WITH
+   * its chapter gaps, together. It used to come in three steps — the bar first as one plain line at
+   * 0:00 / 0:00, its gaps a second or two later when the markers answered, and after Next Episode
+   * the wordmark and the coming episode's line on their own, with no bar under them. Now it is held
+   * (`held`) until the file's length is known and the markers have answered, and the same after Next
+   * Episode until the new one plays; then all of it pops in at once. The markers get 5 s once the
+   * length is known (a first, uncached answer can take a second round on the server) — a slow answer then adds its gaps late rather than holding the controls back —
+   * and nothing holds for more than 8 s, so a stalled file still leaves the viewer the controls
+   * (Audio → another source). An error shows them at once. The ✕ and the picture are never held. */
+  const [segWaited, setSegWaited] = useState(false);
+  const hasDur = dur > 0;
+  useEffect(() => {
+    setSegWaited(false);
+    if (!hasDur) return;
+    const id = window.setTimeout(() => setSegWaited(true), 5000);
+    return () => window.clearTimeout(id);
+  }, [source, hasDur]);
+  const [holdOver, setHoldOver] = useState(false);
+  useEffect(() => {
+    setHoldOver(false);
+    const id = window.setTimeout(() => setHoldOver(true), 8000);
+    return () => window.clearTimeout(id);
+  }, [source, switching]);
+  const held = !errKind && !holdOver && (switching != null || !(hasDur && (segDone || segWaited)));
+  // When it lands, the controls are shown afresh (and fade on the usual timer), as on any wake.
+  const wasHeld = useRef(true);
+  useEffect(() => {
+    if (wasHeld.current && !held && !ppOpen) bump();
+    wasHeld.current = held;
+  }, [held, ppOpen, bump]);
+  /* WHERE THE SUBTITLE LAYER SITS (`cueBox`, explained where it is declared). Down here because it
+   * also makes room for the Skip / Next Episode prompt, which is decided just above. */
+  const shownBox = useRef<{ x: number; y: number; w: number; vh: number } | null>(null);
+  useEffect(() => {
+    const at = () => {
+      const v = videoRef.current, root = overlayRef.current;
+      if (!v || !root) return null;
+      const vr = v.getBoundingClientRect(), or = root.getBoundingClientRect();
+      if (!vr.width || !or.width) return null;
+      // At rest: centred on the picture, a little up from its bottom edge, 88% of its width.
+      return { vr, or, rest: { x: Math.round(vr.left + vr.width / 2 - (or.left + or.width / 2)), y: Math.round(or.bottom - vr.bottom + vr.height * 0.05), w: Math.round(vr.width * 0.88), vh: Math.round(vr.height) } };
+    };
+    const rest = () => { const a = at(); if (a) setCueBox(a.rest); };
+    if (!source || hideUi || held || ppOpen) {
+      rest();
+      window.addEventListener('resize', rest);
+      return () => window.removeEventListener('resize', rest);
+    }
+    if (shownBox.current) setCueBox(shownBox.current); else rest();
+    const measure = () => {
+      const a = at(), root = overlayRef.current;
+      const bar = root?.querySelector<HTMLElement>('.vp-progress');
+      if (!a || !root || !bar) return;
+      const { vr, or } = a;
+      const br = bar.getBoundingClientRect();
+      if (!br.height) return;
+      const gap = window.innerHeight * 0.015;
+      // The right edge of what is drawn, not of the box: the title and the episode line are blocks.
+      const inked = (el: Element) => { const r = document.createRange(); r.selectNodeContents(el); const b = r.getBoundingClientRect(); return b.width ? b.right : el.getBoundingClientRect().right; };
+      const lefts = [
+        ...Array.from(root.querySelectorAll('.vp-meta .vp-logo')).map((el) => el.getBoundingClientRect().right),
+        ...Array.from(root.querySelectorAll('.vp-meta .vp-title, .vp-epline > span')).map(inked),
+        ...Array.from(root.querySelectorAll('.vp-bottom > .vp-controls > :not(.vp-tail)')).map((el) => el.getBoundingClientRect().right),
+      ].filter((n) => n > 0);
+      const tail = root.querySelector<HTMLElement>('.vp-bottom .vp-tail');
+      const L = (lefts.length ? Math.max(...lefts) : vr.left) + gap * 2;
+      // A Skip / Next Episode prompt sits at the right end, over the bar: the space ends where it starts.
+      const prompt = root.querySelector<HTMLElement>('.vp-prompt.show');
+      const R = Math.min(tail ? tail.getBoundingClientRect().left : br.right, prompt ? prompt.getBoundingClientRect().left : Infinity) - gap;
+      const mid = or.left + or.width / 2;
+      let next;
+      if (R - L >= vr.width * 0.3) {
+        next = { x: Math.round((L + R) / 2 - mid), y: Math.round(or.bottom - br.top + gap), w: Math.round(R - L), vh: Math.round(vr.height) };
+      } else {
+        const tops = Array.from(root.querySelectorAll<HTMLElement>('.vp-bottom > .vp-meta, .vp-bottom > .vp-controls'))
+          .map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0).map((r) => r.top);
+        next = { ...a.rest, y: Math.round(or.bottom - Math.min(br.top, ...tops) + gap) };
+      }
+      shownBox.current = next;
+      setCueBox(next);
+    };
+    const t = window.setTimeout(measure, 450);
+    window.addEventListener('resize', measure);
+    return () => { window.clearTimeout(t); window.removeEventListener('resize', measure); };
+  }, [source, hideUi, held, ppOpen, railShown, logoReady, promptShown]);
   /* A pressed prompt takes the remote with it when it goes: focus would otherwise fall to <body> as
    * the button unmounts, and the next arrow would restart from wherever spatial navigation likes. */
   const promptLeft = () => {
@@ -2309,10 +2506,13 @@ export default function VideoPlayer() {
   const spanFrom = Math.min(pct, curPct);
   const spanWidth = Math.abs(pct - curPct);
 
-  // ::cue styling from the subtitle settings (color / bg / size / outline)
-  const ow = settings.subOutlineW, oc = settings.subOutline;
-  const cueOutline = ow > 0 ? `text-shadow:${-ow}px ${-ow}px 0 ${oc},${ow}px ${-ow}px 0 ${oc},${-ow}px ${ow}px 0 ${oc},${ow}px ${ow}px 0 ${oc};` : '';
-  const cueCss = `#playerVideo::cue{color:${settings.subColor};background-color:${settings.subBg};font-size:${settings.subSize}%;${cueOutline}}`;
+  // The subtitle look (lib/subtitles `cueLook`): on the player's own layer, and as ::cue for the
+  // browser's drawing in picture-in-picture / native fullscreen.
+  const cue = cueLook(settings);
+  const cueCss = `#playerVideo::cue{color:${cue.color};background-color:${cue.background};font-family:${cue.fontFamily};`
+    + `font-weight:${cue.fontWeight};font-style:${cue.fontStyle};font-size:${settings.subSize}%;text-shadow:${cue.textShadow}}`;
+  const cueFs = Math.round(cueBox.vh * 0.05 * (settings.subSize / 100));
+  const cueSpan = { background: cue.background, padding: cue.background === 'transparent' ? undefined : '0 .3em' };
 
   /* THE TAIL OF THE ICON ROW — web only. Three controls a television has no use for and a
    * browser cannot do without: NEITHER fullscreen nor picture-in-picture means anything on a set
@@ -2384,6 +2584,8 @@ export default function VideoPlayer() {
   // The language this playback is in, among the source languages — the one the Audio box ticks.
   const playLang = srcLangs.find((l) => l === source.lang) ?? '';
   const curSrc = srcs ? srcKey(srcs.current) : '';
+  // What this playback is in, by name — for a file whose one track carries no language tag.
+  const playName = langName(source.lang || source.langs?.[0] || '') || t('menu.audio_default');
   const pickSource = (x: AddonStream, lang: string) => {
     setAudioOpen(false);
     if (!srcs || srcKey(x) === curSrc) return;
@@ -2498,20 +2700,27 @@ export default function VideoPlayer() {
                     </>
                   ) : (
                     <>
-                      <div className="vp-box-title">{t('menu.audio')}</div>
-                      {audioTracks.length > 1 && audioTracks.map((a) => (
-                        <OptRow key={a.i} on={a.i === curAudio} label={a.name} onClick={() => { selectAudio(a.i); setAudioOpen(false); }} />
-                      ))}
-                      {srcLangs.length > 0 ? (
+                      {/* TWO LISTS, EACH WITH ITS OWN TICK: the audio tracks inside THIS file (switched in
+                          place), then the SOURCES — every other file of this title, by language. When
+                          the file's tracks cannot be read the first list names the one playing. */}
+                      <div className="vp-box-title">{t('menu.audio_tracks')}</div>
+                      {audioTracks.length > 0 ? audioTracks.map((a, n) => {
+                        const name = a.name || (audioTracks.length === 1 ? playName : `${t('menu.track')}${n + 1}`);
+                        const dupe = !!a.name && audioTracks.some((o, m) => m !== n && o.name === a.name);
+                        return (
+                          <OptRow key={a.i} on={a.i === curAudio} label={name} sub={dupe ? `#${n + 1}` : undefined}
+                            onClick={() => { if (a.i !== curAudio) selectAudio(a.i); setAudioOpen(false); }} />
+                        );
+                      }) : (
+                        <OptRow on label={playName} onClick={() => setAudioOpen(false)} />
+                      )}
+                      {srcLangs.length > 0 && (
                         <>
-                          {audioTracks.length > 1 && <div className="vp-box-title vp-box-title-2">{t('menu.sources')}</div>}
+                          <div className="vp-box-title vp-box-title-2">{t('menu.sources')}</div>
                           {srcLangs.map((l) => (
-                            <OptRow key={l} dataKey={l} drill label={langName(l)}
-                              on={audioTracks.length <= 1 && l === playLang} onClick={() => setBoxLevel(l)} />
+                            <OptRow key={l} dataKey={l} drill label={langName(l)} on={l === playLang} onClick={() => setBoxLevel(l)} />
                           ))}
                         </>
-                      ) : audioTracks.length <= 1 && (
-                        <OptRow on label={langName(source.lang || source.langs?.[0] || '') || t('menu.audio_default')} onClick={() => setAudioOpen(false)} />
                       )}
                     </>
                   )}
@@ -2624,7 +2833,7 @@ export default function VideoPlayer() {
          absent means the arrows are transport and it must stand down. `tv` / `web` are the
          styling hooks for the two builds' own stylesheets; `tv-rail` lifts the bar clear of the
          episode shelf on both. */
-      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${jumping ? ' vp-jumping' : ''}`}
+      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${held ? ' vp-held' : ''}${jumping ? ' vp-jumping' : ''}`}
       id="playerOverlay"
       ref={overlayRef}
       /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
@@ -2744,11 +2953,26 @@ export default function VideoPlayer() {
         {/* `key` is the blob url so switching tracks REPLACES the element rather than
             mutating its src — a <track> that has already loaded keeps its old cues when
             src changes underneath it, which showed the previous language's subtitles. */}
-        {vtt && <track key={vtt.url} kind="subtitles" src={vtt.url} srcLang={vtt.lang} label={vtt.label} default />}
+        {vtt && <track key={vtt.url} kind="subtitles" src={vtt.url} srcLang={vtt.lang} label={vtt.label} />}
       </video>
 
-      {/* subtitle appearance from Settings, applied to the cue text */}
+      {/* subtitle appearance from Settings, for the browser's own drawing (picture-in-picture) */}
       <style>{cueCss}</style>
+
+      {/* THE SUBTITLES, drawn by the player over the picture and the controls' shade (see `cueBox`). */}
+      {!nativeCues && !ppOpen && cueLines.length > 0 && cueBox.vh > 0 && (
+        <div className="vp-cues" aria-hidden="true"
+          style={{ fontSize: cueFs, color: cue.color, fontFamily: cue.fontFamily, fontWeight: cue.fontWeight, fontStyle: cue.fontStyle, textShadow: cue.textShadow }}>
+          {cueLines.some((l) => l.top) && (
+            <div className="vp-cues-top">
+              {cueLines.filter((l) => l.top).map((l, i) => <div className="vp-cue" key={i}><span style={cueSpan} dangerouslySetInnerHTML={{ __html: l.html }} /></div>)}
+            </div>
+          )}
+          <div className="vp-cues-bottom" style={{ width: cueBox.w, transform: `translate(calc(-50% + ${cueBox.x}px), ${-cueBox.y}px)` }}>
+            {cueLines.filter((l) => !l.top).map((l, i) => <div className="vp-cue" key={i}><span style={cueSpan} dangerouslySetInnerHTML={{ __html: l.html }} /></div>)}
+          </div>
+        </div>
+      )}
 
       <div className="vp-grain" id="vpGrain" aria-hidden="true" />
 
@@ -2819,7 +3043,7 @@ export default function VideoPlayer() {
         <div className="vp-bottom">
           {/* KEYED ON WHAT IS PLAYING, so the next episode gets its own entrance rather than
               inheriting the last one's settled block. */}
-          <div className="vp-meta" key={source.media?.key || source.url}>
+          <div className="vp-meta" key={`${source.media?.key || source.url}${held ? ':held' : ''}`}>
             {logoSrc ? (
               /* THE WORDMARK, NOT THE NAME SET IN TYPE, whenever the title has one. It is the same
                  art the title screen showed a second ago (same raster size, so a cache hit), and it
