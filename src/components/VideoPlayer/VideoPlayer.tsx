@@ -8,14 +8,15 @@ import { loadHls, isHlsUrl, type HlsInstance } from '../../lib/hls';
 import { toVttBlobUrl } from '../../lib/subtitles';
 import { isDecodingSilently, SILENT_AFTER } from '../../lib/codecs';
 import { resolvePlayback } from '../../lib/streamingServer';
-import { playDemuxed, probeUrl, type DemuxHandle, type DemuxBlocker } from '../../lib/browserDemux';
+import { playDemuxed, probeUrl, type DemuxHandle } from '../../lib/browserDemux';
 import { playWithWasmAudio, needsWasmDecoder, type WasmAudioHandle } from '../../lib/wasmAudio';
-import { langName, normalizeSubLang, collectAddonSubtitles } from '../../lib/addonClient';
+import { langName, normalizeSubLang, collectAddonSubtitles, canStartHere, type AddonStream } from '../../lib/addonClient';
 import { apiFetch } from '../../lib/api';
 import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
 import { useKeepAwake } from '../../lib/idle';
+import { useSeason } from '../../lib/queries';
+import { rasterLogo } from '../../lib/img';
 import EpisodeRail from './EpisodeRail';
-import TvChipMenu from '../DetailModal/TvChipMenu';
 import { scrollCardToSlot } from './railScroll';
 import { createCreditsDetector, creditsFallback, creditsWatchFrom, type CreditsDetector } from '../../lib/creditsDetect';
 
@@ -52,9 +53,32 @@ const VOL_LOCKED = typeof navigator !== 'undefined'
 
 // skip-intro heuristic window (s) + credits-tail length when no IntroDB markers exist
 const INTRO_FROM = 8, INTRO_TO = 92, CREDITS_TAIL = 35;
-interface Segments { intro?: { start: number; end: number }; outro?: { start: number; end: number } }
+/* Where the intro, recap, credits ("outro") and next-episode preview are, in seconds — from
+ * /api/segments, which merges two community databases and checks each marker against this file's
+ * length. Credits and previews may run to the end of the file (`end` null). */
+interface Segments {
+  intro?: { start: number; end: number } | null;
+  recap?: { start: number; end: number } | null;
+  outro?: { start: number; end: number | null } | null;
+  preview?: { start: number; end: number | null } | null;
+}
 
-const IcEpisodes = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M4 5h16v2H4zM4 11h16v2H4zM4 17h10v2H4z" /></svg>;
+/* THE ICON ROW over the scrubber: Episodes, Next, Subtitles, Audio — the glyphs and the order a
+ * viewer knows from the big streaming apps, so none of them needs a label. */
+const IcEpisodes = (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+    <rect x="3" y="5" width="3" height="2.4" rx=".7" /><rect x="8.5" y="5" width="12.5" height="2.4" rx="1.2" />
+    <rect x="3" y="10.8" width="3" height="2.4" rx=".7" /><rect x="8.5" y="10.8" width="12.5" height="2.4" rx="1.2" />
+    <rect x="3" y="16.6" width="3" height="2.4" rx=".7" /><rect x="8.5" y="16.6" width="12.5" height="2.4" rx="1.2" />
+  </svg>
+);
+const IcNext = <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M5.5 5.6v12.8L15 12 5.5 5.6zM16.6 5.6h2.4v12.8h-2.4z" /></svg>;
+const IcSubs = (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4.2 4h15.6c.7 0 1.2.5 1.2 1.2v10.6c0 .7-.5 1.2-1.2 1.2H11l-4.4 3.4V17H4.2c-.7 0-1.2-.5-1.2-1.2V5.2C3 4.5 3.5 4 4.2 4z" />
+    <path d="M7 9.4h4.2M13.8 9.4H17M7 12.8h6.6M16 12.8h1" />
+  </svg>
+);
 
 // friendly name for an HLS audio rendition + a snapped quality label (matches vanilla)
 const AUDIO_NAMES: Record<string, string> = { eng: 'English', en: 'English', rus: 'Russian', ru: 'Russian', ka: 'ქართული', kat: 'ქართული', geo: 'ქართული', ukr: 'Ukrainian', uk: 'Ukrainian', tur: 'Turkish', fre: 'French', fr: 'French', ger: 'German', de: 'German', ita: 'Italian', jpn: 'Japanese', ja: 'Japanese', kor: 'Korean', spa: 'Spanish', es: 'Spanish' };
@@ -257,19 +281,20 @@ const TV_GRAIN = [0, 0.08, 0.18, 0.3];
 const TV_CLARITY = [0, 0.25, 0.5, 0.85];
 const TV_LEVEL_KEYS = ['menu.off', 'menu.low', 'menu.medium', 'menu.high'];
 
-/* The settings panel's four sections, in the order the chip offers them. Ordered by how often a
- * viewer comes here for each: Subtitles is why this menu gets opened most nights, Enhance picture
- * is set once and forgotten. Quality / source sits third whether or not the stream offers more
- * than one level — a list whose LENGTH depends on the release means the row under the remote
- * changes identity between one title and the next, and muscle memory is worth more than a saved
- * line. */
-const SET_TABS = [
-  { key: 'subs', i18n: 'menu.subtitles' },
+/* The ⋯ box's sections, in the order it lists them: set-and-forget last. Quality / source is
+ * listed whether or not the stream offers more than one level — a list whose LENGTH depends on the
+ * release means the row under the remote changes identity between one title and the next, and
+ * muscle memory is worth more than a saved line. (Subtitles has its own button and box.) */
+const MORE_SECS = [
   { key: 'speed', i18n: 'menu.speed' },
   { key: 'quality', i18n: 'menu.quality' },
   { key: 'enhance', i18n: 'menu.enhance' },
 ] as const;
-type SetTab = typeof SET_TABS[number]['key'];
+type MoreSec = typeof MORE_SECS[number]['key'];
+
+const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
+/** One source, the same one however many times the title screen re-ranks its list. */
+const srcKey = (x: AddonStream) => `${x.source}|${x.infoHash || x.url}|${x.fileIdx ?? ''}`;
 
 /* ---- TEN FEET AWAY: WHAT THE REMOTE DOES ---------------------------------------------------
  * The player has two modes on a TV and exactly one thing moves between them.
@@ -299,13 +324,25 @@ const TV_RAMP_GROWTH = 3.2;     // and how that rate multiplies per further seco
 const TV_HIDE_MS = 5000;        // chrome auto-hide — longer than the desktop's 3s; reading is slower from a sofa
 
 
-function OptRow({ on, label, sub, onClick }: { on: boolean; label: string; sub?: string; onClick: () => void }) {
+/* The tick sits at the row's far end, after the label — where the big apps put it. A row with a
+ * list behind it (`drill`) ends in a chevron, and carries `dataKey` so the box can hand focus back
+ * to it when the viewer steps back out of that list. */
+function OptRow({ on, label, sub, drill, dataKey, onClick }: { on: boolean; label: string; sub?: string; drill?: boolean; dataKey?: string; onClick: () => void }) {
   return (
-    <div className={`vp-opt${on ? ' on' : ''}`} role="menuitemradio" aria-checked={on} tabIndex={0}
+    <div className={`vp-opt${drill ? ' vp-opt-sub' : ''}${on ? ' on' : ''}`} role="menuitemradio" aria-checked={on} tabIndex={0} data-key={dataKey}
       onClick={onClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}>
-      <span className="ck">{on ? '✓' : ''}</span>{label}{sub ? <span className="sub">{sub}</span> : null}
+      <span className="lbl">{label}</span>{sub ? <span className="sub">{sub}</span> : null}<span className="ck" aria-hidden="true">{on ? '✓' : ''}</span>
+      {drill && <span className="chev" aria-hidden="true" />}
     </div>
   );
+}
+
+/** The icon row's own buttons, in row order — not the rows of a popup hanging off one of them. */
+function rowIcons(root: HTMLElement | null): HTMLElement[] {
+  const row = root?.querySelector<HTMLElement>('.vp-bottom .vp-controls');
+  if (!row) return [];
+  return Array.from(row.querySelectorAll<HTMLElement>('.vp-icon'))
+    .filter((el) => !el.closest('.vp-menu') && el.tabIndex >= 0 && el.getClientRects().length > 0);
 }
 
 function fmt(s: number): string {
@@ -339,7 +376,6 @@ export default function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<HlsInstance | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
-  const playedRef = useRef<HTMLDivElement>(null); // written directly by the playhead loop (web)
   const thumbRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<number | undefined>(undefined);
   const recordedRef = useRef(false);   // record watch-history once per opened source
@@ -372,8 +408,11 @@ export default function VideoPlayer() {
   const [currentSub, setCurrentSub] = useState(-1); // -1 = subtitles off
   const [audioTracks, setAudioTracks] = useState<Array<{ i: number; name: string }>>([]);
   const [curAudio, setCurAudio] = useState(0);
-  const [setTab, setSetTab] = useState<SetTab>('subs');        // which section the TV panel is showing
-  const [subLang, setSubLang] = useState<string | null>(null); // which language group is expanded
+  /* THE BOX'S SECOND LEVEL. Every box opens on a short list — subtitle languages, audio languages,
+   * the ⋯ sections — and a row with more behind it opens that list in the same box. This is the key
+   * of the row that was opened (a language code, or a ⋯ section); null is the box's first list. */
+  const [boxLevel, setBoxLevel] = useState<string | null>(null);
+  const levelFrom = useRef<string | null>(null); // the row just stepped back out of, for focus
   const [fs, setFs] = useState(false);
   const [hideUi, setHideUi] = useState(false);
   /* Every subtitle track OFFERED for this source — the ones embedded in the stream plus
@@ -401,8 +440,12 @@ export default function VideoPlayer() {
   const [segments, setSegments] = useState<Segments | null>(null);
   const [silent, setSilent] = useState(false); // playing video, decoding no audio at all
   const [audioOpen, setAudioOpen] = useState(false); // the audio-track popup
-  // why in-page demuxing is not driving this source; null when it is
-  const [demuxBlocker, setDemuxBlocker] = useState<DemuxBlocker | null>(null);
+  /* WHICH DOOR OPENED THE SETTINGS SHEET. Two buttons in the row lead to it: Subtitles, which opens
+   * it on the subtitle list, and ⋯, which opens it on everything else (speed first). One sheet,
+   * two starting sections — and Back hands the remote to whichever button it came from. */
+  const [menuDoor, setMenuDoor] = useState<'subs' | 'more'>('more');
+  const [logoFailed, setLogoFailed] = useState(false); // the wordmark would not load → text title
+  const [logoReady, setLogoReady] = useState(false);   // decoded, so its entrance can play on a real picture
 
   /* ---- POST-PLAY: the credits shrink into the corner and the next thing to watch takes over -----
    * Two states, because the screen has to be READY before it is SHOWN: `ppArmed` mounts it a few
@@ -444,7 +487,9 @@ export default function VideoPlayer() {
    * Intro button), while 'scrubber' means the viewer stepped UP out of the episode rail and
    * the timeline is the thing they stepped up FROM — landing them on Skip Intro instead
    * would move them sideways for no reason they asked for. */
-  const tvWantFocus = useRef<'bar' | 'scrubber' | 'gear' | 'episodes'>('bar'); // where the bar should re-seed focus
+  const tvWantFocus = useRef<'bar' | 'scrubber' | 'gear' | 'subs' | 'audio' | 'episodes'>('bar'); // where the bar should re-seed focus
+  // The icon the remote last stood on in the row, so Up from the scrubber goes back to it.
+  const rowLast = useRef('');
   const railFrom = useRef<'bar' | 'button'>('button'); // which door opened the episode rail
   /* Something is open ON TOP of the control bar and is being read. The auto-hide consults this
    * rather than the three states directly, because it fires from a timer closed over on mount and
@@ -488,7 +533,7 @@ export default function VideoPlayer() {
     if (!source) { setPlaySrc(null); return; }
     const ctrl = new AbortController();
     let alive = true;
-    setPlaySrc(null); setLoading(true); setErrKind(null); setSilent(false); setDemuxBlocker(null);
+    setPlaySrc(null); setLoading(true); setErrKind(null); setSilent(false);
     resolvePlayback(source.url, source.kind, ctrl.signal, source.notWebReady)
       .then((r) => { if (alive) setPlaySrc(r); })
       .catch(() => { if (alive) setPlaySrc({ url: source.url, kind: source.kind || 'url', via: false }); });
@@ -634,7 +679,6 @@ export default function VideoPlayer() {
             && probe.tracks?.find((t) => needsWasmDecoder(t.codec));
           if (wasm) {
             try {
-              setDemuxBlocker(null);
               setLoading(true);
               const pick = probe.tracks!.findIndex((t) => trackIsLang({ lang: t.language }, wantLang));
               const h = await playWithWasmAudio(v, url, pick >= 0 ? pick : 0,
@@ -650,11 +694,9 @@ export default function VideoPlayer() {
               if (import.meta.env.DEV) console.info('[wasm-audio] falling back:', (e as Error).message);
             }
           }
-          setDemuxBlocker(probe.reason);
           v.src = url; v.play().catch(() => {});
           return;
         }
-        setDemuxBlocker(null);
         try {
           const want = Math.max(0, probe.tracks.findIndex((t) => t.playable && trackIsLang({ lang: t.language }, wantLang)));
           const h = await playDemuxed(v, url, want, (m) => { if (import.meta.env.DEV) console.info('[demux]', m); });
@@ -849,22 +891,63 @@ export default function VideoPlayer() {
     vttCache.current.clear();
   }, [source]);
 
-  // IntroDB intro/outro markers for the current episode (best-effort; the skip button
-  // falls back to the heuristic window when there are none)
+  /* WHERE THE INTRO, RECAP AND CREDITS ARE — for a film as much as for an episode.
+   *
+   * Asked once per source, and not until the file's LENGTH is known: the server checks every
+   * community marker against it (an "intro" two hours into a film is a bad submission; credits
+   * that end past the end of this file were timed on a longer cut), and one of the two databases
+   * uses it to prefer markers made against this same release. Until it answers the skip button
+   * falls back to its heuristic window on a series; a film just has no markers.
+   *
+   * TheIntroDB is keyed by TMDB, in the numbering the viewer picked; IntroDB by IMDb, in the
+   * stream numbering — the two differ for an anime whose sequel season lives under its own IMDb
+   * id, so the second key travels alongside (`iimdb`, `is`, `ie`).
+   *
+   * A server that predates /api/segments answers 404; an episode then falls back to the old
+   * IntroDB-only route, so the player can ship before the server does. */
+  const segAsked = useRef<typeof source | null>(null);
   useEffect(() => {
-    setSegments(null);
-    const s = source?.series;
-    if (!s?.imdb) return;
-    // markers are keyed like streams: a folded-in sequel season under the sequel's own id
-    const st = s.seasons.find((x) => x.season === s.season)?.stream;
-    const [imdb, season] = st ? [st.imdb, st.season] : [s.imdb, s.season];
+    if (segAsked.current !== source) setSegments(null);
+    if (!source || !dur || segAsked.current === source) return;
+    segAsked.current = source;
+    const m = source.media, s = source.series;
+    const tmdbOf = (id: unknown) => (/^\d+$/.test(String(id ?? '')) ? String(id) : '');
+    const q = new URLSearchParams();
+    if (s) {
+      const st = s.seasons.find((x) => x.season === s.season)?.stream;
+      q.set('type', 'tv');
+      if (tmdbOf(s.metaId)) q.set('tmdb', tmdbOf(s.metaId));
+      if (s.imdb) q.set('imdb', s.imdb);
+      q.set('s', String(s.season)); q.set('e', String(s.ep));
+      if (st) { q.set('iimdb', st.imdb); q.set('is', String(st.season)); q.set('ie', String(s.ep)); }
+    } else if (m) {
+      q.set('type', 'movie');
+      if (tmdbOf(m.id)) q.set('tmdb', tmdbOf(m.id));
+      if (m.imdb) q.set('imdb', m.imdb);
+    } else return;
+    if (!q.get('tmdb') && !q.get('imdb')) return;
+    q.set('dur', String(Math.round(dur)));
     let alive = true;
-    apiFetch(`/api/introdb/${encodeURIComponent(imdb)}/${season}/${s.ep}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive && d && (d.intro || d.outro)) setSegments(d); })
+    const take = (d: { intro?: Segments['intro']; recap?: Segments['recap']; credits?: Segments['outro']; outro?: Segments['outro']; preview?: Segments['preview'] } | null) => {
+      if (!alive || !d) return;
+      const seg: Segments = { intro: d.intro, recap: d.recap, outro: d.credits ?? d.outro, preview: d.preview };
+      if (seg.intro || seg.recap || seg.outro || seg.preview) setSegments(seg);
+    };
+    apiFetch(`/api/segments?${q}`)
+      .then((r) => {
+        if (r.ok) return r.json();
+        // An older server: the IntroDB-only route, episodes only.
+        if (r.status === 404 && s?.imdb) {
+          const st = s.seasons.find((x) => x.season === s.season)?.stream;
+          const [imdb, season] = st ? [st.imdb, st.season] : [s.imdb, s.season];
+          return apiFetch(`/api/introdb/${encodeURIComponent(imdb)}/${season}/${s.ep}`).then((r2) => (r2.ok ? r2.json() : null));
+        }
+        return null;
+      })
+      .then(take)
       .catch(() => {});
     return () => { alive = false; };
-  }, [source?.series]);
+  }, [source, dur]);
 
 
   const bump = useCallback(() => {
@@ -893,6 +976,42 @@ export default function VideoPlayer() {
     const v = videoRef.current; if (!v) return;
     if (v.paused) v.play().catch(() => {}); else v.pause();
   }, []);
+
+  /* ONE BOX OPEN AT A TIME. Each button in the row opens its own box hanging over it — Subtitles,
+   * Audio, ⋯ — and opening one shuts whichever was up, along with the episode shelf: a box over the
+   * row with the shelf lifting the row is two layers fighting for the same strip of screen. The
+   * button that opened a box shuts it again. */
+  const toggleMenu = (door: 'subs' | 'more') => {
+    setAudioOpen(false);
+    setEpPanelOpen(false);
+    // However the box ends up closing — a pick, Back, a click outside — the remote goes back to
+    // the button that opened it.
+    tvWantFocus.current = door === 'subs' ? 'subs' : 'gear';
+    if (menuOpen && menuDoor === door) { setMenuOpen(false); return; }
+    setMenuDoor(door);
+    setBoxLevel(null);
+    setMenuOpen(true);
+  };
+  const toggleAudio = () => {
+    setMenuOpen(false);
+    setEpPanelOpen(false);
+    setBoxLevel(null);
+    tvWantFocus.current = 'audio';
+    setAudioOpen((o) => !o);
+  };
+
+  useEffect(() => { setLogoFailed(false); setLogoReady(false); }, [source?.logo]);
+
+  /* THE EPISODE'S NAME, for the line under the wordmark. The same season query the episode shelf
+   * and the title screen's list make, so it is nearly always already in the cache by the time
+   * anything plays. Asked only for a TMDB title: an add-on series carries its episodes in its own
+   * meta and has no season endpoint to ask (the title screen makes the same distinction). */
+  const epSeries = source?.series;
+  const epTmdb = epSeries != null && /^\d+$/.test(String(epSeries.metaId));
+  const epSeason = useSeason(epTmdb ? epSeries.metaId : undefined, epTmdb ? epSeries.season : undefined, epSeries?.imdb);
+  const epFound = epSeries ? epSeason.data?.episodes?.find((e) => e.episode === epSeries.ep)?.name : undefined;
+  // TMDB's placeholder for an unnamed episode is "Episode 3", which the S1 | E3 beside it already says.
+  const epName = epFound && !/^episode\s+\d+$/i.test(epFound.trim()) ? epFound : undefined;
 
   /* ---- POST-PLAY: WHEN ---------------------------------------------------------------------------
    * Eligible: a film, or a series with no next episode to roll into, when the setting is on and the
@@ -1171,7 +1290,7 @@ export default function VideoPlayer() {
     const id = requestAnimationFrame(() => {
       const root = overlayRef.current;
       if (!root) return;
-      if (menuOpen || epPanelOpen) return;            // the panel seeds its own first row
+      if (menuOpen || audioOpen || epPanelOpen) return; // the box or the shelf seeds its own first row
       const ae = document.activeElement as HTMLElement | null;
       if (ae && ae !== document.body && ae !== root && root.contains(ae)) return; // already somewhere real
       /* AN EXPLICIT HINT BEATS EVERYTHING, because it means the viewer has just closed a panel
@@ -1182,6 +1301,8 @@ export default function VideoPlayer() {
          `.show` is load-bearing: the button is in the DOM the whole time and `display:none` when
          it has nothing to say. */
       const target = (tvWantFocus.current === 'gear' ? root.querySelector<HTMLElement>('#vpGear') : null)
+        ?? (tvWantFocus.current === 'subs' ? root.querySelector<HTMLElement>('#vpSubs') : null)
+        ?? (tvWantFocus.current === 'audio' ? root.querySelector<HTMLElement>('#vpAudio') : null)
         ?? (tvWantFocus.current === 'episodes' ? root.querySelector<HTMLElement>('#vpEpisodes') : null)
         ?? (tvWantFocus.current === 'scrubber' ? barRef.current : null)
         ?? root.querySelector<HTMLElement>('.vp-skip.show')
@@ -1191,46 +1312,34 @@ export default function VideoPlayer() {
       target?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(id);
-  }, [tvNav, menuOpen, epPanelOpen]);
+  }, [tvNav, menuOpen, audioOpen, epPanelOpen]);
 
-  /* THE SETTINGS MENU OPENS WITH SUBTITLES ALREADY SELECTED.
+  /* A BOX OPENS WITH THE REMOTE ALREADY ON WHAT IS SELECTED — the subtitle language in use, the
+   * audio track playing — so the box reads the way it is drawn: the white pill is both "you are
+   * here" and "this is on", and changing nothing costs nothing. With nothing selected it lands on the
+   * first row. Stepping back out of a second-level list lands on the row that opened it, not at the
+   * top.
    *
-   * Nothing used to seed focus into this panel at all — the effect above explicitly stands aside
-   * for it ("the panel seeds its own first row"), which was true of the episode rail and never
-   * true here. So focus stayed on the ⋯ button OUTSIDE the menu, and the first Down handed the
-   * question to TvSpatialNav, which answers it geometrically: it picks whatever is nearest in
-   * that direction, which is not reliably the top row and was landing on Enhance picture. A menu
-   * that opens on its last item reads as though it remembered something the viewer never chose.
-   *
-   * Subtitles is the answer rather than "the first row" by coincidence: it is the first row AND
-   * the reason this menu is opened most of the time, and on a TV those two agreeing is what makes
-   * the common case cost one press. Taking the first control in DOM order gives it without
-   * hard-coding an id — if the rows are ever reordered, this follows the order rather than
-   * contradicting it. Both builds run this now that both have the chip panel: on the web the
-   * focus is for a keyboard, and a mouse never sees it (Chrome does not paint `:focus-visible`
-   * for a focus() issued from a click).
-   *
-   * A frame's delay, because the panel is mounted by the same render that sets `menuOpen` and is
-   * not in the document to be focused until after it commits. */
+   * Both builds: on the web the focus is for a keyboard, and a mouse never sees it (Chrome does not
+   * paint `:focus-visible` for a focus() issued from a click). A frame's delay, because the box is
+   * mounted by the same render that opens it and is not in the document until that commits. */
   useEffect(() => {
-    if (!menuOpen) return;
-    // Every open starts on Subtitles rather than resuming wherever the last visit ended. The panel
-    // is opened for one errand at a time and the common errand is subtitles; remembering a section
-    // the viewer chose ten minutes ago only means they have to notice and undo it.
-    setSetTab('subs');
-    /* The language currently in use comes up expanded; with subtitles off, everything is closed.
-     * Opening on the group you are already in is what makes "same language, different file" — the
-     * reason most people return to this list — cost no presses to reach, while a viewer who wants
-     * a different language sees an unexpanded index of what is available instead of one language's
-     * files pushing the rest off the screen. Deliberately keyed on the OPEN rather than on
-     * `currentSub`: re-deriving it whenever the selection changes would slam a group shut under
-     * the remote the moment a track from another language was chosen. */
-    setSubLang(currentSub >= 0 ? (subs[currentSub]?.lang || null) : null);
+    if (!menuOpen && !audioOpen) return;
     const id = requestAnimationFrame(() => {
-      overlayRef.current?.querySelector<HTMLElement>('#vpMenu .tv-chipmenu-btn')?.focus({ preventScroll: true });
+      const box = overlayRef.current?.querySelector<HTMLElement>('.vp-box');
+      if (!box) return;
+      const from = levelFrom.current;
+      levelFrom.current = null;
+      const rows = Array.from(box.querySelectorAll<HTMLElement>('.vp-box-back, .vp-opt')).filter((el) => el.tabIndex >= 0 && !el.hasAttribute('disabled'));
+      const to = (from && box.querySelector<HTMLElement>(`[data-key="${from}"]`))
+        || rows.find((el) => el.classList.contains('on'))
+        || rows.find((el) => !el.classList.contains('vp-box-back'))
+        || rows[0];
+      to?.focus({ preventScroll: true });
+      to?.scrollIntoView({ block: 'nearest' });
     });
     return () => cancelAnimationFrame(id);
-  }, [menuOpen]);
+  }, [menuOpen, audioOpen, menuDoor, boxLevel]);
   /* Drive the rail's mount/slide off `epPanelOpen`. 470ms is the 420ms transform (`--vp-rail-ease`
    * in tv.css and app.css) plus margin; it only has to OUTLAST the animation — unmounting a few ms
    * late costs nothing, unmounting early is the blink this exists to prevent, so if the curve is
@@ -1396,11 +1505,15 @@ export default function VideoPlayer() {
     if (IS_TV || !playing) return;
     let raf = 0;
     const tick = () => {
-      const v = videoRef.current, played = playedRef.current, thumb = thumbRef.current;
-      if (v && played && thumb && v.duration && !v.seeking && seekPreviewRef.current == null) {
-        const p = `${(v.currentTime / v.duration) * 100}%`;
-        played.style.width = p;
-        thumb.style.left = p;
+      const v = videoRef.current, bar = barRef.current, thumb = thumbRef.current;
+      if (v && bar && thumb && v.duration && !v.seeking && seekPreviewRef.current == null) {
+        const p = (v.currentTime / v.duration) * 100;
+        // One played fill per chapter piece, each measured against its own ends.
+        bar.querySelectorAll<HTMLElement>('.vp-played').forEach((el) => {
+          const a = Number(el.dataset.a), b = Number(el.dataset.b);
+          el.style.width = `${clamp((p - a) / (b - a), 0, 1) * 100}%`;
+        });
+        thumb.style.left = `${p}%`;
       }
       raf = requestAnimationFrame(tick);
     };
@@ -1530,6 +1643,7 @@ export default function VideoPlayer() {
        * no such resolver and the bug was the website's too.) */
       if (e.key === 'Escape') {
         if (document.fullscreenElement) document.exitFullscreen();
+        else if ((menuOpen || audioOpen) && boxLevel) { levelFrom.current = boxLevel; setBoxLevel(null); }
         else if (audioOpen) setAudioOpen(false);
         else if (menuOpen) setMenuOpen(false);
         else if (epPanelOpen) setEpPanelOpen(false);
@@ -1541,7 +1655,7 @@ export default function VideoPlayer() {
        * exception is Up with the shelf open, which is how the shelf closes — the same axis that
        * opened it, exactly as on the remote. */
       if (epPanelOpen && e.key === 'ArrowUp') { e.preventDefault(); setEpPanelOpen(false); bump(); return; }
-      if (menuOpen || epPanelOpen) return;
+      if (menuOpen || audioOpen || epPanelOpen) return;
       // Not from inside a text field or a slider — the volume range wants its own arrows.
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -1574,7 +1688,7 @@ export default function VideoPlayer() {
       window.removeEventListener('keyup', onKeyUp);
       document.removeEventListener('fullscreenchange', onFs);
     };
-  }, [source, close, togglePlay, tvSeek, tvSeekRelease, toggleMute, toggleFs, bump, menuOpen, epPanelOpen]);
+  }, [source, close, togglePlay, tvSeek, tvSeekRelease, toggleMute, toggleFs, bump, menuOpen, boxLevel, audioOpen, epPanelOpen]);
 
   /* ---- THE REMOTE ---------------------------------------------------------------------------
    * CAPTURE PHASE, and load-bearing for the same reason tvKeys' Back listener is: TvSpatialNav
@@ -1666,9 +1780,10 @@ export default function VideoPlayer() {
         return;
       }
 
-      // A panel over the bar owns the D-pad completely — spatial nav walks it, and seeking
-      // the film underneath a list the viewer is reading is the bug this exists to prevent.
-      if (menuOpen || epPanelOpen) return;
+      // A box or the shelf over the bar owns the D-pad completely — the box walks itself (see
+      // `onBoxKey`), and seeking the film underneath a list the viewer is reading is the bug this
+      // exists to prevent.
+      if (menuOpen || audioOpen || epPanelOpen) return;
 
       // 3. THE SCRUBBER, whether it holds focus or nothing does. Same two keys, same job — which
       // is the point: Left is "back a bit" in both modes, so there is nothing to learn.
@@ -1699,6 +1814,19 @@ export default function VideoPlayer() {
         railFrom.current = 'bar';
         setEpPanelOpen(true);
         return;
+      }
+
+      /* 3c. UP FROM THE SCRUBBER IS THE ICON ROW, and it is answered here rather than left to
+       * TvSpatialNav for the same reason Left/Right in the row are (step 6): the bar is a
+       * full-width element and the row is a short cluster at its left end, so "nearest thing
+       * above" from the playhead is decided by pixels the viewer cannot see — from a playhead
+       * three quarters along it was the Skip button, or nothing. Up goes back to the icon the
+       * remote last stood on, else the first one; the row is one press away whatever the
+       * playhead's position. */
+      if (tvNav && onBar && k === 'ArrowUp') {
+        const items = rowIcons(overlayRef.current);
+        const to = items.find((el) => el.id === rowLast.current) ?? items[0];
+        if (to) { consume(); to.focus({ preventScroll: true }); bump(); return; }
       }
 
       if (!tvNav) {
@@ -1751,8 +1879,31 @@ export default function VideoPlayer() {
        *
        * THE ENDS STOP RATHER THAN WRAP, and the press is consumed either way — that is the whole
        * point. Letting a press at the end fall through is precisely how the scrubber captured it. */
+      const ae = document.activeElement as HTMLElement | null;
+      const skipEl = overlayRef.current?.querySelector<HTMLElement>('.vp-skip.show') ?? null;
+
+      /* 6a. THE ROW SITS DIRECTLY ON TOP OF THE SCRUBBER, so Down from any icon is the bar and Up
+       * from one is nothing — the top of the screen is empty on a television, and a press that
+       * wandered off to the Skip button in the far corner would be a move nobody aimed. */
+      if (ae && (k === 'ArrowUp' || k === 'ArrowDown') && rowIcons(overlayRef.current).includes(ae)) {
+        consume();
+        if (k === 'ArrowDown') barRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      /* SKIP INTRO stands at the row's right end, at the row's height, so it joins the row: Right
+       * off the last icon reaches it, Left from it comes back, and Down from it is the bar like
+       * Down from any icon. */
+      if (ae && ae === skipEl && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowDown' || k === 'ArrowUp')) {
+        consume();
+        if (k === 'ArrowDown') barRef.current?.focus({ preventScroll: true });
+        else if (k === 'ArrowLeft') {
+          const items = rowIcons(overlayRef.current);
+          (items.find((el) => el.id === rowLast.current) ?? items[items.length - 1])?.focus({ preventScroll: true });
+        }
+        return;
+      }
+
       if (k === 'ArrowLeft' || k === 'ArrowRight') {
-        const ae = document.activeElement as HTMLElement | null;
         const row = ae?.closest<HTMLElement>('.vp-controls');
         if (row && ae) {
           const items = Array.from(row.querySelectorAll<HTMLElement>('button, [tabindex]'))
@@ -1760,7 +1911,8 @@ export default function VideoPlayer() {
           const at = items.indexOf(ae);
           if (at >= 0) {
             consume();
-            items[at + (k === 'ArrowRight' ? 1 : -1)]?.focus({ preventScroll: true });
+            const to = items[at + (k === 'ArrowRight' ? 1 : -1)] ?? (k === 'ArrowRight' ? skipEl : null);
+            to?.focus({ preventScroll: true });
           }
         }
       }
@@ -1779,7 +1931,7 @@ export default function VideoPlayer() {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('keyup', onKeyUp, true);
     };
-  }, [source, tvNav, menuOpen, epPanelOpen, tvSeek, tvSeekRelease, commitSeek, enterTvNav, togglePlay, close, bump]);
+  }, [source, tvNav, menuOpen, audioOpen, epPanelOpen, tvSeek, tvSeekRelease, commitSeek, enterTvNav, togglePlay, close, bump]);
 
   // A pending scrub must never outlive the player (or the source it was measured against) — and
   // neither must the ramp that is driving it.
@@ -1798,7 +1950,9 @@ export default function VideoPlayer() {
     if (!source) return;
     return registerBackHandler(() => {
       // The hint tells the focus effect which button to hand the remote back to — see there.
-      if (menuOpen) { tvWantFocus.current = 'gear'; setMenuOpen(false); return true; }
+      // A box's second-level list steps back to its first list; the box itself closes next.
+      if ((menuOpen || audioOpen) && boxLevel) { levelFrom.current = boxLevel; setBoxLevel(null); return true; }
+      if (menuOpen) { tvWantFocus.current = menuDoor === 'subs' ? 'subs' : 'gear'; setMenuOpen(false); return true; }
       /* THE AUDIO POPUP IS A LAYER AND WAS NOT IN THIS CHAIN. It never had to be while Back's
        * last step was "dismiss the control bar" — a Back with the popup open closed the bar and
        * the popup went with it, which looked right by accident. Now that the last step ends the
@@ -1845,7 +1999,7 @@ export default function VideoPlayer() {
        * first — which is exactly what a series cost: one wasted press with nothing visibly
        * happening. See BACK_LAYER. */
     }, BACK_LAYER.player);
-  }, [source, menuOpen, audioOpen, epPanelOpen]);
+  }, [source, menuOpen, menuDoor, boxLevel, audioOpen, epPanelOpen]);
 
   // picture-enhance: rewrite the unsharp-mask convolution kernel from the clarity
   // slider (identity at 0 → 3×3 Laplacian sharpen at 1; energy-preserving so it
@@ -1873,52 +2027,83 @@ export default function VideoPlayer() {
    * paints the span between this and `pct` so the skip has a length on screen and not just a
    * number attached to it. */
   const curPct = dur ? (cur / dur) * 100 : 0;
-  /* Width of both TV clocks, in characters of the longest string either will ever hold. The floor
-   * of 5 ("00:00") stops the cell — and so the bar — resizing once when the duration arrives and
-   * "0:00" becomes "24:15". */
-  const clockCh = Math.max(5, fmt(dur).length);
 
-  /* UP AND DOWN INSIDE THE SETTINGS PANEL WALK THE LIST, NOT THE GEOMETRY.
+  /* CHAPTERS, WHEN THE FILM OR EPISODE HAS REAL ONES. The recap, intro, credits and preview markers
+   * cut the bar into pieces with a gap at each edge, and the piece the playhead is in is named under
+   * the clock — "12:04 · Intro". Only real markers draw anything: the skip button's guessed intro
+   * window is a heuristic for offering a button, not a claim about where the opening titles are,
+   * and a gap drawn from a guess would be a line on the timeline that means nothing. */
+  const endOf = (g: { end: number | null }) => (g.end != null ? g.end : dur);
+  const recapSeg = segments?.recap && segments.recap.start < dur ? segments.recap : null;
+  const introSeg = segments?.intro && segments.intro.end > segments.intro.start && segments.intro.start < dur ? segments.intro : null;
+  const outroSeg = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro : null;
+  const previewSeg = segments?.preview && segments.preview.start < dur ? segments.preview : null;
+  const within = (g: { start: number; end: number | null } | null) => !!g && shownTime >= g.start && shownTime < endOf(g);
+  const chapter = within(recapSeg) ? t('player.ch_recap')
+    : within(introSeg) ? t('player.ch_intro')
+    : within(outroSeg) ? t('player.ch_credits')
+    : within(previewSeg) ? t('player.ch_preview')
+    : '';
+  const marks = dur > 0
+    ? [recapSeg?.start, recapSeg?.end, introSeg?.start, introSeg?.end, outroSeg?.start, outroSeg?.end, previewSeg?.start]
+      .filter((x): x is number => x != null && x > 2 && x < dur - 2)
+      .map((x) => (x / dur) * 100)
+      .sort((a, b) => a - b)
+      .filter((p, i, a) => i === 0 || p - a[i - 1] > 0.5)
+    : [];
+  /* THE BAR IS DRAWN AS PIECES, one per chapter, each a pill with its own round ends — the gap
+   * between two chapters is a pair of rounded caps facing each other, not a square notch cut out
+   * of one long line. Each piece carries its own share of the played, buffered and scrub fills,
+   * measured against its own length (`fillIn`). With no chapters it is one piece, the whole bar.
+   * The playhead sits outside the pieces and is never cut. */
+  const bounds = [0, ...marks, 100];
+  const segs = bounds.slice(1).map((b, i) => [bounds[i], b] as const);
+  const fillIn = (p: number, a: number, b: number) => `${clamp((p - a) / (b - a), 0, 1) * 100}%`;
+  const logoSrc = source.logo && !logoFailed ? rasterLogo(source.logo, 'original') : '';
+
+  /* INSIDE A BOX THE ARROWS WALK THE LIST, NOT THE GEOMETRY.
    *
-   * TvSpatialNav picks the nearest candidate in the direction pressed, scored on travel and
-   * drift. That is the right instrument for a screen of cards and the wrong one here, because
-   * this panel's rows are full-width and stacked: several of them are almost equally "up" from
-   * any given row, and the language headings sit inline among the tracks they introduce. From a
-   * source row, Up could land on the heading above it, on a row two groups away, or on the
-   * section chip, depending on pixels the viewer cannot see and did not choose.
+   * TvSpatialNav picks the nearest candidate in the direction pressed, scored on travel and drift
+   * — the right instrument for a screen of cards and the wrong one for a stacked list, where it
+   * could step out of the box sideways onto an icon in the row underneath it. A list has an
+   * unambiguous answer and it is DOM order: Up and Down are the row above and the row below, and
+   * the ends stop rather than leave — the box is left with Back (or the button that opened it).
+   * Left and Right are the box's two levels: Right opens the row it is on when there is a list
+   * behind it, Left steps back out.
    *
-   * A list has an unambiguous answer and it is DOM order. Up from the first track of a language
-   * is that language's own heading — the button that opened it, which is what a viewer reaching
-   * back up is reaching for — and Up from a heading is whatever the list actually holds above it.
-   * Down is the same walk in reverse. Nothing here depends on how the rows happen to be laid out.
-   *
-   * DELIBERATELY NOT EXHAUSTIVE. `.vp-speed` is left out: the speeds are a horizontal grid, and
-   * pulling them into a vertical walk would make Down step sideways through 0.5×, 0.75×, 1×.
-   * Focus sitting anywhere this list does not name falls through untouched, which is also what
-   * carries the remote out of the panel at either end — the ends are not trapped, so Up from the
-   * chip still leaves for the bar above it. */
-  const onSetPanelKey = (e: ReactKeyboardEvent) => {
-    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+   * Taken here, in the box's own handler, so it runs before TvSpatialNav (bound on the window) and
+   * stops there; the TV's transport handler already stands aside while a box is open. A range
+   * input keeps its own arrows — on the web they are what move the slider. */
+  const onBoxKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const k = e.key;
+    if (k !== 'ArrowUp' && k !== 'ArrowDown' && k !== 'ArrowLeft' && k !== 'ArrowRight') return;
+    const box = e.currentTarget;
     const ae = document.activeElement as HTMLElement | null;
-    if (!ae) return;
-    const stops = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('.tv-chipmenu-btn, .vp-subgroup-head, .vp-opt'));
-    const at = stops.indexOf(ae);
-    if (at < 0) return;
-    const to = stops[at + (e.key === 'ArrowDown' ? 1 : -1)];
-    if (!to) return;
+    if (!ae || !box.contains(ae) || ae.tagName === 'INPUT') return;
     e.preventDefault();
     e.stopPropagation();
+    if (k === 'ArrowLeft') {
+      if (boxLevel) { levelFrom.current = boxLevel; setBoxLevel(null); }
+      return;
+    }
+    if (k === 'ArrowRight') {
+      if (ae.classList.contains('vp-opt-sub')) ae.click();
+      return;
+    }
+    const stops = Array.from(box.querySelectorAll<HTMLElement>('.vp-box-back, .vp-opt'))
+      .filter((el) => el.tabIndex >= 0 && !el.hasAttribute('disabled'));
+    const to = stops[stops.indexOf(ae) + (k === 'ArrowDown' ? 1 : -1)];
+    if (!to) return;
     to.focus({ preventScroll: true });
-    // `nearest` honours the row's scroll-margin and does nothing when it is already on screen,
-    // which is the common case — the panel only scrolls for a long list.
+    // `nearest` does nothing when the row is already in view — the box only scrolls for a long list.
     to.scrollIntoView({ block: 'nearest' });
   };
 
-  /* THE SUBTITLE TRACKS, GATHERED UNDER THEIR LANGUAGES (TV panel only).
+  /* THE SUBTITLE TRACKS, GATHERED UNDER THEIR LANGUAGES — one row per language in the box.
    *
    * Grouped in the order each language FIRST APPEARS rather than alphabetically. `subs` is already
    * ordered by how likely the track is to be the one wanted — the viewer's preferred language and
-   * the stream's embedded tracks come first — and sorting the headings A-Z would throw that away
+   * the stream's embedded tracks come first — and sorting the languages A-Z would throw that away
    * to put Arabic above English on an English profile. First-appearance keeps the ranking and
    * still guarantees each language is named once.
    *
@@ -1954,167 +2139,258 @@ export default function VideoPlayer() {
   const cueOutline = ow > 0 ? `text-shadow:${-ow}px ${-ow}px 0 ${oc},${ow}px ${-ow}px 0 ${oc},${-ow}px ${ow}px 0 ${oc},${ow}px ${ow}px 0 ${oc};` : '';
   const cueCss = `#playerVideo::cue{color:${settings.subColor};background-color:${settings.subBg};font-size:${settings.subSize}%;${cueOutline}}`;
 
-  // contextual skip button: "Skip Intro" in the intro window, "Next Episode" in the
-  // credits tail — IntroDB markers when available, else the heuristic (series, 5min+)
-  let skipMode: 'intro' | 'next' | null = null;
+  /* THE CONTEXTUAL SKIP BUTTON — "Skip Recap", "Skip Intro", or "Next Episode" once the credits
+   * start. Markers when there are some (films too — a film's opening titles are as skippable as a
+   * series intro); without them a series falls back to a heuristic intro window and a fixed tail,
+   * and a film offers nothing, because guessing where a film's titles are is how a button lands
+   * on the opening scene. */
+  let skipMode: 'intro' | 'recap' | 'next' | null = null;
   let skipTo = INTRO_TO;
-  if (source.series && dur >= 300) {
+  if (dur >= 300) {
     const intro = segments?.intro && segments.intro.end < dur ? segments.intro : null;
+    const recap = segments?.recap && segments.recap.end < dur ? segments.recap : null;
     const outroStart = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro.start : null;
     const nextAt = outroStart != null ? outroStart : dur - CREDITS_TAIL;
-    if (source.next && cur >= nextAt && dur - cur > 0.5) skipMode = 'next';
-    else {
-      const inIntro = intro ? (cur >= intro.start && cur <= intro.end) : (cur >= INTRO_FROM && cur <= INTRO_TO);
-      if (inIntro) { skipMode = 'intro'; skipTo = intro ? intro.end : INTRO_TO; }
+    if (source.series && source.next && cur >= nextAt && dur - cur > 0.5) skipMode = 'next';
+    else if (recap && cur >= recap.start && cur <= recap.end) { skipMode = 'recap'; skipTo = recap.end; }
+    else if (intro ? (cur >= intro.start && cur <= intro.end) : (!!source.series && !segments && cur >= INTRO_FROM && cur <= INTRO_TO)) {
+      skipMode = 'intro'; skipTo = intro ? intro.end : INTRO_TO;
     }
   }
 
-  /* THE CORNER GROUP: audio, then ⋯, in the top-right on BOTH builds.
+  /* THE TAIL OF THE ICON ROW — web only. Three controls a television has no use for and a
+   * browser cannot do without: NEITHER fullscreen nor picture-in-picture means anything on a set
+   * that is already the whole screen, and volume is on the remote. On a page they are the only
+   * way to those three things, so they sit at the far right end of the row, away from the
+   * viewing controls. Phones drop volume and PiP again in CSS — hardware buttons and
+   * the OS's own PiP gesture do both — and on iOS the slider is dropped by the markup, because
+   * `video.volume` cannot be set there at all (see VOL_LOCKED). */
+  const tailRow = !IS_TV && (
+    <div className="vp-controls vp-tail">
+      <div className="vp-vol">
+        <button className="vp-icon" id="vpMute" aria-label={t('ctl.mute_a')} aria-pressed={muted} onClick={toggleMute}>{IcMute}</button>
+        {!VOL_LOCKED && (
+          <input type="range" className="vp-vol-slider" id="vpVol" min={0} max={1} step={0.02} value={muted ? 0 : vol} aria-label={t('ctl.vol_a')}
+            onChange={(e) => { const v = videoRef.current; if (v) { v.volume = +e.target.value; v.muted = +e.target.value === 0; } }} />
+        )}
+      </div>
+      {(document.pictureInPictureEnabled || webkitPip) && (
+        <button className="vp-icon" id="vpPip" aria-label={t('ctl.pip_a')} onClick={togglePip}>{IcPip}</button>
+      )}
+      <button className="vp-icon" id="vpFs" aria-label={t('ctl.fs_a')} aria-pressed={fs} onClick={toggleFs}>{IcFs}</button>
+    </div>
+  );
+
+  /* THE PLAY DISC. BOTH GLYPHS ARE ALWAYS MOUNTED, one on top of the other, and the class decides
+   * which is visible. Swapping `playing ? IcPause : IcPlay` replaces the node, and a node that
+   * does not exist yet cannot animate out of anything — the best that gets you is the incoming
+   * mark appearing while the outgoing one has already blinked away. Stacked, the change is one
+   * state on one element: two opacities and two transforms cross over each other, which is the
+   * only kind of transition that reads as one thing BECOMING another rather than as a cut.
    *
-   * These two are not transport; they are what the corner of a player is for, and the web now
-   * mounts them where the television always did. Everything that used to sit in a row under the
-   * web's scrubber has gone the way it went on the TV — play into the scrubber line as a disc,
-   * skip ±10 to the keyboard and the double-tap, CC into the menu it duplicated — with three
-   * exceptions that only a web page has any use for, which sit at the END of the scrubber line
-   * (see `tailRow`): volume, picture-in-picture and fullscreen. Episodes is the fourth: the TV
-   * opens the shelf with Down on the bar, and the keyboard now does too, but a mouse needs a
-   * button, so the web gets one here, first in the corner.
+   * WEB ONLY, first in the icon row. A television has OK for this from anywhere — transport mode
+   * and the scrubber both — and the TV row is modelled on the big streaming apps' rows, which
+   * carry no play button for exactly that reason. On the web it is the play button, the only one, and a
+   * <button> is what a click and a Tab key both expect. */
+  const discInner = (
+    <>
+      <span className="ic-play">{IcPlay}</span>
+      <span className="ic-pause">{IcPause}</span>
+    </>
+  );
+  const playDisc = IS_TV
+    ? null
+    : <button type="button" className={`vp-play-disc${playing ? ' playing' : ''}`} id="vpPlay" aria-label={t('ctl.play_a')} onClick={togglePlay}>{discInner}</button>;
+
+  /* THE ICON ROW, between the title and the scrubber, on BOTH builds.
    *
-   * A VARIABLE RATHER THAN THE JSX TWICE. The settings sheet underneath is a hundred lines of
-   * panel, and a second copy behind an `IS_TV` branch is two copies to keep in step — the exact
-   * drift the add-on client's header warns about, in a file where nobody would think to look. */
+   * Episodes · Next · Subtitles · Audio · ⋯ — the row a viewer already knows from the big
+   * streaming apps, sitting over the left end of the bar under the title's wordmark. The top of the
+   * screen is left to the picture on a television.
+   *
+   * Episodes is in it on the TV too. Down from the bar still opens the shelf, and is still the quick
+   * way; the button is the way a viewer who has never been told about Down finds it.
+   *
+   * The web adds what only a page needs: play/pause first (a mouse has no OK key), and volume,
+   * picture-in-picture and fullscreen at the far end (`tailRow`).
+   *
+   * EACH OF THE THREE MENU BUTTONS OPENS A SMALL BOX HANGING OVER IT, not a sheet across the right
+   * of the picture: a rounded dark card, its name in small capitals at the top, a plain list under
+   * that, the selected row a white pill with a tick. All three are built the same way: a short first
+   * list (subtitle languages, audio languages, the ⋯ sections), and a row with more behind it opens
+   * that list in the same box, the same size, with a back row at the top.
+   *
+   * A VARIABLE RATHER THAN THE JSX TWICE. The boxes are a hundred lines of lists, and a second copy
+   * behind an `IS_TV` branch is two copies to keep in step — the exact drift the add-on client's
+   * header warns about, in a file where nobody would think to look. */
+  const srcs = audioOpen ? source.sources : undefined;
+  const srcLangs = srcs?.langs ?? [];
+  // The language this playback is in, among the source languages — the one the Audio box ticks.
+  const playLang = srcLangs.find((l) => l === source.lang) ?? '';
+  const curSrc = srcs ? srcKey(srcs.current) : '';
+  const pickSource = (x: AddonStream, lang: string) => {
+    setAudioOpen(false);
+    if (!srcs || srcKey(x) === curSrc) return;
+    srcs.play(x, lang, videoRef.current?.currentTime ?? 0);
+  };
+  const curSubLang = currentSub >= 0 ? normalizeSubLang(subs[currentSub]?.lang || '').code : null;
+  const subOpen = menuOpen && menuDoor === 'subs' && boxLevel ? subGroups.find((g) => g.lang === boxLevel) : undefined;
+  const moreSec = menuOpen && menuDoor === 'more' ? (MORE_SECS.find((m) => m.key === boxLevel)?.key ?? null) : null;
+  const moreValue = (k: MoreSec) => k === 'speed' ? `${rate}×`
+    : k === 'quality' ? (curLevel < 0 ? t('menu.auto') : levelLabel(levels.find((l) => l.i === curLevel) ?? {}))
+    : t(settings.enhance ? 'menu.on' : 'menu.off');
+  const moreLabel = MORE_SECS.find((m) => m.key === moreSec)?.i18n;
+  /* The row that steps back out of a second-level list: a chevron pointing back, and the name of
+     the row that opened it. */
+  const backRow = (label: string) => (
+    <button type="button" className="vp-box-back" onClick={() => { levelFrom.current = boxLevel; setBoxLevel(null); }}>
+      <span className="chev" aria-hidden="true" />{label}
+    </button>
+  );
+
   const controlsRow = (
-    <div className="vp-controls">
-            {!IS_TV && source.series && (
+    <div className="vp-controls" onFocus={(e) => { const el = e.target as HTMLElement; if (el.classList.contains('vp-icon') && el.id) rowLast.current = el.id; }}>
+            {playDisc}
+            {source.series && (
               <button className={`vp-icon${epPanelOpen ? ' on' : ''}`} id="vpEpisodes" aria-label={t('ctl.episodes_a')} aria-pressed={epPanelOpen}
                 onClick={() => { railFrom.current = 'button'; setEpPanelOpen((o) => !o); }}>{IcEpisodes}</button>
             )}
-
-            {/* AUDIO TRACK — a corner button, not a row buried in the settings sheet. It is
-                rendered whenever the RELEASE claims more than one language, even when none of
-                them can be selected, because "the button is missing" and "this browser cannot
-                switch tracks" look identical from the outside and only one of them is true. When
-                it cannot switch it says so in place of the list. */}
-            {(audioTracks.length > 1 || (source.langs?.length ?? 0) > 1) && (
-              <div className="vp-menu-wrap">
-                <button
-                  className={`vp-icon${audioOpen ? ' on' : ''}${audioTracks.length > 1 ? '' : ' vp-icon-muted'}`}
-                  id="vpAudio" aria-label={t('ctl.audio_a')} aria-haspopup="menu" aria-expanded={audioOpen}
-                  onClick={() => { setAudioOpen((o) => !o); setMenuOpen(false); }}
-                >{IcAudioTrack}</button>
-                {(!IS_TV || audioOpen) && (
-                  <div className={`vp-menu vp-audio-menu${audioOpen ? ' open' : ''}`} role="menu">
-                    <div className="vp-menu-title">{t('menu.audio_lang')}</div>
-                    {audioTracks.length > 1 ? (
-                      audioTracks.map((a) => (
-                        <OptRow key={a.i} on={a.i === curAudio} label={a.name} onClick={() => { selectAudio(a.i); setAudioOpen(false); }} />
-                      ))
-                    ) : (
-                      <div className="vp-menu-note">
-                        {t(demuxBlocker === 'undecodable-audio' ? 'player.audio_dolby'
-                          : demuxBlocker === 'unreadable' ? 'player.audio_unreadable'
-                          : 'player.audio_locked', { langs: (source.langs || []).map(langName).join(', ') })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+            {source.next && (
+              <button className="vp-icon" id="vpNext" aria-label={t('ctl.next_a')} title={IS_TV ? undefined : t('ctl.next_a')} onClick={() => source.next?.()}>{IcNext}</button>
             )}
 
+            {/* SUBTITLES: one row per LANGUAGE, the way the big apps list them. The add-ons often
+                answer with a dozen files for one language, so a language with more than one opens
+                its files in the same box (a chevron says so); a language with a single file is
+                picked outright. The files are named by the add-on that sent them, numbered when
+                several share a name. */}
             <div className="vp-menu-wrap">
-              <button className="vp-icon" id="vpGear" aria-label={t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuOpen((o) => !o); setAudioOpen(false); }}>{IcMore}</button>
-              {/* A CLOSED SHEET IS STILL IN THE DOM, AND THAT IS A BUG FOR A REMOTE. `.vp-menu`
-                  hides itself with opacity + pointer-events, which a pointer respects and
-                  geometry does not: every row inside it keeps a real bounding box, so
-                  TvSpatialNav offered "Subtitles / Off / English…" as targets while the menu
-                  was shut. Not rendering it is the fix — and it also spares the TV the cost of
-                  a menu nobody opened. The web keeps the node so it can slide. */}
-              {(!IS_TV || menuOpen) && (
-              <div className={`vp-menu${menuOpen ? ' open' : ''}`} id="vpMenu" role="menu">
-                  {/* ONE PICKER, THEN WHATEVER IT PICKED.
-                   *
-                   * The panel was four accordions, then four label-and-chip rows, and both had the
-                   * same flaw at ten feet: four controls on screen at once, of which the viewer
-                   * wants exactly one. The accordions also resized the panel under the D-pad as
-                   * they unfolded, so the rows below the one being used kept moving.
-                   *
-                   * A single chip naming the SECTION, with that section's options laid out below
-                   * it, is one thing to aim at and one list to read. The chip stays put, the list
-                   * under it swaps, and nothing above the chosen option can move — which is what
-                   * makes the second press (choosing a value) safe to make without re-reading the
-                   * screen. It is also the shape the title screen already uses for seasons and
-                   * sources, so the remote's habits carry straight over — and, now that the web
-                   * shares it, the mouse's habits from the same title screen do too.
-                   *
-                   * The options below stay plain rows rather than becoming a second chip: they are
-                   * the destination, not another branch, and a menu that opens a menu is the thing
-                   * this panel keeps being redesigned to avoid. */}
-                  <div className="vp-setpanel" onKeyDown={onSetPanelKey}>
-                    <TvChipMenu
-                      options={SET_TABS.map((s) => ({ key: s.key, label: t(s.i18n) }))}
-                      value={setTab}
-                      onSelect={(k) => setSetTab(k as SetTab)}
-                      ariaLabel={t('ctl.settings_a')}
-                    />
-                    <div className="vp-setbody">
-                      {setTab === 'subs' && (
+              <button className={`vp-icon${menuOpen && menuDoor === 'subs' ? ' on' : ''}`} id="vpSubs"
+                aria-label={t('ctl.subtitles_a')} title={IS_TV ? undefined : t('ctl.subtitles_a')} aria-haspopup="menu" aria-expanded={menuOpen && menuDoor === 'subs'}
+                onClick={() => toggleMenu('subs')}>{IcSubs}</button>
+              {menuOpen && menuDoor === 'subs' && (
+                <div className="vp-box" role="menu" aria-label={t('menu.subtitles')} onKeyDown={onBoxKey}>
+                  {subOpen ? (
+                    <>
+                      {backRow(subOpen.name)}
+                      {subOpen.items.map(({ s: c, i }, n) => {
+                        const name = c.source || c.label || c.lang || `${t('menu.track')}${i + 1}`;
+                        const dupe = subOpen.items.some(({ s: o }, m) => m !== n && (o.source || o.label || o.lang) === name);
+                        return (
+                          <OptRow key={`${c.source || ''}${c.url}`} on={i === currentSub} label={name} sub={dupe ? `#${n + 1}` : undefined}
+                            onClick={() => { selectSub(i); setMenuOpen(false); }} />
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <>
+                      <div className="vp-box-title">{t('menu.subtitles')}</div>
+                      <OptRow on={currentSub < 0} label={t('menu.off')} onClick={() => { selectSub(-1); setMenuOpen(false); }} />
+                      {subGroups.map((g) => (
+                        <OptRow key={g.lang} dataKey={g.lang} on={curSubLang === g.lang} label={g.name} drill={g.items.length > 1}
+                          onClick={() => {
+                            if (g.items.length > 1) { setBoxLevel(g.lang); return; }
+                            selectSub(g.items[0].i);
+                            setMenuOpen(false);
+                          }} />
+                      ))}
+                      {/* The three end states are deliberately distinct: still asking, asked and
+                          nothing came back, and nothing was asked because no subtitle add-on is
+                          installed. The last one is the only one the user can act on. */}
+                      {subsLoading && <div className="vp-box-note">{t('menu.loading_subs')}</div>}
+                      {!subsLoading && subs.length === 0 && (
+                        <div className="vp-box-note">{source.subsQuery ? t('menu.no_subs_found') : t('menu.install_sub_addon')}</div>
+                      )}
+                      {subFailed && <div className="vp-box-note warn">{t('menu.sub_failed')}</div>}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* AUDIO, ON EVERY STREAM, built the way Subtitles is: a list of LANGUAGES by name — the
+                languages the add-ons offer this film or episode in — and a language opens its
+                sources in the same box, ranked exactly as the title screen ranks them. Picking a
+                source starts it from the second the current one had reached, so changing source is
+                changing the voice, not starting over. When the file itself carries several tracks
+                the player can switch between, those come first, above the languages. */}
+            <div className="vp-menu-wrap">
+              <button className={`vp-icon${audioOpen ? ' on' : ''}`} id="vpAudio"
+                aria-label={t('ctl.audio_a')} title={IS_TV ? undefined : t('ctl.audio_a')} aria-haspopup="menu" aria-expanded={audioOpen}
+                onClick={toggleAudio}>{IcAudioTrack}</button>
+              {audioOpen && (
+                <div className="vp-box" role="menu" aria-label={t('menu.audio')} onKeyDown={onBoxKey}>
+                  {srcs && boxLevel ? (
+                    <>
+                      {backRow(langName(boxLevel))}
+                      {/* Link-outs are left out: a source that opens a web page is not one to switch
+                          a playing film to. */}
+                      {srcs.list(boxLevel).filter((x) => x.kind !== 'external' && x.kind !== 'youtube').map((x) => {
+                        const on = srcKey(x) === curSrc;
+                        const ok = canStartHere(x);
+                        return (
+                          <button type="button" key={srcKey(x)} className={`vp-opt vp-src${on ? ' on' : ''}`} disabled={!ok} onClick={() => pickSource(x, boxLevel)}>
+                            <span className={`quality-badge ${qualClass(x.quality)}`}>{x.quality || 'SD'}</span>
+                            <span className="vp-src-txt">
+                              <span className="vp-src-name">{x.label || x.source}</span>
+                              <span className="vp-src-sub">{[x.size, x.source, !ok && t('menu.source_server')].filter(Boolean).join(' · ')}</span>
+                            </span>
+                            <span className="ck" aria-hidden="true">{on ? '✓' : ''}</span>
+                          </button>
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <>
+                      <div className="vp-box-title">{t('menu.audio')}</div>
+                      {audioTracks.length > 1 && audioTracks.map((a) => (
+                        <OptRow key={a.i} on={a.i === curAudio} label={a.name} onClick={() => { selectAudio(a.i); setAudioOpen(false); }} />
+                      ))}
+                      {srcLangs.length > 0 ? (
                         <>
-                          <OptRow on={currentSub < 0} label={t('menu.off')} onClick={() => selectSub(-1)} />
-                          {/* GROUPED BY LANGUAGE, because the flat list was not a list of choices —
-                              it was a list of the same choice repeated. A popular release comes
-                              back from the add-ons with a dozen English files and a dozen Spanish
-                              ones, interleaved in whatever order they were fetched, and a viewer
-                              scrolling for Spanish had to read every English row on the way past.
-                              Under a heading, the same twelve rows are one thing to skip. */}
-                          {subGroups.map((g) => (
-                            <div className={`vp-subgroup${subLang === g.lang ? ' open' : ''}`} key={g.lang}>
-                              {/* ONE LANGUAGE OPEN AT A TIME, and that is the point rather than a
-                                  limitation. Left to expand freely, three or four languages open
-                                  together restore the endless list this grouping exists to break
-                                  up — and on a D-pad the cost of collapsing what you no longer
-                                  want is a press per group. Opening one closes the last, so the
-                                  panel is always as short as the question being asked. */}
-                              <button type="button" className="vp-subgroup-head"
-                                aria-expanded={subLang === g.lang}
-                                onClick={() => setSubLang((l) => (l === g.lang ? null : g.lang))}>
-                                <span className="vp-subgroup-name">{g.name}</span>
-                                {/* The count is what makes a collapsed row worth reading: it is the
-                                    difference between "English, one file" and "English, fourteen",
-                                    which is exactly what decides whether it is worth opening. */}
-                                <span className="vp-subgroup-n">{g.items.length}</span>
-                                <span className="vp-subgroup-chev" aria-hidden="true" />
-                              </button>
-                              {subLang === g.lang && g.items.map(({ s, i }) => (
-                                <OptRow key={`${s.source || ''}${s.url}`} on={i === currentSub}
-                                  /* The language is on the heading now, so the row spends its width
-                                     on what actually distinguishes it from its neighbours — the
-                                     add-on's own title for the file. `label` is the fallback for
-                                     tracks embedded in the stream, which have no source. */
-                                  label={s.source || s.label || s.lang || `${t('menu.track')}${i + 1}`}
-                                  onClick={() => selectSub(i)} />
-                              ))}
-                            </div>
+                          {audioTracks.length > 1 && <div className="vp-box-title vp-box-title-2">{t('menu.sources')}</div>}
+                          {srcLangs.map((l) => (
+                            <OptRow key={l} dataKey={l} drill label={langName(l)}
+                              on={audioTracks.length <= 1 && l === playLang} onClick={() => setBoxLevel(l)} />
                           ))}
-                          {/* The three end states are deliberately distinct: still asking, asked
-                              and nothing came back, and nothing was asked because no subtitle
-                              add-on is installed. The last one is the only one the user can act
-                              on, and conflating it with "none found" is what made a missing
-                              feature look like a missing subtitle. */}
-                          {subsLoading && <div className="vp-opt" style={{ opacity: 0.5 }}>{t('menu.loading_subs')}</div>}
-                          {!subsLoading && subs.length === 0 && (
-                            <div className="vp-opt" style={{ opacity: 0.5 }}>
-                              {source.subsQuery ? t('menu.no_subs_found') : t('menu.install_sub_addon')}
-                            </div>
-                          )}
-                          {subFailed && <div className="vp-menu-note">{t('menu.sub_failed')}</div>}
                         </>
+                      ) : audioTracks.length <= 1 && (
+                        <OptRow on label={langName(source.lang || source.langs?.[0] || '') || t('menu.audio_default')} onClick={() => setAudioOpen(false)} />
                       )}
-                      {setTab === 'speed' && (
-                        <div className="vp-speeds">
-                          {SPEEDS.map((r) => <button key={r} type="button" className={`vp-speed${r === rate ? ' on' : ''}`} onClick={() => setSpeed(r)}>{r}×</button>)}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ⋯ — SPEED, QUALITY, ENHANCE PICTURE. The box opens on a list of the three, each with its
+                current value beside it; a row opens its own list in the same box, with a back row
+                at the top (Back on the remote, Escape, or Left does the same). One list on screen
+                at a time, always the size of the question being asked. */}
+            <div className="vp-menu-wrap">
+              <button className={`vp-icon${menuOpen && menuDoor === 'more' ? ' on' : ''}`} id="vpGear" aria-label={t('ctl.settings_a')} title={IS_TV ? undefined : t('ctl.settings_a')} aria-haspopup="menu" aria-expanded={menuOpen && menuDoor === 'more'} onClick={() => toggleMenu('more')}>{IcMore}</button>
+              {menuOpen && menuDoor === 'more' && (
+                <div className="vp-box" role="menu" aria-label={t('menu.settings')} onKeyDown={onBoxKey}>
+                  {moreSec == null ? (
+                    <>
+                      <div className="vp-box-title">{t('menu.settings')}</div>
+                      {MORE_SECS.map((m) => (
+                        <div key={m.key} className="vp-opt vp-opt-sub" data-key={m.key} role="menuitem" tabIndex={0}
+                          onClick={() => setBoxLevel(m.key)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBoxLevel(m.key); } }}>
+                          <span className="lbl">{t(m.i18n)}</span>
+                          <span className="val">{moreValue(m.key)}</span>
+                          <span className="chev" aria-hidden="true" />
                         </div>
-                      )}
-                      {setTab === 'quality' && (
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      {backRow(moreLabel ? t(moreLabel) : '')}
+                      {moreSec === 'speed' && SPEEDS.map((r) => (
+                        <OptRow key={r} on={r === rate} label={`${r}×`} onClick={() => setSpeed(r)} />
+                      ))}
+                      {moreSec === 'quality' && (
                         <>
                           <OptRow on={curLevel < 0} label={t('menu.auto')} onClick={() => setLevel(-1)} />
                           {[...levels].sort((a, b) => (b.height || 0) - (a.height || 0)).map((l) => (
@@ -2122,7 +2398,7 @@ export default function VideoPlayer() {
                           ))}
                         </>
                       )}
-                      {setTab === 'enhance' && (
+                      {moreSec === 'enhance' && (
                         <>
                           {/* SWITCHING IT ON HAS TO LAND ON A LEVEL, not just raise a flag.
                               `enhance: !enhance` alone can produce an enhancement that is on and
@@ -2146,8 +2422,7 @@ export default function VideoPlayer() {
                               input is the one control a D-pad cannot get back out of: arrows move
                               the value, so nothing is left to move focus, and the remote is
                               trapped on it. A mouse has the opposite problem — four fixed steps
-                              are a coarser instrument than the one it is holding. Same panel,
-                              same rows above; only the strength control differs. */}
+                              are a coarser instrument than the one it is holding. */}
                           {IS_TV ? (
                             <>
                               {TV_GRAIN.map((g, i) => (
@@ -2178,58 +2453,14 @@ export default function VideoPlayer() {
                           )}
                         </>
                       )}
-                    </div>
-                  </div>
-              </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
+            {tailRow}
     </div>
   );
-
-  /* THE TAIL OF THE SCRUBBER LINE — web only. Three controls a television has no use for and a
-   * browser cannot do without: NEITHER fullscreen nor picture-in-picture means anything on a set
-   * that is already the whole screen, and volume is on the remote. On a page they are the only
-   * way to those three things, so they sit after the duration, small, at the end of the one
-   * line, where the eye is not. Phones drop volume and PiP again in CSS — hardware buttons and
-   * the OS's own PiP gesture do both — and on iOS the slider is dropped by the markup, because
-   * `video.volume` cannot be set there at all (see VOL_LOCKED). */
-  const tailRow = !IS_TV && (
-    <div className="vp-controls vp-tail">
-      <div className="vp-vol">
-        <button className="vp-icon" id="vpMute" aria-label={t('ctl.mute_a')} aria-pressed={muted} onClick={toggleMute}>{IcMute}</button>
-        {!VOL_LOCKED && (
-          <input type="range" className="vp-vol-slider" id="vpVol" min={0} max={1} step={0.02} value={muted ? 0 : vol} aria-label={t('ctl.vol_a')}
-            onChange={(e) => { const v = videoRef.current; if (v) { v.volume = +e.target.value; v.muted = +e.target.value === 0; } }} />
-        )}
-      </div>
-      {(document.pictureInPictureEnabled || webkitPip) && (
-        <button className="vp-icon" id="vpPip" aria-label={t('ctl.pip_a')} onClick={togglePip}>{IcPip}</button>
-      )}
-      <button className="vp-icon" id="vpFs" aria-label={t('ctl.fs_a')} aria-pressed={fs} onClick={toggleFs}>{IcFs}</button>
-    </div>
-  );
-
-  /* THE PLAY DISC. BOTH GLYPHS ARE ALWAYS MOUNTED, one on top of the other, and the class decides
-   * which is visible. Swapping `playing ? IcPause : IcPlay` replaces the node, and a node that
-   * does not exist yet cannot animate out of anything — the best that gets you is the incoming
-   * mark appearing while the outgoing one has already blinked away. Stacked, the change is one
-   * state on one element: two opacities and two transforms cross over each other, which is the
-   * only kind of transition that reads as one thing BECOMING another rather than as a cut.
-   *
-   * A BADGE ON THE TV, A BUTTON ON THE WEB. On a television it is not focusable: OK toggles
-   * playback from transport mode and from the scrubber, so a second play control in the D-pad's
-   * path would be one more stop that does what OK already did, and TvSpatialNav would offer it
-   * beside the bar. On the web it is the play button — the only one, now that the centre disc
-   * is gone (its note is below) — and a <button> is what a click and a Tab key both expect. */
-  const discInner = (
-    <>
-      <span className="ic-play">{IcPlay}</span>
-      <span className="ic-pause">{IcPause}</span>
-    </>
-  );
-  const playDisc = IS_TV
-    ? <div className={`vp-play-disc${playing ? ' playing' : ''}`} aria-hidden="true">{discInner}</div>
-    : <button type="button" className={`vp-play-disc${playing ? ' playing' : ''}`} id="vpPlay" aria-label={t('ctl.play_a')} onClick={togglePlay}>{discInner}</button>;
 
   return (
     <div
@@ -2250,8 +2481,8 @@ export default function VideoPlayer() {
            layers on this screen with no close button of their own, and a mouse has no Back key.
            The click that closes one does nothing else: it must not also toggle playback. */
         const el = e.target as HTMLElement;
-        if (menuOpen && !el.closest('#vpMenu, #vpGear')) { setMenuOpen(false); menuClosedAt.current = performance.now(); return; }
-        if (audioOpen && !el.closest('.vp-audio-menu, #vpAudio')) { setAudioOpen(false); menuClosedAt.current = performance.now(); return; }
+        if (menuOpen && !el.closest('.vp-box, #vpGear, #vpSubs')) { setMenuOpen(false); menuClosedAt.current = performance.now(); return; }
+        if (audioOpen && !el.closest('.vp-box, #vpAudio')) { setAudioOpen(false); menuClosedAt.current = performance.now(); return; }
         if (e.target === videoRef.current) togglePlay();
       }}
     >
@@ -2269,8 +2500,12 @@ export default function VideoPlayer() {
         onLoadedMetadata={(e) => {
           const v = e.currentTarget;
           setDur(v.duration || 0);
-          // resume where we left off (once), if there's saved progress for this title
-          if (!resumedRef.current && source.media?.key) {
+          // resume where we left off (once): the exact second of the source just switched away from,
+          // else the saved progress for this title
+          if (!resumedRef.current && source.startAt && source.startAt < (v.duration || Infinity)) {
+            resumedRef.current = true;
+            v.currentTime = source.startAt;
+          } else if (!resumedRef.current && source.media?.key) {
             resumedRef.current = true;
             const r = getResume(source.media.key);
             if (r && r.pos > 0 && r.pos < (v.duration || Infinity)) v.currentTime = r.pos;
@@ -2417,51 +2652,57 @@ export default function VideoPlayer() {
       )}
 
       <div className="vp-ui">
+        {/* THE TOP OF THE SCREEN IS THE PICTURE'S. The title, the episode and the corner group all
+            moved down into the stack over the scrubber, so what is left up here is the status line
+            and, on the web, the close button — a phone has no Escape key. NO CLOSE BUTTON ON A
+            TELEVISION: Back on the remote closes the player, which is the gesture people already
+            use to leave anything (see `registerBackHandler`). */}
         <div className="vp-top">
-          {/* THE EPISODE SITS BESIDE THE TITLE, NOT UNDER IT. Stacked, it was a second line of
-              chrome over the picture for four characters of information, and at the top-left
-              corner of a television that is the most expensive real estate on the screen. On one
-              line the pair reads as what it is — one name for what is playing. */}
-          <div className="vp-titlerow">
-            <div className="vp-title" id="playerTitle">{source.title || ''}</div>
-            {source.subtitle && <div className="vp-subtitle" id="vpSubtitle">{source.subtitle}</div>}
-          </div>
           <div className="vp-top-right">
             <div className="vp-status" id="playerStatus" role="status" aria-live="polite" />
-            {controlsRow}
-            {/* NO CLOSE BUTTON ON A TELEVISION. Back on the remote closes the player — that is
-                the gesture people already use to leave anything, it costs no travel, and it is
-                the one this build's Back chain now ends in (see `registerBackHandler`). A ✕ in
-                the far corner was a D-pad journey to do what one press already did, and it was
-                the target focus fell back to whenever anything else went wrong. The web keeps
-                it, last in the corner: a phone has no Escape key. */}
             {!IS_TV && <button className="vp-icon" id="vpClose" title="Close (Esc)" aria-label={t('player.close')} onClick={close}>✕</button>}
           </div>
         </div>
 
-        {/* THE CENTRE DISC IS GONE FROM BOTH BUILDS. On the TV it had already been demoted from a
-            button to a badge — a "this is paused" sign drawn as a dark circle over the middle of
-            the picture. That is a caption on a still frame nobody asked for: the control bar comes
-            up with the same glyph on its own disc whenever playback stops, so the state was
-            already stated somewhere the viewer is looking, by something they can actually press.
-            Two signs for one fact, and this was the one sitting on the film. The web's was a real
-            button, and the bar's disc is one there too now, at a size a thumb can hit. */}
-
+        {/* THE STACK OVER THE BOTTOM EDGE, top to bottom: the title's wordmark, the episode line,
+            the icon row, the scrubber running the full width, and the two clocks under its ends.
+            The layout of the big streaming apps on a television, and the one a viewer reads
+            without being taught: what is this, what can I do, where am I in it. */}
         <div className="vp-bottom">
-          {/* ONE LINE: disc, elapsed, bar, duration — and on the web, the three tail controls.
-              The buttons that used to sit under the scrubber are gone (skip and mute to the
-              remote and the keyboard, CC to the menu, Episodes to the shelf) and the settings
-              group has moved to the top-right corner, which leaves the transport with nothing
-              to say that this row cannot say inline. Each time sits at the end of the bar it
-              describes rather than both being crammed into one "13:27 / 23:40" cell. */}
-          {playDisc}
-          {/* THE CELL IS SIZED FROM THE DURATION, NOT FROM ITS OWN CONTENTS. `tabular-nums`
-              alone was not enough: equal digit widths keep 1:11 and 9:99 the same size, but they
-              do nothing about the digit COUNT, so 9:59 → 10:00 still widened this cell and pushed
-              the bar's left end along with it — mid-scrub, while the viewer is aiming at it. The
-              duration is fixed for the whole film and is always the longest the elapsed time can
-              get, so measuring the cell against it holds the ends still for good. */}
-          <span className="vp-t vp-t-cur" id="vpCur" style={{ minWidth: `${clockCh}ch` }}>{fmt(shownTime)}</span>
+          {/* KEYED ON WHAT IS PLAYING, so the next episode gets its own entrance rather than
+              inheriting the last one's settled block. */}
+          <div className="vp-meta" key={source.media?.key || source.url}>
+            {logoSrc ? (
+              /* THE WORDMARK, NOT THE NAME SET IN TYPE, whenever the title has one. It is the same
+                 art the title screen showed a second ago (same raster size, so a cache hit), and it
+                 carries the film's own lettering — which is the point of putting it here. It pops
+                 in once it has decoded, not while it is still arriving: an entrance played over an
+                 empty box is an entrance nobody saw. */
+              <img
+                className={`vp-logo${logoReady ? ' rdy' : ''}`}
+                id="playerTitle"
+                src={logoSrc}
+                alt={source.title || ''}
+                decoding="async"
+                ref={(el) => { if (el?.complete && el.naturalWidth > 0 && !logoReady) setLogoReady(true); }}
+                onLoad={() => setLogoReady(true)}
+                onError={() => setLogoFailed(true)}
+              />
+            ) : (
+              <div className="vp-title" id="playerTitle">{source.title || ''}</div>
+            )}
+            {/* S1 | E3  "Lord Snow" — the label in the mono face, the episode's own name in quotes
+                beside it, the way the big apps print it. */}
+            {source.subtitle && (
+              <div className="vp-epline">
+                <span className="vp-subtitle" id="vpSubtitle">{source.subtitle}</span>
+                {epName && <span className="vp-eptitle">“{epName}”</span>}
+              </div>
+            )}
+          </div>
+
+          {controlsRow}
+
           <div
             className={`vp-progress${seekPreview != null ? ' seeking' : ''}${ramping ? ' ramping' : ''}${landed ? ' landed' : ''}`}
             id="vpProgress"
@@ -2479,14 +2720,22 @@ export default function VideoPlayer() {
             aria-valuetext={IS_TV ? fmt(shownTime) : undefined}
           >
             <div className="vp-bar">
-              <div className="vp-buffered" id="vpBuffered" style={{ width: `${bufPct}%` }} />
-              <div className="vp-played" id="vpPlayed" ref={playedRef} style={{ width: `${pct}%` }} />
-              {/* THE GROUND THE SCRUB HAS COVERED, drawn between where the video is and where it
-                  would land. Absolutely positioned inside the bar, so it costs the layout nothing
-                  and the bar keeps its length. */}
-              {seekPreview != null && spanWidth > 0 && (
-                <div className="vp-seek-span" style={{ left: `${spanFrom}%`, width: `${spanWidth}%` }} aria-hidden="true" />
-              )}
+              {/* The pieces (see `segs`), each with its slice of the fills. `data-a`/`data-b` are
+                  the piece's ends in percent of the film, for the web's playhead loop, which writes
+                  the played width every frame without a render. */}
+              {segs.map(([a, b], i) => (
+                <div className="vp-seg" key={`${a}-${b}`}
+                  style={{ left: i ? `calc(${a}% + var(--vp-gap))` : '0%', right: i < segs.length - 1 ? `calc(${100 - b}% + var(--vp-gap))` : '0%' }}>
+                  <div className="vp-buffered" style={{ width: fillIn(bufPct, a, b) }} />
+                  <div className="vp-played" data-a={a} data-b={b} style={{ width: fillIn(pct, a, b) }} />
+                  {/* THE GROUND THE SCRUB HAS COVERED, drawn between where the video is and where
+                      it would land — each piece paints the part of it that falls inside it. */}
+                  {seekPreview != null && spanWidth > 0 && spanFrom < b && spanFrom + spanWidth > a && (
+                    <div className="vp-seek-span" aria-hidden="true"
+                      style={{ left: fillIn(spanFrom, a, b), width: `calc(${fillIn(spanFrom + spanWidth, a, b)} - ${fillIn(spanFrom, a, b)})` }} />
+                  )}
+                </div>
+              ))}
               {seekPreview != null && <div className="vp-seek-origin" style={{ left: `${curPct}%` }} aria-hidden="true" />}
               <div className="vp-thumb" id="vpThumb" ref={thumbRef} style={{ left: `${pct}%` }} />
             </div>
@@ -2510,27 +2759,32 @@ export default function VideoPlayer() {
               </div>
             )}
           </div>
-          <span className="vp-t vp-t-dur" id="vpDur" style={{ minWidth: `${clockCh}ch` }}>{fmt(dur)}</span>
-          {tailRow}
+
+          {/* THE CLOCKS SIT UNDER THE BAR'S ENDS, not beside them, so the bar runs the full width
+              and the digits changing can never move it. Elapsed (and the chapter it is in) under
+              the left end, the running time under the right. */}
+          <div className="vp-times">
+            <span className="vp-t vp-t-cur" id="vpCur">{fmt(shownTime)}</span>
+            {chapter && <span className="vp-chapter">{chapter}</span>}
+            <span className="vp-t vp-t-dur" id="vpDur">{fmt(dur)}</span>
+          </div>
         </div>
       </div>
 
-      {/* Contextual skip button — "Skip Intro" in the intro window, "Next Episode" in
-          the credits tail (series only) */}
-      {source.series && (
-        <button
-          className={`vp-skip${skipMode ? ' show' : ''}`}
-          id="vpSkip"
-          type="button"
-          onClick={() => {
-            if (skipMode === 'next') source.next?.();
-            else if (skipMode === 'intro') { const v = videoRef.current; if (v) v.currentTime = Math.min((v.duration || 0) - 1, Math.max(v.currentTime, skipTo)); }
-            bump();
-          }}
-        >
-          {skipMode === 'next' ? `${t('player.next_episode')} ›` : skipMode === 'intro' ? t('player.skip_intro') : ''}
-        </button>
-      )}
+      {/* Contextual skip button — "Skip Recap" / "Skip Intro" in their windows, "Next Episode"
+          once a series' credits start */}
+      <button
+        className={`vp-skip${skipMode ? ' show' : ''}`}
+        id="vpSkip"
+        type="button"
+        onClick={() => {
+          if (skipMode === 'next') source.next?.();
+          else if (skipMode === 'intro' || skipMode === 'recap') { const v = videoRef.current; if (v) v.currentTime = Math.min((v.duration || 0) - 1, Math.max(v.currentTime, skipTo)); }
+          bump();
+        }}
+      >
+        {skipMode === 'next' ? `${t('player.next_episode')} ›` : skipMode === 'intro' ? t('player.skip_intro') : skipMode === 'recap' ? t('player.skip_recap') : ''}
+      </button>
 
       {/* IN-PLAYER EPISODES (series) — THE SHELF, ON BOTH BUILDS. `epPanelOpen` drives it, so
           the Episodes button, the keyboard's Down, the remote's Down, the Back chain and the

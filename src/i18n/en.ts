@@ -198,6 +198,24 @@ const SEED: Record<string, string> = {
   'ctl.subs_a': 'Toggle subtitles',
   'ctl.audio_a': 'Audio track',
   'ctl.settings_a': 'Playback settings',
+  // The icon row over the scrubber. Icon-only buttons, so these are their accessible names.
+  'ctl.next_a': 'Next episode',
+  'ctl.subtitles_a': 'Subtitles',
+  // The pop-up boxes over the icon row: their headings, and the values the ⋯ box shows beside
+  // each of its sections.
+  'menu.audio': 'Audio',
+  'menu.sources': 'Sources',
+  'menu.settings': 'Settings',
+  'menu.on': 'On',
+  'menu.audio_default': 'Default',
+  'menu.source_server': 'Needs the streaming server',
+  // The chapter named under the elapsed time, when IntroDB has marked the episode.
+  'player.ch_intro': 'Intro',
+  'player.ch_credits': 'Credits',
+  'player.ch_recap': 'Recap',
+  'player.ch_preview': 'Preview',
+  // The skip button over a "previously on…" recap, beside Skip Intro.
+  'player.skip_recap': 'Skip Recap',
   // Shown in place of the track list when the release has several audio languages and the
   // browser exposes no way to choose between them. {langs} is a readable list.
   // Shown in the audio menu when tracks cannot be switched. Three different causes, three
