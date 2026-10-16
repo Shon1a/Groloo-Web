@@ -4575,7 +4575,7 @@
    card's content IS a picture, so filling it white paints over the still, the badge and the
    episode title in one go and leaves a blank rectangle where the artwork was. It rings itself
    instead — see the rail section at the foot of this file. */
-.vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):not(.vp-epcard):focus-visible {
+.vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):not(.vp-epcard):not(.vp-pbtn):focus-visible {
   outline: none;
   background: #fff;
   color: #0b0b0b;
@@ -4586,7 +4586,6 @@
 .vp-overlay.tv :is(a, button, [tabindex]):not(.vp-progress):focus-visible :is(.vp-acc-val, .sub, .val, .ck, .ep-name, .ep-num, .vp-acc-ic) {
   color: #0b0b0b;
 }
-.vp-overlay.tv .vp-skip:focus-visible { background: #fff; color: #0b0b0b; border-color: #fff; }
 
 /* SHAPES MUST NOT CHANGE WHEN SOMETHING TAKES FOCUS, and app.css's base ring makes them: its
    `a, button, [tabindex]:focus-visible { border-radius: 4px }` outranks each of these elements'
@@ -4598,20 +4597,30 @@
    must NOT take the white border the rule above hands everything else, or the pill loses its
    edge and the two letters float on a white block. */
 .vp-overlay.tv .vp-icon.cc:focus-visible { border-color: currentColor; }
-.vp-overlay.tv .vp-skip:focus-visible { border-radius: 9px; }
 .vp-overlay.tv .vp-season-tab:focus-visible { border-radius: 999px; }
 
-/* ---- Skip Intro / Next Episode. It has to clear a control bar that is now much taller, and it
-   is the most-pressed button in the player — so on a TV it is sized like a primary action. */
-/* It stands at the right end of the icon row, at the row's height — joined to it for the remote
-   too (Right off the last icon reaches it; see VideoPlayer step 6a). */
-.vp-overlay.tv .vp-skip {
+/* ---- THE SKIP PROMPT at ten feet: Skip Intro / Skip Recap, or Watch Credits + Next Episode. It
+   stands at the right end of the icon row, at the row's height — joined to it for the remote too
+   (Right off the last icon reaches it; see VideoPlayer step 6a).
+
+   IT TAKES NONE OF THE PLAYER'S FOCUS INVERSION (excluded by name above). These buttons are white
+   by design — the selected one is the white one, and that is already what OK presses — so the
+   remote's arrival is shown by `.sel` moving, which the focus handler sets, and inverting on top
+   of it would wipe out the countdown fill. */
+.vp-overlay.tv .vp-prompt {
   --vp-skip-bottom: clamp(80px, 11.4vh, 128px);
   right: var(--vp-gutter);
-  font-size: clamp(16px, 2.1vh, 23px);
-  padding: clamp(12px, 1.6vh, 18px) clamp(20px, 1.8vw, 32px);
-  border-width: 2px;
+  gap: clamp(14px, 1.1vw, 22px);
 }
+.vp-overlay.tv .vp-pbtn {
+  height: clamp(48px, 5.8vh, 64px);
+  padding: 0 clamp(22px, 1.7vw, 34px);
+  font-size: clamp(19px, 2.35vh, 26px);
+  border-radius: clamp(4px, .45vh, 6px);
+  gap: clamp(10px, .8vw, 16px);
+}
+.vp-overlay.tv .vp-pbtn svg { width: clamp(20px, 2.4vh, 28px); height: clamp(20px, 2.4vh, 28px); }
+.vp-overlay.tv .vp-pbtn:focus-visible { outline: none; border-radius: clamp(4px, .45vh, 6px); }
 
 /* ---- THE BOXES at ten feet. app.css draws them — a rounded card over the button that opened
    it, small-capitals heading, a plain list — and this restates the sizes for a sofa, clamped on

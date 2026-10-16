@@ -216,6 +216,8 @@ const SEED: Record<string, string> = {
   'player.ch_preview': 'Preview',
   // The skip button over a "previously on…" recap, beside Skip Intro.
   'player.skip_recap': 'Skip Recap',
+  // Beside Next Episode once a series' credits start: dismisses the countdown and keeps watching.
+  'player.watch_credits': 'Watch Credits',
   // Shown in place of the track list when the release has several audio languages and the
   // browser exposes no way to choose between them. {langs} is a readable list.
   // Shown in the audio menu when tracks cannot be switched. Three different causes, three

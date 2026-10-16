@@ -2235,32 +2235,10 @@
   .vp-loading{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;
     gap:18px;text-align:center;z-index:3;background:radial-gradient(ellipse at center,rgba(20,20,20,.6),rgba(0,0,0,.85))}
   .vp-loading.show{display:flex}
-  .vp-loading .ring{width:54px;height:54px;border:2.5px solid rgba(255,255,255,.15);border-top-color:var(--accent);
-    border-radius:50%;animation:spin .9s linear infinite}
   .vp-loading .lt{font-size:16px;color:var(--text);font-weight:400;max-width:460px;padding:0 20px;line-height:1.5}
   .vp-loading .ls{font-family:var(--font-mono);font-size:16px;color:var(--text-muted);max-width:460px;padding:0 20px;line-height:1.6}
-  /* "loading goes off track" worm loader — a red-themed worm runs the ring, then
-     derails into the middle while the whole svg bumps. Shown while a stream loads. */
-  .vp-pl,.vp-pl__worm{animation-duration:3s;animation-iteration-count:infinite}
-  .vp-pl{animation-name:vpBump;animation-timing-function:linear;width:78px;height:78px}
-  /* The track the worm runs on. A literal now, not `rgba(var(--accent-rgb),.16)`: the worm above
-     it is painted from the scrubber's blue ramp rather than from the accent, so a ring following
-     the accent would be the one part of this loader still tied to a colour nothing else on the
-     screen is using. Opaque, because at 16% the ring was a hint of a shape and this is the shape
-     the worm is running around. */
-  .vp-pl__ring{stroke:#023450}
-  .vp-pl__worm{animation-name:vpWorm;animation-timing-function:cubic-bezier(.42,.17,.75,.83)}
-  @keyframes vpBump{
-    from,42%,46%,51%,55%,59%,63%,67%,71%,74%,78%,81%,85%,88%,92%,to{transform:translate(0,0)}
-    44%{transform:translate(1.33%,6.75%)}
-    53%{transform:translate(-16.67%,-0.54%)}
-    61%{transform:translate(3.66%,-2.46%)}
-    69%{transform:translate(-0.59%,15.27%)}
-    76%{transform:translate(-1.92%,-4.68%)}
-    83%{transform:translate(9.38%,0.96%)}
-    90%{transform:translate(-4.55%,1.98%)} }
-  @keyframes vpWorm{ from{stroke-dashoffset:10} 25%{stroke-dashoffset:295} to{stroke-dashoffset:1165} }
-  @media(prefers-reduced-motion:reduce){ .vp-pl{animation:none} }
+  /* `.vp-loading` is the error screen now — the loading spinner it was named for is gone (see the
+     player: nothing is drawn over the film while a source loads). */
 
   /* control layer */
   .vp-ui{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;justify-content:space-between;
@@ -2268,7 +2246,7 @@
   /* only capture pointer events while the player is actually open — otherwise the
      invisible (opacity:0) control bars would intercept clicks on the real topbar.
      The boxes inherit it from the row they hang off, and are only in the DOM while open. */
-  .vp-overlay.open .vp-top,.vp-overlay.open .vp-bottom,.vp-overlay.open .vp-skip{pointer-events:auto}
+  .vp-overlay.open .vp-top,.vp-overlay.open .vp-bottom,.vp-overlay.open .vp-prompt{pointer-events:auto}
   .vp-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 26px;
     background:linear-gradient(180deg,rgba(0,0,0,.7),transparent);transition:opacity .25s ease}
   .vp-title{font-family:var(--font);font-size:16px;font-weight:700;color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.6);line-height:1.3}
@@ -2390,19 +2368,36 @@
   .vp-subtitle{font-family:var(--font-mono);font-size:16px;font-weight:700;letter-spacing:.04em;color:#a9a9a9;
     flex:0 0 auto;text-shadow:0 1px 6px rgba(0,0,0,.6)}
 
-  /* skip intro / next episode — floating contextual button.
-     Sits bottom-right, clearing the control bar via --vp-skip-bottom so the same rule
-     re-targets on every breakpoint. */
-  .vp-skip{--vp-skip-bottom:136px;
-    position:absolute;right:32px;bottom:var(--vp-skip-bottom);z-index:5;display:none;
-    white-space:nowrap;align-items:center;justify-content:center;
-    background:rgba(15,15,15,.78);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.24);
-    color:#fff;font-family:var(--font-mono);font-size:15px;letter-spacing:.04em;padding:11px 19px;border-radius:9px;
-    cursor:pointer;opacity:0;transform:translateY(10px);
-    transition:transform .18s cubic-bezier(.2,.8,.2,1),background .18s,color .18s,opacity .25s;
-    box-shadow:0 10px 36px rgba(0,0,0,.5)}
-  .vp-skip.show{display:flex;opacity:1;transform:none}
-  .vp-skip:hover{background:var(--accent);color:var(--ink);border-color:var(--accent);transform:translateY(-1px)}
+  /* ---- THE SKIP PROMPT, bottom right, clearing the stack via --vp-skip-bottom so the same rule
+     re-targets on every breakpoint: Skip Intro / Skip Recap alone, or Watch Credits + Next Episode.
+     Drawn the way the big streaming apps draw them — flat rectangles with barely rounded corners,
+     bold type, no border and no blur. The SELECTED one (`.sel`: the one OK presses) is a solid pale
+     grey plate — solid, so it does not take on the colour of the frame behind it — with a white fill sweeping across it from the left, in black ink; the other is a
+     translucent grey plate in white ink. `.full` is the selected plate with nothing to count — solid
+     white. The fill is a transform on its own layer (scaleX), so the countdown never repaints the
+     button. */
+  .vp-prompt{--vp-skip-bottom:136px;position:absolute;right:32px;bottom:var(--vp-skip-bottom);z-index:5;display:none;
+    align-items:center;gap:16px}
+  .vp-prompt.show{display:flex;animation:vp-prompt-in .3s cubic-bezier(.34,1.45,.64,1) both}
+  @keyframes vp-prompt-in{from{opacity:0;transform:translateY(12px) scale(.96)}to{opacity:1;transform:none}}
+  .vp-pbtn{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;gap:12px;
+    height:46px;padding:0 24px;border:0;border-radius:4px;background:rgba(109,109,109,.7);color:#fff;
+    font:inherit;font-size:19px;font-weight:700;line-height:1;white-space:nowrap;cursor:pointer;
+    transition:background-color .15s ease,color .15s ease,transform .15s ease}
+  .vp-pbtn > span,.vp-pbtn > svg{position:relative;z-index:1}
+  .vp-pbtn svg{width:22px;height:22px;flex:none}
+  .vp-pbtn .vp-pfill{position:absolute;inset:0;z-index:0;background:rgba(255,255,255,.35);transform:scaleX(0);transform-origin:left center;
+    animation-name:vp-pfill;animation-timing-function:linear;animation-fill-mode:forwards}
+  @keyframes vp-pfill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  .vp-pbtn.sel{background:#bcbcbc;color:#000}
+  .vp-pbtn.sel .vp-pfill{background:#fff}
+  .vp-pbtn.sel.full{background:#fff}
+  .vp-pbtn:hover{background:rgba(128,128,128,.8)}
+  .vp-pbtn.sel:hover{background:#cdcdcd}
+  .vp-pbtn.sel.full:hover{background:#fff}
+  .vp-pbtn:active{transform:scale(.97)}
+  .vp-pbtn:focus-visible{outline:2px solid #fff;outline-offset:3px}
+  @media (prefers-reduced-motion:reduce){ .vp-prompt.show{animation:none} }
 
   /* ==========================================================================
      THE WEB PLAYER'S OWN LOOK — the TV's control bar at 60cm. Every value here has a
@@ -2456,7 +2451,7 @@
   /* Round, like the buttons it sits beside in the big apps; a grey disc behind the one whose box
      is open. */
   .vp-overlay.web .vp-bottom .vp-icon.on{background:rgba(255,255,255,.2)}
-  .vp-overlay.web .vp-skip{right:var(--vp-gutter)}
+  .vp-overlay.web .vp-prompt{right:var(--vp-gutter)}
   .vp-overlay.web .vp-bottom .vp-icon svg{width:22px;height:22px}
   .vp-overlay.web.tv-rail .vp-bottom{transform:translateY(calc(-1 * var(--vp-rail-h)))}
 
@@ -2547,6 +2542,54 @@
   /* ---- The tail: volume, PiP, fullscreen, pushed to the far right end of the icon row. */
   .vp-overlay.web .vp-tail{gap:2px;margin-left:auto}
 
+  /* ---- ON A DESKTOP SCREEN THE WEB PLAYER IS THE TV PLAYER: the same proportions, measured on the
+     window exactly as tv.css measures them on the panel — so a full-screen browser at 1920x1080
+     and the television at 1920x1080 draw the same wordmark, the same icons, the same bar and the
+     same boxes, at the same sizes and margins. Below 900px the phone and tablet sizes further down
+     take over: these clamps are sized for a screen, and seven 46px icons do not fit a phone.
+     What the web keeps of its own are the controls only a browser needs — play, volume,
+     picture-in-picture, fullscreen and close — drawn as the same round icons as the row. */
+  @media (min-width:901px){
+    .vp-overlay.web{--vp-gutter:clamp(64px,7vw,140px)}
+    .vp-overlay.web .vp-top{padding:clamp(28px,4.5vh,52px) var(--vp-gutter)}
+    .vp-overlay.web .vp-bottom{padding:0 var(--vp-gutter) clamp(26px,4.2vh,48px)}
+    .vp-overlay.web .vp-meta{gap:clamp(8px,1.3vh,16px);margin-bottom:clamp(14px,2.3vh,28px);max-width:60vw}
+    .vp-overlay.web .vp-logo{max-width:min(26vw,500px);max-height:clamp(64px,12vh,136px)}
+    .vp-overlay.web .vp-title{font-size:clamp(30px,4.6vh,52px);line-height:1.05}
+    .vp-overlay.web .vp-epline{gap:clamp(10px,.9vw,16px)}
+    .vp-overlay.web .vp-subtitle{font-size:clamp(16px,2.1vh,23px)}
+    .vp-overlay.web .vp-eptitle{font-size:clamp(18px,2.4vh,26px)}
+    .vp-overlay.web .vp-bottom > .vp-controls{gap:clamp(10px,1.2vw,22px);margin:0 calc(-1 * clamp(11px,1.5vh,15px)) clamp(4px,.8vh,10px)}
+    .vp-overlay.web .vp-bottom .vp-icon,.vp-overlay.web .vp-play-disc,#vpClose{min-width:clamp(46px,6vh,62px);width:clamp(46px,6vh,62px);height:clamp(46px,6vh,62px);border-radius:50%}
+    .vp-overlay.web .vp-bottom .vp-icon svg{width:clamp(24px,3vh,32px);height:clamp(24px,3vh,32px)}
+    .vp-overlay.web .vp-play-disc > span{width:52%;height:52%}
+    .vp-overlay.web .vp-tail{gap:clamp(10px,1.2vw,22px)}
+    .vp-overlay.web #vpClose{font-size:clamp(20px,2.6vh,28px)}
+    .vp-overlay.web .vp-progress{padding:clamp(12px,1.8vh,20px) 0}
+    .vp-overlay.web .vp-bar{height:5px;border-radius:2.5px}
+    .vp-overlay.web .vp-thumb{width:clamp(24px,3.2vh,34px);height:clamp(24px,3.2vh,34px)}
+    .vp-overlay.web .vp-times{gap:clamp(10px,.9vw,16px);margin-top:calc(-1 * clamp(4px,.7vh,8px))}
+    .vp-overlay.web .vp-t,.vp-overlay.web .vp-chapter{font-size:clamp(15px,2vh,21px)}
+    .vp-overlay.web .vp-prompt{--vp-skip-bottom:clamp(80px,11.4vh,128px);gap:clamp(14px,1.1vw,22px)}
+    .vp-overlay.web .vp-pbtn{height:clamp(48px,5.8vh,64px);padding:0 clamp(22px,1.7vw,34px);font-size:clamp(19px,2.35vh,26px);
+      border-radius:clamp(4px,.45vh,6px);gap:clamp(10px,.8vw,16px)}
+    .vp-overlay.web .vp-pbtn svg{width:clamp(20px,2.4vh,28px);height:clamp(20px,2.4vh,28px)}
+    .vp-overlay.web .vp-box{bottom:calc(100% + clamp(14px,2vh,24px));width:clamp(320px,23vw,440px);max-height:min(62vh,640px);
+      padding:clamp(10px,1.3vh,14px);border-radius:clamp(18px,2.4vh,26px)}
+    .vp-overlay.web :is(.vp-box-title,.vp-box-back){font-size:clamp(13px,1.65vh,18px);padding-left:clamp(14px,1.1vw,20px);padding-right:clamp(14px,1.1vw,20px)}
+    .vp-overlay.web .vp-box-title{padding-top:clamp(8px,1.2vh,14px);padding-bottom:clamp(6px,.9vh,10px)}
+    .vp-overlay.web .vp-box-back{min-height:clamp(42px,5vh,54px);border-radius:clamp(12px,1.6vh,16px)}
+    .vp-overlay.web .vp-box-note{font-size:clamp(13px,1.6vh,17px);padding-left:clamp(14px,1.1vw,20px);padding-right:clamp(14px,1.1vw,20px)}
+    .vp-overlay.web .vp-box .vp-opt{min-height:clamp(46px,5.6vh,60px);padding-left:clamp(14px,1.1vw,20px);padding-right:clamp(14px,1.1vw,20px);
+      border-radius:clamp(12px,1.6vh,16px);font-size:clamp(16px,2.1vh,23px);gap:clamp(10px,.8vw,14px)}
+    .vp-overlay.web .vp-box .vp-opt :is(.sub,.val){font-size:.8em}
+    .vp-overlay.web .vp-box .vp-opt .ck{font-size:1.1em}
+    .vp-overlay.web .vp-src-name{font-size:clamp(14px,1.75vh,19px)}
+    .vp-overlay.web .vp-src-sub{font-size:clamp(12px,1.45vh,16px)}
+    .vp-overlay.web .vp-src .quality-badge{font-size:clamp(11px,1.35vh,14px)}
+    .vp-overlay.web .vp-eprail{padding-left:var(--vp-gutter);padding-right:var(--vp-gutter)}
+  }
+
   /* ==========================================================================
      THE EPISODE SHELF (web) — a strip of stills under the scrubber, opened by the Episodes
      button, by ArrowDown, or on a phone by the same button. The TV's rail in tv.css, at desk
@@ -2623,7 +2666,9 @@
   }
   @media(max-width:640px){
     /* phones: lift the skip button clear of the stack and tighten the chip itself */
-    .vp-skip{--vp-skip-bottom:132px;right:16px;font-size:13px;padding:9px 15px;max-width:calc(100vw - 32px)}
+    .vp-prompt{--vp-skip-bottom:132px;right:16px;gap:10px;max-width:calc(100vw - 32px)}
+    .vp-pbtn{height:40px;padding:0 16px;font-size:15px;gap:8px}
+    .vp-pbtn svg{width:18px;height:18px}
   }
 
   /* ---------- responsive ---------- */
@@ -3009,7 +3054,7 @@
     /* …but iOS Safari supports per-video PiP (webkitSetPresentationMode); re-show the button
        there. The .vp-has-webkit-pip class is set at runtime only when that API is real. */
     .vp-overlay.vp-has-webkit-pip #vpPip{display:flex}
-    .vp-skip{--vp-skip-bottom:calc(132px + env(safe-area-inset-bottom,0px));right:calc(16px + env(safe-area-inset-right,0px))}
+    .vp-prompt{--vp-skip-bottom:calc(132px + env(safe-area-inset-bottom,0px));right:calc(16px + env(safe-area-inset-right,0px))}
     /* footer: stack links left, generous tap rows, clear the home bar */
     .site-footer{padding:22px 0 calc(34px + env(safe-area-inset-bottom,0px));gap:16px 18px}
     .site-footer .sf-disclaimer{flex:1 1 100%}
