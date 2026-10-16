@@ -16,6 +16,7 @@ import { registerBackHandler, BACK_LAYER, mediaAction } from '../../lib/tvKeys';
 import { useKeepAwake } from '../../lib/idle';
 import { useSeason } from '../../lib/queries';
 import { rasterLogo } from '../../lib/img';
+import { epLabel } from '../../lib/utils';
 import EpisodeRail from './EpisodeRail';
 import { scrollCardToSlot } from './railScroll';
 import { createCreditsDetector, creditsFallback, creditsWatchFrom, type CreditsDetector } from '../../lib/creditsDetect';
@@ -54,7 +55,7 @@ const VOL_LOCKED = typeof navigator !== 'undefined'
 // skip-intro heuristic window (s) + credits-tail length when no IntroDB markers exist
 const INTRO_FROM = 8, INTRO_TO = 92, CREDITS_TAIL = 35;
 /* Where the intro, recap, credits ("outro") and next-episode preview are, in seconds — from
- * /api/segments, which merges two community databases and checks each marker against this file's
+ * /api/segments, which merges the community databases (SkipDB, TheIntroDB, IntroDB, AniSkip) and checks each marker against this file's
  * length. Credits and previews may run to the end of the file (`end` null). */
 interface Segments {
   intro?: { start: number; end: number } | null;
@@ -462,6 +463,7 @@ export default function VideoPlayer() {
   const seekPreviewRef = useRef<number | null>(null);     // fresh read from the key handler
   const seekCommitTimer = useRef<number | undefined>(undefined);
   const landedTimer = useRef<number | undefined>(undefined);
+  const lastScrubAt = useRef(0);                          // when a scrub last committed (prompt focus waits it out)
   const seekReleaseTimer = useRef<number | undefined>(undefined);
   const seekHoldDir = useRef<0 | 1 | -1>(0);              // which way the held button is pulling
   const rampRaf = useRef(0);
@@ -925,6 +927,10 @@ export default function VideoPlayer() {
     } else return;
     if (!q.get('tmdb') && !q.get('imdb')) return;
     q.set('dur', String(Math.round(dur)));
+    /* The answer's VERSION. The service worker keeps these a day and serves the kept copy first, so
+       when the server's sources change (SkipDB, Oct 16) an old wrong answer would still be shown
+       once per episode. A new value is a new cache key; the server ignores it. */
+    q.set('v', '3');
     const asked = source;
     const take = (d: { intro?: Segments['intro']; recap?: Segments['recap']; credits?: Segments['outro']; outro?: Segments['outro']; preview?: Segments['preview'] } | null) => {
       if (!d || segSource.current !== asked) return;
@@ -1140,10 +1146,11 @@ export default function VideoPlayer() {
       setCur(pos);
       /* THE LANDING. Committing used to be silent: the preview markers vanished and the picture
        * changed whenever the demuxer got there, so the gesture had no ending — it just stopped
-       * being. A half-second ring off the playhead gives the scrub a full stop, and it fires the
-       * instant the seek is issued rather than when the frame arrives, so it also covers the
-       * decode gap that is otherwise dead air on a slow TV. */
+       * being. `.landed` gives the dot a half-second squash-and-settle (see "THE DOT" in the
+       * stylesheets), and it fires the instant the seek is issued rather than when the frame
+       * arrives, so it also covers the decode gap that is otherwise dead air on a slow TV. */
       setLanded(true);
+      lastScrubAt.current = performance.now();
       window.clearTimeout(landedTimer.current);
       landedTimer.current = window.setTimeout(() => setLanded(false), 520);
     }
@@ -1720,7 +1727,7 @@ export default function VideoPlayer() {
         else if (m === 'play') v?.play().catch(() => { /* autoplay policy — the button stays */ });
         else if (m === 'pause') v?.pause();
         else if (m === 'stop') close();
-        else if (m === 'next') source.next?.();
+        else if (m === 'next') startNextRef.current();
         // 'prev' has no meaning here: there is no previous-episode action in the player.
         bump();
         return;
@@ -2039,8 +2046,10 @@ export default function VideoPlayer() {
     const outroStart = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro.start : null;
     const nextAt = outroStart != null ? outroStart : dur - CREDITS_TAIL;
     if (source.series && source.next && cur >= nextAt && dur - cur > 0.5) skipMode = 'next';
-    else if (recap && cur >= recap.start && cur <= recap.end) { skipMode = 'recap'; skipTo = recap.end; }
-    else if (intro ? (cur >= intro.start && cur <= intro.end) : (!!source.series && !segments && cur >= INTRO_FROM && cur <= INTRO_TO)) {
+    /* The end is EXCLUSIVE: Skip lands exactly on it, and a prompt still "inside" at that instant
+       stayed up until the next timeupdate carried the clock past it — the press looked ignored. */
+    else if (recap && cur >= recap.start && cur < recap.end) { skipMode = 'recap'; skipTo = recap.end; }
+    else if (intro ? (cur >= intro.start && cur < intro.end) : (!!source.series && !segments && cur >= INTRO_FROM && cur < INTRO_TO)) {
       skipMode = 'intro'; skipTo = intro ? intro.end : INTRO_TO;
     }
   }
@@ -2059,13 +2068,50 @@ export default function VideoPlayer() {
    * frame, and it is paused with the film (`animation-play-state`), so a viewer who pauses on the
    * credits is not carried into the next episode behind their back. `promptRun` restarts it: a
    * prompt that appears again (a seek back into the intro) counts from the beginning. */
+  /* NEXT EPISODE ANSWERS THE PRESS, NOT THE NETWORK. Between the press and the next episode's
+   * first frame there is a source to find and a file to open, and for all of that the old
+   * episode used to carry on rolling its credits under the button as if nothing had been asked.
+   * Now the press is answered in the same frame: the credits stop, the picture goes to black, the
+   * bar and buttons step out, and the episode line already names the episode that is coming
+   * (`switching` holds that label). The new episode's first `playing` lifts it, and so does an
+   * error — or thirty seconds of nothing, which leaves the viewer a paused episode and the
+   * controls, never a black screen with no way out. */
+  const [switching, setSwitching] = useState<string | null>(null);
+  const switchTimer = useRef<number | undefined>(undefined);
+  /* SKIP INTRO / SKIP RECAP ANSWER IT TOO. The bar and the button react the instant it is
+   * pressed (see `skipAhead`); the picture is the one thing that genuinely has to wait for the
+   * seek, and if that takes long enough to be seen, it waits in black rather than on a frozen
+   * frame of the intro that was just skipped. `jumping` is that black. */
+  const [jumping, setJumping] = useState(false);
+  const jumpTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!source) { setSwitching(null); window.clearTimeout(switchTimer.current); }
+    setJumping(false); window.clearTimeout(jumpTimer.current);
+  }, [source]);
+  useEffect(() => { if (errKind) { setSwitching(null); window.clearTimeout(switchTimer.current); } }, [errKind]);
+  useEffect(() => () => { window.clearTimeout(switchTimer.current); window.clearTimeout(jumpTimer.current); }, []);
+
+  /* THE NEXT EPISODE'S SOURCES ARE ASKED FOR WHILE THIS ONE PLAYS — half way through, or five
+   * minutes before its credits, whichever comes first — so that when Next Episode is pressed (or
+   * counts down) the add-ons have long since answered and it starts on the same release at once.
+   * Once per episode. See `sharedAddonStreams`. */
+  const prefetchedFor = useRef<object | null>(null);
+  useEffect(() => {
+    if (!source?.prefetchNext || prefetchedFor.current === source || !dur) return;
+    const outroAt = segments?.outro?.start;
+    if (cur >= dur * 0.5 || dur - cur < 300 || (outroAt != null && cur >= outroAt - 300)) {
+      prefetchedFor.current = source;
+      source.prefetchNext();
+    }
+  }, [source, cur, dur, segments]);
+
   const [promptGone, setPromptGone] = useState(false);
   const [creditsDismissed, setCreditsDismissed] = useState(false);
   const [promptSel, setPromptSel] = useState<'main' | 'ghost'>('main');
   const [promptRun, setPromptRun] = useState(0);
   useEffect(() => { setPromptGone(false); setPromptSel('main'); setPromptRun((n) => n + 1); }, [skipMode]);
   useEffect(() => { setCreditsDismissed(false); }, [source]);
-  const promptShown = skipMode === 'next' ? !creditsDismissed : !!skipMode && (!promptGone || !hideUi);
+  const promptShown = (skipMode === 'next' ? !creditsDismissed : !!skipMode && (!promptGone || !hideUi)) && switching == null;
   /* A pressed prompt takes the remote with it when it goes: focus would otherwise fall to <body> as
    * the button unmounts, and the next arrow would restart from wherever spatial navigation likes. */
   const promptLeft = () => {
@@ -2073,12 +2119,69 @@ export default function VideoPlayer() {
   };
   const skipAhead = () => {
     const v = videoRef.current;
-    if (v) v.currentTime = Math.min((v.duration || 0) - 1, Math.max(v.currentTime, skipTo));
+    if (v) {
+      const to = Math.min((v.duration || 0) - 1, Math.max(v.currentTime, skipTo));
+      v.currentTime = to;
+      /* The bar and the prompt are told now — `v.currentTime` already reads `to`, so this is the
+         same fact, not a guess — instead of on the seek's first timeupdate, which on a cold
+         buffer is a second later with the button still sitting there looking unpressed. */
+      setCur(to);
+      setLanded(true);
+      window.clearTimeout(landedTimer.current);
+      landedTimer.current = window.setTimeout(() => setLanded(false), 520);
+      // Black only if the seek is slow enough to be seen; a quick one just cuts.
+      window.clearTimeout(jumpTimer.current);
+      jumpTimer.current = window.setTimeout(() => {
+        if (!v.seeking) return;
+        setJumping(true);
+        jumpTimer.current = window.setTimeout(() => setJumping(false), 8000);
+      }, 120);
+    }
     promptLeft();
     bump();
   };
-  const goNext = () => { promptLeft(); source?.next?.(); };
+  /* Where Next Episode goes, as the player can work it out itself — the same walk as the title
+   * screen's `nextEpOf`: the next episode in the season, else the first of the next season. */
+  const nextEpLabel = (() => {
+    const se = source?.series;
+    if (!se) return '';
+    const eps = (n: number) => se.seasons.find((x) => x.season === n)?.episodes ?? 0;
+    if (se.ep < eps(se.season)) return epLabel(se.season, se.ep + 1);
+    const ns = se.seasons.filter((x) => x.season > se.season && x.episodes > 0).map((x) => x.season).sort((a, b) => a - b)[0];
+    return ns != null ? epLabel(ns, 1) : '';
+  })();
+  const startNext = () => {
+    if (!source?.next) return;
+    promptLeft();
+    videoRef.current?.pause();
+    setSwitching(nextEpLabel);
+    setHideUi(false);
+    window.clearTimeout(switchTimer.current);
+    switchTimer.current = window.setTimeout(() => setSwitching(null), 30000);
+    source.next();
+  };
+  const startNextRef = useRef(startNext);
+  startNextRef.current = startNext;
+  const goNext = startNext;
   const watchCredits = () => { promptLeft(); setCreditsDismissed(true); bump(); };
+  /* ON THE TV THE PROMPT IS WHERE THE REMOTE IS. In transport mode OK already presses it (2b in
+   * the key handler). With the controls up, the remote was left wherever it stood — usually the
+   * scrubber, where OK pauses — so a viewer pressing OK at a white Skip Intro paused the film
+   * instead. Now the button takes focus the moment it appears, and OK is all it needs. Not while
+   * a box or the shelf is open, not mid-scrub, and not in the second and a half after a scrub
+   * landed: someone who has just rewound INTO the intro is aiming the bar, and the next Left
+   * press should keep rewinding rather than walk off the Skip button. */
+  const panelUp = useRef(false);
+  panelUp.current = menuOpen || audioOpen || epPanelOpen;
+  useEffect(() => {
+    if (!IS_TV || !promptShown || !skipMode || !tvNavRef.current) return;
+    if (panelUp.current || seekPreviewRef.current != null) return;
+    if (performance.now() - lastScrubAt.current < 1500) return;
+    const id = requestAnimationFrame(() => {
+      overlayRef.current?.querySelector<HTMLElement>('.vp-prompt.show .vp-pbtn.sel')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [skipMode, promptShown]);
   /* What OK does in transport mode while a prompt is up — read by the remote's handler, which is
    * bound once per mode and would otherwise see the prompt as it was when it was bound. */
   const promptRef = useRef<{ kind: 'intro' | 'recap' | 'next'; act: () => void } | null>(null);
@@ -2093,7 +2196,6 @@ export default function VideoPlayer() {
   /* While a remote scrub is pending the bar shows where it WOULD land, not where the video still
    * is — that preview is the entire feedback for a seek that has not happened yet. */
   const shownTime = seekPreview ?? cur;
-  const seekDelta = seekPreview == null ? 0 : Math.round(seekPreview - cur);
   const pct = dur ? (shownTime / dur) * 100 : 0;
   const bufPct = dur ? (buffered / dur) * 100 : 0;
   /* Where the video ACTUALLY is while a preview is pending — the origin of the jump. The bar
@@ -2310,7 +2412,7 @@ export default function VideoPlayer() {
                 onClick={() => { railFrom.current = 'button'; setEpPanelOpen((o) => !o); }}>{IcEpisodes}</button>
             )}
             {source.next && (
-              <button className="vp-icon" id="vpNext" aria-label={t('ctl.next_a')} title={IS_TV ? undefined : t('ctl.next_a')} onClick={() => source.next?.()}>{IcNext}</button>
+              <button className="vp-icon" id="vpNext" aria-label={t('ctl.next_a')} title={IS_TV ? undefined : t('ctl.next_a')} onClick={startNext}>{IcNext}</button>
             )}
 
             {/* SUBTITLES: one row per LANGUAGE, the way the big apps list them. The add-ons often
@@ -2522,7 +2624,7 @@ export default function VideoPlayer() {
          absent means the arrows are transport and it must stand down. `tv` / `web` are the
          styling hooks for the two builds' own stylesheets; `tv-rail` lifts the bar clear of the
          episode shelf on both. */
-      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}`}
+      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${jumping ? ' vp-jumping' : ''}`}
       id="playerOverlay"
       ref={overlayRef}
       /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
@@ -2591,7 +2693,8 @@ export default function VideoPlayer() {
         }}
         onPause={() => { setPlaying(false); setHideUi(false); }}
         onWaiting={() => setLoading(true)}
-        onPlaying={() => { setLoading(false); setErrKind(null); startedRef.current = true; }}
+        onPlaying={() => { setLoading(false); setErrKind(null); startedRef.current = true; if (switching != null) { setSwitching(null); window.clearTimeout(switchTimer.current); } }}
+        onSeeked={() => { window.clearTimeout(jumpTimer.current); setJumping(false); }}
         onCanPlay={() => { setLoading(false); setErrKind(null); }}
         /* WHAT WENT WRONG IS IN `v.error.code`, AND THIS USED TO IGNORE IT.
          *
@@ -2635,7 +2738,7 @@ export default function VideoPlayer() {
           /* The end of a film is post-play's last cue, whatever happened before it — including a
              viewer who chose to watch the credits, who has now watched them. */
           if (ppEligible) { ppDismissed.current = false; openPostPlay(); return; }
-          if (settings.autoplayNext && source.next) source.next();
+          if (settings.autoplayNext && source.next) startNext();
         }}
       >
         {/* `key` is the blob url so switching tracks REPLACES the element rather than
@@ -2738,7 +2841,11 @@ export default function VideoPlayer() {
             )}
             {/* S1 | E3  "Lord Snow" — the label in the mono face, the episode's own name in quotes
                 beside it, the way the big apps print it. */}
-            {source.subtitle && (
+            {switching ? (
+              <div className="vp-epline vp-epline-next" key={switching}>
+                <span className="vp-subtitle" id="vpSubtitle">{switching}</span>
+              </div>
+            ) : source.subtitle && (
               <div className="vp-epline">
                 <span className="vp-subtitle" id="vpSubtitle">{source.subtitle}</span>
                 {epName && <span className="vp-eptitle">“{epName}”</span>}
@@ -2781,28 +2888,8 @@ export default function VideoPlayer() {
                   )}
                 </div>
               ))}
-              {seekPreview != null && <div className="vp-seek-origin" style={{ left: `${curPct}%` }} aria-hidden="true" />}
               <div className="vp-thumb" id="vpThumb" ref={thumbRef} style={{ left: `${pct}%` }} />
             </div>
-            {/* THE OFFSET, FLOATING OVER THE BAR AND CLAMPED OFF ITS ENDS. `left` is clamped in px
-                rather than in % because the guard is about the pill's own width, which does not
-                scale with the bar: near 0:00 an uncorrected pill would hang off the left edge of
-                the screen. */}
-            {seekDelta !== 0 && (
-              <div
-                className={`vp-seek-cue${seekDelta > 0 ? ' fwd' : ' back'}`}
-                style={{ left: `clamp(64px, ${pct}%, calc(100% - 64px))` }}
-                aria-hidden="true"
-              >
-                {/* A TRUE MINUS SIGN (U+2212), not a hyphen. At this size a hyphen is a short
-                    stub sitting low against a tabular digit, which reads as a dash between two
-                    things rather than as the sign of the number after it; the minus is cut to the
-                    digits' own width and sits on their midline. The forward case takes no `+` —
-                    an unsigned offset while the playhead runs forward is the resting reading, and
-                    a sign that is present half the time is a sign worth noticing. */}
-                <span className="vp-seek-num">{seekDelta < 0 ? '−' : ''}{fmt(Math.abs(seekDelta))}</span>
-              </div>
-            )}
           </div>
 
           {/* THE CLOCKS SIT UNDER THE BAR'S ENDS, not beside them, so the bar runs the full width

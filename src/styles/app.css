@@ -2198,6 +2198,16 @@
        clip a position:fixed descendant) */
   .vp-overlay.open{opacity:1;pointer-events:all}
   .vp-overlay video{position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain}
+  /* NEXT EPISODE / SKIP, ANSWERED AT ONCE (see `switching` and `jumping` in VideoPlayer.tsx). The
+     picture drops to black while the next file is found or a slow seek lands, and comes back with a
+     fade rather than a cut. Next Episode also clears the bar and the buttons and pops the line that
+     names the coming episode; opacity, not visibility, so the remote keeps its place on the bar. */
+  .vp-overlay video{transition:opacity .3s ease}
+  .vp-overlay:is(.vp-switching,.vp-jumping) video{opacity:0;transition-duration:.16s}
+  .vp-overlay.vp-switching :is(.vp-controls,.vp-progress,.vp-times){opacity:0;pointer-events:none;transition:opacity .16s ease}
+  .vp-overlay.vp-switching .vp-epline-next{animation:vp-next-pop .52s cubic-bezier(.34,1.56,.64,1) both}
+  @keyframes vp-next-pop{0%{opacity:0;transform:translateY(12px) scale(.9)}100%{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){ .vp-overlay.vp-switching .vp-epline-next{animation:none} }
   /* picture-enhance: an animated film-grain layer over the video image. Doesn't add real detail
      (impossible client-side) — it dithers away banding + masks macroblocking on low-bitrate streams
      so they read sharper. display:none when off so it costs zero; opacity is driven by --grain (set
@@ -2498,12 +2508,19 @@
   .vp-overlay.web .vp-progress:hover .vp-seg{transform:scaleY(1.6);background:rgba(255,255,255,.5)}
   .vp-overlay.web .vp-buffered{background:rgba(255,255,255,.16);border-radius:0}
   .vp-overlay.web .vp-played{background:#fff;border-radius:0}
-  .vp-overlay.web .vp-thumb{width:18px;height:18px;transform:translate(-50%,-50%) scale(1);background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.4);
-    transition:box-shadow .3s cubic-bezier(.22,.61,.36,1),transform .15s ease}
-  .vp-overlay.web .vp-progress:hover .vp-thumb{transform:translate(-50%,-50%) scale(1.12);box-shadow:0 0 0 5px rgba(255,255,255,.25),0 1px 5px rgba(0,0,0,.4)}
-  /* MID-SCRUB it has to be told apart from a hovered disc sitting still: the halo goes solid.
-     Declared after the hover rule so it wins on document order at equal specificity. */
-  .vp-overlay.web .vp-progress.seeking .vp-thumb{box-shadow:0 0 0 5px rgba(255,255,255,.6),0 0 14px rgba(0,0,0,.6)}
+  /* THE DOT. The disc is a child layer so the landing squash can run on it while the element's
+     own transform carries the hover and scrub sizes. No rings: a halo that went solid on a rewind
+     read as a stroke round the dot. Mid-scrub it pops up a size on a spring; on release it
+     springs back and the disc squashes and settles once — the TV's same "plop". Declared after
+     the hover rule so a scrub wins on document order at equal specificity. */
+  .vp-overlay.web .vp-thumb{width:18px;height:18px;transform:translate(-50%,-50%) scale(1);background:none;box-shadow:none;
+    transition:transform .36s cubic-bezier(.34,1.56,.64,1)}
+  .vp-overlay.web .vp-thumb::after{content:'';position:absolute;top:0;right:0;bottom:0;left:0;border-radius:50%;
+    background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.4)}
+  .vp-overlay.web .vp-progress:hover .vp-thumb{transform:translate(-50%,-50%) scale(1.12)}
+  .vp-overlay.web .vp-progress.seeking .vp-thumb{transform:translate(-50%,-50%) scale(1.3)}
+  .vp-overlay.web .vp-progress.landed .vp-thumb::after{animation:web-vp-thumb-land .5s cubic-bezier(.3,.7,.4,1) both}
+  @keyframes web-vp-thumb-land{0%{transform:scale(1)}28%{transform:scale(1.16,.84)}58%{transform:scale(.95,1.06)}80%{transform:scale(1.02,.99)}100%{transform:scale(1)}}
 
   /* ---- THE SCRUB MOVES, IT DOES NOT TELEPORT. Every keyboard press rewrites `left` and `width`
      outright; easing them lets the playhead SLIDE between presses, and because each press
@@ -2512,32 +2529,21 @@
      against a remote's. Scoped to `.seeking` on purpose: during ordinary playback the same
      properties are written every frame by the playhead loop in VideoPlayer.tsx, and a transition
      there would have the disc permanently chasing the video. */
-  .vp-overlay.web .vp-progress.seeking :is(.vp-played,.vp-seek-span,.vp-thumb,.vp-seek-cue){
-    transition:left .19s cubic-bezier(.25,.8,.3,1),width .19s cubic-bezier(.25,.8,.3,1),box-shadow .3s cubic-bezier(.22,.61,.36,1)}
+  .vp-overlay.web .vp-progress.seeking :is(.vp-played,.vp-seek-span,.vp-thumb){
+    transition:left .19s cubic-bezier(.25,.8,.3,1),width .19s cubic-bezier(.25,.8,.3,1),transform .36s cubic-bezier(.34,1.56,.64,1)}
   /* WHILE THE INPUT IS CONTINUOUS — a held key ramping, a mouse drag, a finger — the easing
      changes character, and it has to. The curve above is an ease-OUT that decelerates into every
      new position, right for a tap and wrong for a stream of positions 16ms apart, where each one
      would be a fresh deceleration that never completes: rubber-banding. Linear, at just over the
      paint interval, is what makes those samples read as constant velocity. */
-  .vp-overlay.web .vp-progress.ramping :is(.vp-played,.vp-seek-span,.vp-thumb,.vp-seek-cue){
-    transition:left .07s linear,width .07s linear,box-shadow .3s cubic-bezier(.22,.61,.36,1)}
+  .vp-overlay.web .vp-progress.ramping :is(.vp-played,.vp-seek-span,.vp-thumb){
+    transition:left .07s linear,width .07s linear,transform .36s cubic-bezier(.34,1.56,.64,1)}
 
-  /* ---- THE SCRUB READOUT: three quiet pieces that all sit OUT OF FLOW, so nothing in the row
-     moves while it is being aimed at.
-       .vp-seek-span    the ground being covered, painted along the bar between where the video
-                        is and where it would land
-       .vp-seek-origin  a hairline at the true playback position, so "back to here" stays legible
-       .vp-seek-cue     the offset itself, floating above the playhead on smoked glass */
+  /* ---- THE SCRUB READOUT is the bar itself: `.vp-seek-span` paints the ground being covered
+     between where the video is and where it would land. The floating "−1:30" pill and the white
+     hairline at the true position were taken off — the clock under the bar already says where a
+     scrub would land, and the bar reads as one clean line. */
   .vp-overlay.web .vp-seek-span{position:absolute;top:0;bottom:0;border-radius:0;background:rgba(255,255,255,.55);pointer-events:none}
-  .vp-overlay.web .vp-seek-origin{position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;border-radius:1px;
-    background:rgba(255,255,255,.85);pointer-events:none}
-  .vp-overlay.web .vp-seek-cue{position:absolute;bottom:calc(100% - 2px);transform:translateX(-50%);
-    display:flex;align-items:baseline;padding:7px 13px;border-radius:999px;background:rgba(10,14,22,.62);
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 6px 20px rgba(0,0,0,.45);
-    backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
-    color:#fff;font-variant-numeric:tabular-nums;font-size:15px;font-weight:500;letter-spacing:.01em;line-height:1;
-    white-space:nowrap;pointer-events:none;animation:web-vp-seek-cue-in .22s cubic-bezier(.22,.61,.36,1) both}
-  @keyframes web-vp-seek-cue-in{from{opacity:0;transform:translateX(-50%) translateY(4px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 
   /* ---- The tail: volume, PiP, fullscreen, pushed to the far right end of the icon row. */
   .vp-overlay.web .vp-tail{gap:2px;margin-left:auto}
@@ -2653,8 +2659,8 @@
   .vp-overlay.web .vp-epcard:hover .vp-epcard-desc{color:rgba(255,255,255,.84)}
 
   @media (prefers-reduced-motion:reduce){
-    .vp-overlay.web .vp-seek-cue{animation:none}
-    .vp-overlay.web .vp-progress:is(.seeking,.ramping) :is(.vp-played,.vp-seek-span,.vp-thumb,.vp-seek-cue){transition:none}
+    .vp-overlay.web .vp-progress.landed .vp-thumb::after{animation:none}
+    .vp-overlay.web .vp-progress:is(.seeking,.ramping) :is(.vp-played,.vp-seek-span,.vp-thumb){transition:none}
     .vp-overlay.web .vp-play-disc > span{transition:none}
     .vp-overlay.web .vp-play-disc .ic-pause,.vp-overlay.web .vp-play-disc.playing .ic-play{transform:scale(1) rotate(0deg)}
     .vp-overlay.web .vp-meta > :is(.vp-title,.vp-logo.rdy,.vp-epline){animation:none;opacity:1}
