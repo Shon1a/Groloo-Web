@@ -29,7 +29,7 @@ const IS_TV = import.meta.env.MODE === 'tv';
  * set, in the order a viewer scans them: the default first, then the two high-contrast standards,
  * then the rest. Every one of them is legible over arbitrary video, which is the only requirement
  * a subtitle colour actually has. */
-const TV_SWATCHES = ['#ffffff', '#ffff00', '#00ffff', '#00ff00', '#ff8800', '#000000'];
+const TV_SWATCHES = ['#faf5e6', '#ffffff', '#ffff00', '#00ffff', '#00ff00', '#ff8800', '#000000'];
 
 type Hsv = { h: number; s: number; v: number };
 

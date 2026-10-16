@@ -7,6 +7,7 @@ import { useAddons } from '../stores/addons';
 import { useBlocks } from '../stores/blocks';
 import { useHomeConfig } from '../stores/homeConfig';
 import { api, errorMessage } from '../lib/api';
+import { cueLook } from '../lib/subtitles';
 import { coreStatus, coreSummary, coreStatusRevision, subscribeCoreStatus, type CoreSummary } from '../lib/heart';
 import ColorPicker from '../components/ColorPicker';
 import TvSelect from '../components/TvSelect';
@@ -228,12 +229,8 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
     }
   };
 
-  // subtitle preview outline (approximated with 4-corner text shadows)
-  const ow = settings.subOutlineW;
-  const oc = settings.subOutline;
-  const outline = ow > 0
-    ? `${-ow}px ${-ow}px 0 ${oc}, ${ow}px ${-ow}px 0 ${oc}, ${-ow}px ${ow}px 0 ${oc}, ${ow}px ${ow}px 0 ${oc}`
-    : 'none';
+  // the subtitle preview is drawn by the same `cueLook` the player's ::cue rule uses
+  const cue = cueLook(settings);
 
   const Wrap = embedded ? 'div' : 'section';
   return (
@@ -305,7 +302,7 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
           <div className="sub-preview">
             <div className="sp-label">{t('settings.preview')}</div>
             <div className="sp-line">
-              <span className="sp-cue" style={{ fontSize: `${(settings.subSize / 100) * 20}px`, color: settings.subColor, background: settings.subBg, textShadow: outline, padding: '2px 8px', borderRadius: 3 }}>
+              <span className="sp-cue" style={{ ...cue, fontSize: `${(settings.subSize / 100) * 20}px`, padding: '2px 8px', borderRadius: 3 }}>
                 {t('settings.preview_text')}
               </span>
             </div>
@@ -321,6 +318,10 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
           <div className="setting-row">
             <label>{t('settings.sub_color')}</label>
             <ColorPicker value={settings.subColor} onChange={set('subColor')} label={t('settings.sub_color')} />
+          </div>
+          <div className="setting-row">
+            <label>{t('settings.sub_italic')}</label>
+            <Toggle checked={settings.subItalic} onChange={set('subItalic')} label={t('settings.sub_italic')} />
           </div>
           <div className="setting-row">
             <label>{t('settings.sub_bg')}</label>

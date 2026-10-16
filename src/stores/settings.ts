@@ -29,6 +29,9 @@ export interface Settings {
   subBg: string;
   subOutline: string;
   subOutlineW: number;
+  subItalic: boolean;
+  /** Which subtitle defaults this profile has been moved onto — see `load`. */
+  subLook: number;
   // playback preferences
   autoQuality: 'best' | '4k' | '1080';
   audioLang: 'en' | 'original';
@@ -46,12 +49,16 @@ const DEFAULTS: Settings = {
   autoplayNext: true,
   nextPopup: 15,
   postPlay: true,
-  subLang: 'off',
+  /* English subtitles ON whenever a track exists, and drawn the way Netflix draws them: warm
+   * off-white, italic, no box — the soft shadow lives in lib/subtitles `cueLook`. */
+  subLang: 'en',
   subSize: 100,
-  subColor: '#ffffff',
-  subBg: 'rgba(0,0,0,.6)',
+  subColor: '#faf5e6',
+  subBg: 'transparent',
   subOutline: '#000000',
-  subOutlineW: 2,
+  subOutlineW: 0,
+  subItalic: true,
+  subLook: 2,
   autoQuality: 'best',
   audioLang: 'en',
   externalPlayer: 'disabled',
@@ -75,7 +82,22 @@ const DEFAULTS: Settings = {
 };
 
 function load(): Settings {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return { ...DEFAULTS }; }
+  let saved: Partial<Settings> = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch { return { ...DEFAULTS }; }
+  const s: Settings = { ...DEFAULTS, ...saved };
+  /* MOVING A SAVED PROFILE ONTO THE NEW SUBTITLE DEFAULTS (subLook 2), once. `save` writes the WHOLE object, so anyone who
+   * ever touched a setting has the old defaults stored as if chosen — subtitles off, pure white on a
+   * dimmed box — and new defaults alone would never reach them. Each value is moved only while it
+   * still equals the old default, so a colour somebody actually picked stays theirs. */
+  if (Object.keys(saved).length && (saved.subLook ?? 1) < 2) {
+    if (s.subLang === 'off') s.subLang = 'en';
+    if (String(s.subColor).toLowerCase() === '#ffffff') s.subColor = DEFAULTS.subColor;
+    if (s.subBg === 'rgba(0,0,0,.6)') s.subBg = DEFAULTS.subBg;
+    if (s.subOutlineW === 2 && String(s.subOutline).toLowerCase() === '#000000') s.subOutlineW = DEFAULTS.subOutlineW;
+    s.subLook = 2;
+    save(s);
+  }
+  return s;
 }
 function save(s: Settings) {
   try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* quota */ }
