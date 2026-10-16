@@ -100,6 +100,10 @@ export interface AddonStream {
    *  directly whatever the container looks like. Routed through the streaming server
    *  unconditionally rather than probed, which is what Stremio does with it. */
   notWebReady?: boolean;
+  /** `behaviorHints.bingeGroup` — the add-on's own name for a RELEASE ("torrentio|1080p|NTb"),
+   *  the same on every episode it serves from that release. Stremio's protocol for exactly
+   *  one question: which of the next episode's streams is more of what was just watched. */
+  bingeGroup?: string;
 }
 
 /* Display name for a stream/audio language code. Falls back to the uppercased code
@@ -596,7 +600,7 @@ interface RawStream {
   ytId?: string; infoHash?: string; fileIdx?: number; externalUrl?: string;
   /** trackers/DHT hints for a torrent, as `["tracker:udp://…", "dht:<hash>"]` */
   sources?: string[];
-  behaviorHints?: { streamType?: string; lang?: string; notWebReady?: boolean; videoSize?: number };
+  behaviorHints?: { streamType?: string; lang?: string; notWebReady?: boolean; videoSize?: number; bingeGroup?: string };
   subtitles?: Array<{ url?: string; lang?: string }>;
 }
 
@@ -714,7 +718,10 @@ export async function collectAddonStreams(
         // The pinned mapper first, so a `url` stream is mapped by the exact twin the corpus
         // compares; `mapSourceStream` picks up only what that returns null for.
         const m = mapAddonStream(s, a.manifest?.name || 'Add-on') ?? mapSourceStream(s, a.manifest?.name || 'Add-on');
-        return m && !s.behaviorHints?.lang ? classifyStreamLangs(m) : m;
+        const out = m && !s.behaviorHints?.lang ? classifyStreamLangs(m) : m;
+        // Beside the pinned mapper, like the language pass: the release this stream belongs to.
+        if (out && typeof s.behaviorHints?.bingeGroup === 'string' && s.behaviorHints.bingeGroup) out.bingeGroup = s.behaviorHints.bingeGroup;
+        return out;
       }).filter(Boolean) as AddonStream[];
     } catch { slots[i] = []; }
     // Publishing from inside the per-add-on task, AFTER its catch, is what makes an
@@ -722,6 +729,68 @@ export async function collectAddonStreams(
     onPartial?.(slots.flat());
   }));
   return slots.flat();
+}
+
+/* ONE FAN-OUT PER EPISODE, ASKED FOR AHEAD OF TIME.
+ *
+ * Next Episode used to start its add-on fan-out at the moment it was pressed, and
+ * `collectAddonStreams` resolves only when the SLOWEST add-on has answered — a Torrentio
+ * scraping trackers is routinely ten seconds behind the rest. So the button did nothing
+ * visible for that long, and then the title screen underneath, following the episode, asked
+ * every add-on the same question a second time.
+ *
+ * Now the player asks for the next episode's sources while the current one is still playing
+ * (`PlaySource.prefetchNext`), and everyone who wants that episode's list — Next Episode, the
+ * title screen's rows — shares the one fan-out in flight or just finished. `onPartial` still
+ * reports add-on by add-on, replaying what has already landed, so a caller arriving late sees
+ * exactly what an early one did.
+ *
+ * Kept ten minutes, and keyed by the installed add-on set as well as the episode, so installing
+ * or hiding an add-on is a different question rather than a stale answer. An empty answer is
+ * never kept: that is a network blip as often as it is a fact. */
+interface Fanout {
+  at: number;
+  partial: AddonStream[];
+  done: boolean;
+  result: Promise<AddonStream[]>;
+  subs: Set<(streams: AddonStream[]) => void>;
+}
+const fanouts = new Map<string, Fanout>();
+const FANOUT_TTL = 10 * 60_000;
+
+export function sharedAddonStreams(
+  videoId: string,
+  type: string,
+  onPartial?: (streams: AddonStream[]) => void,
+): Promise<AddonStream[]> {
+  const key = `${type}|${videoId}|${installed().map((a) => a.url).join(' ')}`;
+  let f = fanouts.get(key);
+  if (!f || Date.now() - f.at > FANOUT_TTL) {
+    for (const [k, v] of fanouts) if (Date.now() - v.at > FANOUT_TTL) fanouts.delete(k);
+    const entry: Fanout = { at: Date.now(), partial: [], done: false, result: Promise.resolve([]), subs: new Set() };
+    entry.result = collectAddonStreams(videoId, type, (p) => { entry.partial = p; entry.subs.forEach((fn) => fn(p)); })
+      .then((list) => {
+        entry.done = true; entry.partial = list; entry.subs.clear();
+        if (!list.length && fanouts.get(key) === entry) fanouts.delete(key);
+        return list;
+      }, (err) => {
+        entry.done = true; entry.subs.clear();
+        if (fanouts.get(key) === entry) fanouts.delete(key);
+        throw err;
+      });
+    fanouts.set(key, entry);
+    f = entry;
+  }
+  if (onPartial) {
+    if (f.partial.length) onPartial(f.partial);
+    if (!f.done) f.subs.add(onPartial);
+  }
+  return f.result;
+}
+
+/** Start (or join) the fan-out for an episode without waiting on it. */
+export function prefetchAddonStreams(videoId: string, type: string): void {
+  sharedAddonStreams(videoId, type).catch(() => { /* asked again, for real, when it is played */ });
 }
 
 /* ── subtitles: the resource nobody was asking for ────────────────────────────────

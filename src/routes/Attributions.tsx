@@ -67,6 +67,16 @@ export default function Attributions() {
         </div>
 
         <div className="legal-section">
+          <h3>{t('attrib.skip_head')}</h3>
+          <div className="legal-contact">
+            <p>Skip timestamps from SkipDB, made available under the Open Database License (ODbL) 1.0.</p>
+            <p><a href="https://skipdb.tv" target="_blank" rel="noreferrer noopener">skipdb.tv</a></p>
+            <p>Also from TheIntroDB (theintrodb.org), IntroDB (introdb.app) and AniSkip (aniskip.com).</p>
+          </div>
+          <p>{t('attrib.skip_body')}</p>
+        </div>
+
+        <div className="legal-section">
           <h3>{t('attrib.heart_head')}</h3>
           <p>{t('attrib.heart_body')}</p>
           <div className="legal-contact">
