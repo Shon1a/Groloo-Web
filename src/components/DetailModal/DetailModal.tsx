@@ -767,8 +767,11 @@ export default function DetailModal() {
     const id = videoIdFor(e);
     if (id) prefetchAddonStreams(id, 'series');
   };
-  const playEpisode = async (season: number, ep: number) => {
-    const videoId = videoIdFor({ season, ep }); if (!videoId) return;
+  /* `quiet`: the TV title screen's Play asks this too, and an empty list must NOT start the demo
+   * reel there — a viewer who pressed Play is shown the sources instead (it resolves false). The
+   * player's own callers keep the reel, so auto-next never stops on a black screen. */
+  const playEpisode = async (season: number, ep: number, quiet = false): Promise<boolean> => {
+    const videoId = videoIdFor({ season, ep }); if (!videoId) return false;
     setPickedEp({ season, ep });
     const prev = lastPick.current && lastPick.current.id === String(target?.id ?? '') ? lastPick.current : null;
     /* THE SAME RELEASE STARTS THE MOMENT ITS ADD-ON ANSWERS. The full ranking below has to wait
@@ -789,7 +792,7 @@ export default function DetailModal() {
     };
     const list = await sharedAddonStreams(videoId, 'series', early);
     latest = list;
-    if (started) return;
+    if (started) return true;
     const langs = langTabs(list);
     /* The language that was actually playing wins, then the tab, then whatever the episode has.
      * `langs.includes` is the guard that keeps this a preference: a dub that stops after episode
@@ -797,9 +800,24 @@ export default function DetailModal() {
     const want = prev?.lang && langs.includes(prev.lang) ? prev.lang
       : langs.includes(lang) ? lang : langs[0];
     const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want, prev) ?? bestFor(list, '', prev);
-    if (best) { playStreamFor(best, { season, ep }, want, () => latest); return; }
+    if (best) { playStreamFor(best, { season, ep }, want, () => latest); return true; }
+    if (quiet) return false;
     const nxt = nextEpOf({ season, ep });
     playSource({ url: '/assets/demo.mp4', title, logo: titleLogo, subtitle: epLabel(season, ep), media: buildMediaFor({ season, ep }), subsQuery: subsQueryFor({ season, ep }), next: nxt ? () => { void playEpisode(nxt.season, nxt.ep); } : undefined, prefetchNext: nxt ? () => prefetchEp(nxt) : undefined, series: seriesFor({ season, ep }) });
+    return true;
+  };
+  /* The TV title screen's Play (TvDetail): an episode goes through `playEpisode` above; a film takes
+   * the best of its sources — joining the fan-out the panel beside it is already waiting on. */
+  const playNowTv = async (ep: Ep | null): Promise<boolean> => {
+    if (ep) return playEpisode(ep.season, ep.ep, true);
+    const videoId = videoIdFor(null); if (!videoId) return false;
+    const list = await sharedAddonStreams(videoId, addonType || 'movie');
+    const langs = langTabs(list);
+    const want = langs.includes(lang) ? lang : langs[0];
+    const best = bestFor(list.filter((s) => !want || s.langs.includes(want)), want) ?? bestFor(list, '');
+    if (!best) return false;
+    playStreamFor(best, null, want, () => list);
+    return true;
   };
   // language buckets (from the sources) + the sources for the picked language, sorted
   // best-quality first
@@ -864,15 +882,20 @@ export default function DetailModal() {
    * on a series it could not play anything until an episode was chosen (the deck is that choice),
    * and on a film "best" was a guess made on the viewer's behalf between sources they were about
    * to be shown anyway. The panel beside it lists them, and picking one is the same press.
-   * What it did cost is a quick resume, which is worth remembering if this is revisited. */
+   * What it did cost is a quick resume — which is what TvDetail's PLAY button (`playNowTv`) gives
+   * back: up next on a series, the film otherwise, with the sources as its fallback. */
 
   if (IS_TV) {
     return (
       <TvDetail
+        /* A FRESH SCREEN PER TITLE: More Like This opens another title in place, and everything
+           the screen holds (the backdrop's ready flag, the deck, the trailer box) belongs to one. */
+        key={`${target.type}:${target.id}`}
         target={target} meta={meta} ready={ready} isSeries={isTv}
         title={title} titleLogo={titleLogo} rating={rating} year={year}
         genreChips={genreChips} plot={plot} epTotal={epTotal}
-        close={close}
+        close={close} onPlayNow={playNowTv}
+        trailer={imdbTrailer.data?.url && !videoTrailerFailed ? imdbTrailer.data : undefined}
         added={added} onAdd={onAdd}
         onReport={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}
         srcTab={srcTab} setSrcTab={setSrcTab}
