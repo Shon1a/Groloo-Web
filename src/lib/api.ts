@@ -97,13 +97,30 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   });
 }
 
-/** JSON helper — the workhorse used by query hooks. Throws ApiError on non-2xx. */
-export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(path, init);
+async function readBody<T>(pending: Promise<Response>): Promise<T> {
+  const res = await pending;
   const isJson = (res.headers.get('content-type') || '').includes('application/json');
   const body = isJson ? await res.json().catch(() => null) : await res.text();
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;
+}
+
+/** JSON helper — the workhorse used by query hooks. Throws ApiError on non-2xx. */
+export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+  return readBody<T>(apiFetch(path, init));
+}
+
+/** The request index.html started for `path` before any script had loaded (TV build, see
+ *  `earlyHome` in vite.config.ts), read exactly as api() reads its own — or null when there is none,
+ *  or it was made for a different URL or session than the app would use now. Taken once: a refetch
+ *  is a fresh request. */
+export function adoptEarly<T>(path: string): Promise<T> | null {
+  const w = window as Window & { __grolooHome?: { url: string; auth: string; res: Promise<Response> } };
+  const early = w.__grolooHome;
+  if (!early) return null;
+  delete w.__grolooHome;
+  if (early.url !== (path.startsWith('/api/') ? API_BASE + path : path) || early.auth !== getToken()) return null;
+  return readBody<T>(early.res);
 }
 
 /** POST a JSON body and read JSON back — every mutating call needs the same three

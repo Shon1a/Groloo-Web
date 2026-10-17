@@ -5,7 +5,7 @@ import { imgW, artW, artPosition } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { tvRowCards } from '../lib/tvRowSize';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
-import { useMeta, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, useAwards, useWarmDetail, apiIdOf } from '../lib/queries';
+import { useMeta, useMetaMany, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, useAwards, useWarmDetail, apiIdOf } from '../lib/queries';
 import { useGlanceResolver } from './glance/useGlance';
 import { GlanceIcon } from './glance/GlanceIcons';
 
@@ -24,7 +24,10 @@ import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
 import { barItemHere } from '../lib/tvBar';
 import { prefetchArt } from '../lib/artPrefetch';
+import { slowLink } from '../lib/slowLink';
+import { bootDone, onBootRevealing } from '../lib/bootGate';
 import { whenQuiet } from '../lib/tvQuiet';
+import { pageSliding } from '../lib/tvPageSlide';
 import { TvRowStage, SLIDE_MS, PRESS_SETTLED_MS, type StageSlot, type StagePeek } from '../lib/tvRowStage';
 
 /* A TV HOME ROW — every row below the featured billboard is one of these (Row renders it
@@ -136,6 +139,14 @@ export const SPOT_MAX = tvRowCards();
  * rewritten with the transition suppressed — the same silent hop the old wrap used, now once per
  * ~2000 presses instead of once per lap. */
 const TILES_BEHIND = 2;
+/** The tiles after the walk's own that a row waits for before it shows its first pictures — as many as
+ *  a CLOSED row shows beside its poster at 16:9 (five, the sixth cut by the screen edge). */
+const REVEAL_TILES = 6;
+/** How long a row waits for that set before it shows what it has. A cached set decodes in a frame or
+ *  two; this is only ever reached on a slow link, where a dark row is worse than a ragged one. */
+const REVEAL_CAP_MS = 900;
+/** How long a row's first pictures wait for the artwork of cards that came without any (My List). */
+const ART_WAIT_CAP_MS = 1500;
 const TILES_AHEAD = 9;
 const TILE_KEYS = 1024;
 const REBASE_AT = 2 * TILE_KEYS;
@@ -466,6 +477,7 @@ const HELD_STEP_MIN_MS = 300;
  * evidently not what the scroll is losing frames to, so the constant stays at the ease's own
  * duration rather than carrying an unexplained margin. */
 const OPEN_COMMIT_MS = 420;
+
 
 /* How long a press will wait for the incoming billboard to be decoded before dissolving anyway.
  * The full reasoning is on the swap gate; what this number has to satisfy is that even a capped-out
@@ -991,6 +1003,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /* Sticky: set once the row first comes near the viewport, never cleared — scrolling past a row
    * must not throw its bitmaps away and re-fetch them on the way back. */
   const [visible, setVisible] = useState(false);
+  /* On a slow link during start-up, this row asks for no pictures at all — not even its front card's
+   * wordmark — until the intro's finale (see the latch effect below). Read once, at mount. */
+  const [artHeld, setArtHeld] = useState(() => slowLink() && !bootDone());
 
   /* ---- THE ROW WINDOW, `groloo.tvrows = 'virtual'` --------------------------------------------
    *
@@ -1086,6 +1101,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const infoBRef = useRef<HTMLDivElement>(null);
   const prevRef = useRef<HTMLDivElement>(null);
   const prevTrackRef = useRef<HTMLDivElement>(null);
+  const posterRef = useRef<HTMLDivElement>(null);
+  const posterImgRef = useRef<HTMLDivElement>(null);
+  const posterMarkRef = useRef<HTMLDivElement>(null);
   /** The walk index whose slot is on the front layer — what `refresh` repaints, and what a swap
    *  still waiting on a decode has not yet replaced. */
   const shownAt = useRef(0);
@@ -1131,6 +1149,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** Whether this row has ever promoted tiles. The first pass is the one a viewer can see fade —
    *  see the note in `promoteSoon`. Per ROW, because each row gets its artwork on its own clock. */
   const firstPromote = useRef(true);
+  /** Cards' artwork still on its way, read by `promoteSoon` (see A CARD THAT CAME WITH NO ARTWORK), and
+   *  whether the row has stopped waiting for it. */
+  const artWaitRef = useRef(false);
+  const artGaveUp = useRef(false);
+  /** The row's first pictures have been shown, together (`is-shown`, see `revealWhenReady`). Owned by
+   *  the node like `is-open`, and re-asserted after every render for the same reason. */
+  const shownRef = useRef(false);
   /* ---- THE STRIP'S POSITION IS NOT THE WALK'S POSITION ------------------------------------
    * `liveActive` is the walk index and wraps at `stops`; `stripPos` is the physical position and
    * never wraps — stepping RIGHT off the end card takes the walk to 0 and the strip forward by one,
@@ -1494,10 +1519,76 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     prefetchMeta(near.filter(Boolean));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enrich, open, artOn, active, n]);
+  /* ---- A CARD THAT CAME WITH NO ARTWORK OF ITS OWN GETS THE ROW'S ARTWORK BEFORE IT IS SHOWN ------
+   * Every row is one picture per title: the tile is a crop of the very backdrop the billboard shows, with
+   * the wordmark over it (`sharedArtOf`). A catalogue card carries all of that. A My List entry carries a
+   * poster and a title and nothing else (stores/library WatchItem), so that row fell back to TMDB's
+   * printed posters while the rows around it showed cut artwork — and its billboard was a different
+   * picture from the poster that opened into it (the user, 2026-10-17: "here poster and billboard are
+   * different, not same as our row principle").
+   *
+   * /api/meta answers every field the principle needs — `posterArt` (the cut poster), `artFocusX`, the
+   * `backdrop` it was cut from, `titleLogo` — so for those cards it is asked for, for the dozen titles in
+   * the strip's window around the walk (never the whole row), as soon as the row is allowed its artwork.
+   * The row's first pictures wait for the answers (`artWait` in `promoteSoon`), so the posters come up
+   * once, already right, rather than as TMDB's and then as ours. */
+  const artless = (it: MediaItem | undefined): it is MediaItem => !!it && !it.backdrop && !it.posterArt && !!apiIdOf(it);
+  const artWanted: MediaItem[] = [];
+  if (artOn && stops) {
+    for (let p = Math.max(0, pos - TILES_BEHIND); p <= pos + TILES_AHEAD; p++) {
+      const it = list[mod(active + (p - pos), stops)];
+      if (artless(it) && !artWanted.includes(it)) artWanted.push(it);
+    }
+  }
+  const artMetas = useMetaMany(artWanted.map((it) => ({ id: apiIdOf(it) as string, type: it.type })));
+  /* Accumulated, like `artById`: a title whose answer is in keeps it after the window moves past it. */
+  const cardArt = useRef(new Map<string, Partial<MediaItem>>());
+  artWanted.forEach((it, i) => {
+    const q = artMetas[i];
+    const k = String(it.id);
+    if (!q || cardArt.current.has(k)) return;
+    /* No answer coming: the card keeps its own poster, and stops holding the row's pictures. */
+    if (q.isError) { cardArt.current.set(k, {}); return; }
+    const d = q.data;
+    if (!d) return;
+    /* `backdrop`, NOT `artBackdrop`: the cut poster names the file it was cut from, and that is this one.
+     * No picture at all from the server: the card's own poster, rather than a billboard left empty. */
+    cardArt.current.set(k, {
+      posterArt: d.posterArt || undefined,
+      artFocusX: typeof d.artFocusX === 'number' ? d.artFocusX : undefined,
+      backdrop: d.backdrop || d.artBackdrop || it.poster,
+      titleLogo: it.titleLogo || it.logo ? undefined : (d.titleLogo || undefined),
+      overview: it.overview || d.plot || undefined,
+    });
+  });
+  /** A card whose artwork is still on its way — its billboard and poster wait rather than show TMDB's. */
+  const artPending = (it: MediaItem): boolean => artless(it) && !cardArt.current.has(String(it.id));
+  /** Whether the strip's first pictures are still waiting on artwork that is on its way. */
+  const artWait = artWanted.some((it) => !cardArt.current.has(String(it.id)));
+  /* One merged object per card and per answer, so a tile's props stay the same object across renders
+   * (Tile is memoised on them) and change exactly once, when its artwork arrives. */
+  const merged = useRef(new WeakMap<MediaItem, { from: Partial<MediaItem>; out: MediaItem }>());
+  const cardWithArt = (it: MediaItem): MediaItem => {
+    const add = cardArt.current.get(String(it.id));
+    if (!add) return it;
+    const hit = merged.current.get(it);
+    if (hit && hit.from === add) return hit.out;
+    const out = { ...it, ...Object.fromEntries(Object.entries(add).filter(([, v]) => v !== undefined)) } as MediaItem;
+    merged.current.set(it, { from: add, out });
+    return out;
+  };
+  /** How many cards have their artwork in — what the strip re-renders on. */
+  const artCount = cardArt.current.size;
+
   /** A card as the billboard should paint it — its own fields, plus whatever `enrich` found. */
   const withArt = (it: MediaItem): MediaItem => {
+    const own = cardWithArt(it);
     const a = enrich ? artById[String(it.id)] : undefined;
-    return a ? { ...it, ...a } : it;
+    if (!a) return own;
+    /* The resting title's detail (`artById`) prefers `artBackdrop`, which can be a different file from
+     * the one the cut poster was taken from; where the card's own artwork came in, ITS backdrop stays, so
+     * the billboard is the picture the poster is a slice of. */
+    return own !== it ? { ...own, ...a, backdrop: own.backdrop } : { ...own, ...a };
   };
 
   /* ---- OK OPENS A TITLE THAT IS ALREADY THERE ---------------------------------------------------
@@ -1560,7 +1651,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * as a card waiting. The branded gradient already exists for exactly this and holds the frame
    * for the one request. Catalogue rows keep the old fallback — their cards genuinely sometimes
    * have a poster and no backdrop, with nothing else coming. */
-  const billboardUrl = (it: MediaItem): string => (artOn ? billboardSrcOf(it, !!enrich) : '');
+  const billboardUrl = (it: MediaItem): string => (artOn && !artPending(it) ? billboardSrcOf(it, !!enrich) : '');
 
   /* ---- A ROW NOT YET REACHED DOWNLOADS ITS FIRST SCREEN AHEAD OF TIME -------------------------
    * The billboard, the tiles beside it and their wordmarks — the pictures this row shows the
@@ -1636,13 +1727,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
         out.push(<EndTile key={`${k}:end`} left={leftOf(p)} label={endLabel} icon={endIcon} heading={heading} busy={canMore && !!moreBusy} onGo={goEndStable} />);
       } else if (slot) {
         const res = resumeOf?.(slot);
-        out.push(<Tile key={`${k}:${slot.id}`} item={slot} left={leftOf(p)} pct={res?.pct ?? 0} onOpen={openTile} />);
+        out.push(<Tile key={`${k}:${slot.id}`} item={cardWithArt(slot)} left={leftOf(p)} pct={res?.pct ?? 0} onOpen={openTile} />);
       }
     }
     return out;
     // `slotAt` is rebuilt every render and closes over `list` and `n`, which are in the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [list, n, stops, pos, active, hasEnd, endLabel, endIcon, heading, resumeOf]);
+  }, [list, n, stops, pos, active, hasEnd, endLabel, endIcon, heading, resumeOf, artCount]);
 
   /* ---- ONLY THE TILES THE WALK CAN REACH GET A BITMAP -------------------------------------
    * The strip used to hold 21 tiles and show six, with the other fifteen downloaded and decoded
@@ -1683,10 +1774,59 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * visible, and its picture comes back out of the HTTP cache three presses before it could
    * appear. Both the picture and the wordmark are promoted together: a tile holds TWO deferred
    * images, and promoting only the first is why lettering used to arrive a beat after the art. */
+  /* ---- A ROW'S FIRST PICTURES ARRIVE TOGETHER, NOT ONE BY ONE ------------------------------------
+   * Every tile used to fade in on its own `load`, so on the television — where the pictures come off
+   * the network and out of the decoder at their own pace — a row filled in one poster at a time, the
+   * billboard landing whenever its own decode did. The reference never shows that: a row is either not
+   * there yet or there whole (its first screen comes up in two or three frames, all pictures at once).
+   *
+   * So the row's FIRST pictures are held back as a set (tv.css: everything under `.tv-spot` without
+   * `is-shown` stays transparent) and decoded together — the tiles a viewer can see from where the
+   * walk stands, the card's own picture, its wordmark — and the row is shown in one frame when the
+   * last of them is ready. A cap, because a slow link must not leave a row dark: at REVEAL_CAP_MS the
+   * row is shown with whatever has arrived, and anything later fades in on its own as before. Only
+   * the first time — after that the row is on screen and a picture that arrives late is news. */
+  const revealWhenReady = (fade: boolean) => {
+    const section = sectionRef.current, track = trackRef.current;
+    if (!section || !track || shownRef.current) return;
+    const tiles = Array.from(track.children);
+    const from = Math.min(posLatest.current, TILES_BEHIND);
+    const waits: Promise<unknown>[] = [];
+    /* decode(), not `complete`: a loaded picture is not yet a decoded one, and an `async` image that is
+     * merely loaded is still drawn a frame or two after its neighbours. */
+    const wait = (im: HTMLImageElement) => {
+      if (typeof im.decode === 'function') waits.push(im.decode().catch(() => undefined));
+    };
+    for (const t of tiles.slice(from, from + REVEAL_TILES + 1)) {
+      for (const im of Array.from(t.querySelectorAll('img'))) wait(im);
+    }
+    const front = describeLatest.current(slotAt(shownAt.current));
+    for (const u of [front.bgUrl, front.logoUrl, front.poster?.mark || '']) if (u) wait(retainImage(u));
+    let done = false;
+    const show = () => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(capId);
+      requestAnimationFrame(() => {
+        shownRef.current = true;
+        section.classList.add('is-shown');
+        if (fade) return;
+        /* Off screen: up at once, and the fades handed back once that has been styled — they are the
+         * walk's own (the billboard's photograph dissolves on them). */
+        section.classList.add('no-reveal-fade');
+        window.setTimeout(() => section.classList.remove('no-reveal-fade'), 100);
+      });
+    };
+    const capId = window.setTimeout(show, REVEAL_CAP_MS);
+    Promise.all(waits).then(show, show);
+  };
   const promoteSoon = () => {
     if (promoteId.current) return;
     const track = trackRef.current;
     if (!track || !artOn) return;
+    /* The first pictures wait for cards' artwork that is on its way (see A CARD THAT CAME WITH NO
+     * ARTWORK), up to ART_WAIT_CAP_MS — then the row shows what it has. */
+    if (firstPromote.current && artWaitRef.current && !artGaveUp.current) return;
     const run = () => {
       promoteId.current = 0;
       const imgs = track.querySelectorAll<HTMLImageElement>('img[data-src]');
@@ -1707,16 +1847,21 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * run/start/end events and a style pass on every frame they live, on the first walk down a fresh
        * home screen, for a fade nobody is looking at. Read in an idle callback, where layout is clean. */
       let fade = tileFadeAlways();
-      if (!fade && firstPromote.current) {
+      const first = firstPromote.current;
+      if (!fade && first) {
         const r = sectionRef.current?.getBoundingClientRect();
         fade = !!r && r.bottom > 0 && r.top < window.innerHeight;
       }
+      /* NOR WHILE ITS PAGE IS SLIDING IN. The reference's page arrives with its pictures in it, not fading
+       * up as it moves (lib/tvPageSlide.ts); ours came up over the slide's first 350ms. */
+      if (first && pageSliding()) fade = false;
       firstPromote.current = false;
       for (const img of imgs) {
         if (!fade) img.style.transition = 'none';
         img.src = img.dataset.src || '';
         delete img.dataset.src;
       }
+      if (first) revealWhenReady(fade);
     };
     const ric = window.requestIdleCallback;
     promoteId.current = typeof ric === 'function'
@@ -1726,7 +1871,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /* After every commit that could have mounted a tile: the window moving, the data changing, the
    * row coming near the viewport. `promoteSoon` coalesces them into one callback. */
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { promoteSoon(); }, [artOn, thumbs]);
+  artWaitRef.current = artWait;
+  useEffect(() => {
+    if (artOn && artWait && firstPromote.current && !artGaveUp.current) {
+      const id = window.setTimeout(() => { artGaveUp.current = true; promoteSoon(); }, ART_WAIT_CAP_MS);
+      return () => window.clearTimeout(id);
+    }
+    promoteSoon();
+  }, [artOn, thumbs, artWait]);
 
   /* Arm the artwork a screenful before the row arrives, so it is decoded by the time it is
    * scrolled to and nothing pops in. Disconnects on the first hit — this is a one-way latch. */
@@ -1734,17 +1886,31 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const el = sectionRef.current;
     if (!el) return;
     if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); }
-    }, { rootMargin: '800px 0px' });
-    io.observe(el);
-    /* THE ROW WINDOW ARMS IT FIRST, WHEN IT CAN — lib/tvRowRegistry `prepareRowWindow` fires this on
-     * an idle callback for the rows around the remote, so the latch (and the render that hands the
-     * tiles their `src`) happens between presses instead of on a frame of the vertical scroll, which
-     * is when the observer above would otherwise get there. The observer stays as the fallback. */
-    const arm = () => { setVisible(true); io.disconnect(); };
-    el.addEventListener(ROW_PREPARE_EVENT, arm);
-    return () => { io.disconnect(); el.removeEventListener(ROW_PREPARE_EVENT, arm); };
+    let live = true;
+    let io: IntersectionObserver | null = null;
+    const arm = () => { setVisible(true); io?.disconnect(); };
+    const start = () => {
+      if (!live) return;
+      io = new IntersectionObserver((entries) => {
+        if (entries.some((e) => e.isIntersecting)) arm();
+      }, { rootMargin: '800px 0px' });
+      io.observe(el);
+      /* THE ROW WINDOW ARMS IT FIRST, WHEN IT CAN — lib/tvRowRegistry `prepareRowWindow` fires this on
+       * an idle callback for the rows around the remote, so the latch (and the render that hands the
+       * tiles their `src`) happens between presses instead of on a frame of the vertical scroll, which
+       * is when the observer above would otherwise get there. The observer stays as the fallback. */
+      el.addEventListener(ROW_PREPARE_EVENT, arm);
+    };
+    /* ON A SLOW LINK, NOT UNTIL THE FIRST SCREEN IS IN. Every row arming at once is ~45 pictures (each
+     * row's billboard, its next card, the wordmarks) requested in the same instant as the featured
+     * billboard's, and a slow link splits between them evenly: measured at Slow 4G, the rows were up at
+     * 3.1s and the hero's photograph finished at 8.8s. None of the rows' pictures are on the first
+     * screen, so on such a link they wait for the start-up intro's finale — the first screen complete,
+     * the remote not yet live — and the hero has the link to itself. A fast link arms as it always did. */
+    if (artHeld) onBootRevealing(() => { if (live) { setArtHeld(false); start(); } });
+    else start();
+    return () => { live = false; io?.disconnect(); el.removeEventListener(ROW_PREPARE_EVENT, arm); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `artHeld` is the mount-time answer; it only ever clears
   }, []);
   /* The first row the remote lands on has not been reached by a vertical move, which is the only
    * thing that prepared the window — so the rows below the first focus were cold until the first
@@ -1782,9 +1948,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * matching it. Until the row is near the viewport it is '' and the layer keeps the branded
      * gradient, requesting no bitmap at all. */
     const bgUrl = billboardUrl(a);
-    const logoUrl = logoOf(a) || '';
+    // Held with the artwork on a slow start-up (`artHeld`): the card shows its title in type until then.
+    const logoUrl = artHeld ? '' : logoOf(a) || '';
     const bgPos = heroBgPosition(a);
     const progress = res?.pct ?? 0;
+    /* THE POSTER A CLOSED ROW SHOWS IN THE CARD'S PLACE is the strip tile's own choice (`tilePictureOf`,
+     * the same URL, so the same decoded bitmap), allowed when the billboard is. */
+    const pic = bgUrl ? tilePictureOf(a) : null;
+    const posterMark = pic && !artHeld ? imgW(a.titleLogo || a.logo || '', LOGO_RENDITION) : '';
     return {
       key: `t|${slot.id}|${bgUrl}|${bgPos}|${logoUrl}|${a.title}|${progress.toFixed(3)}`,
       kind: 'title',
@@ -1794,6 +1965,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       logoUrl,
       title: a.title || '',
       progress,
+      poster: {
+        src: pic?.src || '',
+        pos: pic?.pos || '50% 50%',
+        mark: posterMark,
+        text: pic && pic.own && !posterMark ? (a.title || '') : '',
+      },
       endLabel: '',
       endIcon: '',
       endBusy: false,
@@ -1822,7 +1999,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const peekFor = (at: number): StagePeek => {
     const previous = at >= n ? list[n - 1] : (at > 0 ? list[at - 1] : undefined);
     if (!previous) return { art: null, gradient: '' };
-    return { art: artOn ? peekArtOf(previous) : EMPTY_PEEK, gradient: heroFallbackGradient(previous) };
+    return { art: artOn ? peekArtOf(withArt(previous)) : EMPTY_PEEK, gradient: heroFallbackGradient(previous) };
   };
   describeLatest.current = describeSlot;
   peekLatest.current = peekFor;
@@ -1983,8 +2160,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const a = layerARef.current, b = layerBRef.current, pa = plateARef.current, pb = plateBRef.current;
     const ia = infoARef.current, ib = infoBRef.current;
     const prev = prevRef.current, prevTrack = prevTrackRef.current;
-    if (!hasRow || !hero || !strip || !a || !b || !pa || !pb || !ia || !ib || !prev || !prevTrack) return;
-    const stage = new TvRowStage({ hero, strip, layers: [a, b], plates: [pa, pb], infos: [ia, ib], prev, prevTrack });
+    const poster = posterRef.current, posterImg = posterImgRef.current, posterMark = posterMarkRef.current;
+    if (!hasRow || !hero || !strip || !a || !b || !pa || !pb || !ia || !ib || !prev || !prevTrack || !poster || !posterImg || !posterMark) return;
+    const stage = new TvRowStage({ hero, strip, layers: [a, b], plates: [pa, pb], infos: [ia, ib], prev, prevTrack, poster, posterImg, posterMark });
     stageRef.current = stage;
     shownAt.current = liveActive.current;
     stage.cut(describeLatest.current(slotAt(shownAt.current)), peekLatest.current(shownAt.current));
@@ -2241,6 +2419,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * the class the focus handler already set. `is-primed` likewise (see `primeSoon`). */
     sectionRef.current?.classList.toggle('is-open', openRef.current);
     sectionRef.current?.classList.toggle('is-primed', primedRef.current);
+    if (shownRef.current) sectionRef.current?.classList.add('is-shown');
+    sectionRef.current?.classList.toggle('is-above', aboveRef.current);
   });
 
   /* ---- FOCUS PAINTS IMMEDIATELY, COMMITS LATER ----------------------------------------------
@@ -2252,8 +2432,45 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * OPEN_COMMIT_MS tracks TvSpatialNav's SCROLL_MS. Holding a direction keeps re-scheduling it, so
    * a run down the page produces ONE commit per row that is actually stopped on, instead of two
    * full row re-renders per press on the way past. */
+  /* ---- A ROW ABOVE THE REMOTE KEEPS ITS BILLBOARD; A ROW BELOW IT IS A LINE OF POSTERS -------------
+   * Measured on the reference: pressing Down, the row being left keeps its billboard and its posters
+   * exactly where they were (a poster tracked at x=1000 on the frame before AND after) while it scrolls
+   * off the top, only dimming; pressing Up, the row being left — which stays on screen, below — folds
+   * back to posters in the first frame. On a 16:9 panel nothing above the remote's row is ever left on
+   * screen, so that is all the reference shows; a taller window shows more of the page, and there a row
+   * above was seen folded (the user, 2026-10-17, twice: "upper row billboard folds", "still folds upper
+   * rows" — first after a timer folded it, then after coming back up past rows folded long before).
+   *
+   * So the rule is the reference's, made a STATE instead of an event: every row above the one the remote
+   * is on is `is-above` — open in shape, closed in brightness (tv.css) — and every row below is folded.
+   * Down onto the next row leaves this one above, still a billboard; Up past it makes it a row below,
+   * and it folds where it stands, as the reference's does. Read on every focus change inside the page
+   * (one compareDocumentPosition per row); the bar takes the page back to its top, where nothing is
+   * above, and focus in an overlay changes nothing. */
+  const aboveRef = useRef(false);
+  useEffect(() => {
+    const sec = sectionRef.current;
+    if (!sec) return;
+    const read = (t: Element | null) => {
+      if (!t || sec.contains(t)) return;
+      let above: boolean;
+      if (t.closest('main')) above = !!(sec.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING);
+      else if (t.closest('.tv-topnav')) above = false;
+      else return;
+      if (above === aboveRef.current) return;
+      aboveRef.current = above;
+      sec.classList.toggle('is-above', above);
+    };
+    const onIn = (e: FocusEvent) => read(e.target as Element | null);
+    document.addEventListener('focusin', onIn);
+    read(document.activeElement);
+    return () => document.removeEventListener('focusin', onIn);
+  }, []);
   const setOpenNow = (v: boolean) => {
     openRef.current = v;
+    /* Closing: the poster that stands in for the card takes the title the walk is on, in the same style
+     * pass as the class — see THE CARD GROWS in tv.css. */
+    if (!v) stageRef.current?.posterNow();
     sectionRef.current?.classList.toggle('is-open', v);
     /* Leaving: nothing owed to this row's resting card is wanted any more — not in 420ms, now. */
     if (!v) cancelDetailWarm();
@@ -2542,7 +2759,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           </div>
         </div>
 
-        {/* BILLBOARD — pinned left, over the strip, at 16:9 in every state. */}
+        {/* BILLBOARD — pinned left, over the strip. A poster while the row is not the one the remote
+            is on, the 16:9 billboard when it is: see THE CARD GROWS in tv.css. The button keeps the
+            billboard's full box in both states (it is what the D-pad measures); what changes is the
+            window inside it. */}
         <button
           type="button"
           ref={heroBtnRef}
@@ -2551,33 +2771,47 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
           onClick={openTitle}
           onKeyDown={onHeroKey}
         >
-          {/* The preview sits UNDER the artwork rather than over it, and `has-trailer` fades the
-              artwork away to uncover it — which is what keeps the title plate above the video
-              instead of the video swallowing it. See tv.css. */}
-          <div className="tv-spot-trailer-slot" ref={trailerSlotRef} aria-hidden="true" />
-          {/* TWO LAYERS AND TWO PLATES, EMPTY. The stage fills them and flips `.on` between them;
-              the constant className below is why React never rewrites it (a prop that does not
-              change is not written), so what the stage sets survives every render. The first layer
-              and plate start `.on` so the first paint has a billboard rather than fading one in. */}
-          <div className="tv-spot-layer on" ref={layerARef} aria-hidden="false" />
-          <div className="tv-spot-layer" ref={layerBRef} aria-hidden="true" />
-          {/* THE PLATES ARE THEIR OWN PAIR, NOT CHILDREN OF THE LAYERS — the tag, the wordmark and
-              the resume bar change with the picture, while the picture dissolves on its own clock
-              underneath (see `.tv-spot-plate` in tv.css). */}
-          <div className="tv-spot-plate on" ref={plateARef} aria-hidden="false" />
-          <div className="tv-spot-plate" ref={plateBRef} aria-hidden="true" />
-          {/* THE SOUND BADGE. A speaker, crossed while the preview is muted — the STATE of the
-              thing playing, not the action red performs, which is how every player on this screen
-              already reads (see the same pair of glyphs in VideoPlayer).
+          {/* THE WINDOW. `.tv-spot-win` is the card's visible box: slid left by the poster-to-billboard
+              difference while the row is closed, so at most a poster's width of it is past the button's
+              own left clip, and slid home as the row opens. `.tv-spot-pane` holds what the card shows. */}
+          <div className="tv-spot-win">
+            <div className="tv-spot-pane">
+              {/* The preview sits UNDER the artwork rather than over it, and `has-trailer` fades the
+                  artwork away to uncover it — which is what keeps the title plate above the video
+                  instead of the video swallowing it. See tv.css. */}
+              <div className="tv-spot-trailer-slot" ref={trailerSlotRef} aria-hidden="true" />
+              {/* TWO LAYERS AND TWO PLATES, EMPTY. The stage fills them and flips `.on` between them;
+                  the constant className below is why React never rewrites it (a prop that does not
+                  change is not written), so what the stage sets survives every render. The first layer
+                  and plate start `.on` so the first paint has a billboard rather than fading one in. */}
+              <div className="tv-spot-layer on" ref={layerARef} aria-hidden="false" />
+              <div className="tv-spot-layer" ref={layerBRef} aria-hidden="true" />
+              {/* THE PLATES ARE THEIR OWN PAIR, NOT CHILDREN OF THE LAYERS — the tag, the wordmark and
+                  the resume bar change with the picture, while the picture dissolves on its own clock
+                  underneath (see `.tv-spot-plate` in tv.css). */}
+              <div className="tv-spot-plate on" ref={plateARef} aria-hidden="false" />
+              <div className="tv-spot-plate" ref={plateBRef} aria-hidden="true" />
+              {/* THE SOUND BADGE. A speaker, crossed while the preview is muted — the STATE of the
+                  thing playing, not the action red performs, which is how every player on this screen
+                  already reads (see the same pair of glyphs in VideoPlayer).
 
-              SHOWN ONLY WHILE A TRAILER IS ACTUALLY UP, and that is CSS rather than state: the
-              engine puts `has-trailer` on this button at the reveal and takes it off at teardown,
-              so the badge is tied to the thing it controls without this component having to learn
-              when playback began. Decorative to a screen reader — it reports the state of a
-              preview that is itself `aria-hidden`. */}
-          <span className="tv-spot-sound" aria-hidden="true">
-            {soundOn ? IcSoundOn : IcSoundOff}
-          </span>
+                  SHOWN ONLY WHILE A TRAILER IS ACTUALLY UP, and that is CSS rather than state: the
+                  engine puts `has-trailer` on this button at the reveal and takes it off at teardown,
+                  so the badge is tied to the thing it controls without this component having to learn
+                  when playback began. Decorative to a screen reader — it reports the state of a
+                  preview that is itself `aria-hidden`. */}
+              <span className="tv-spot-sound" aria-hidden="true">
+                {soundOn ? IcSoundOn : IcSoundOff}
+              </span>
+            </div>
+          </div>
+          {/* THE POSTER THE CLOSED ROW SHOWS — the picture and wordmark the strip's tile would show for
+              this title, so a closed row reads as one unbroken line of posters. It covers the window
+              exactly while the row is closed and fades as the card opens. EMPTY: the stage paints it. */}
+          <div className="tv-spot-poster" ref={posterRef} aria-hidden="true">
+            <div className="tv-spot-posterimg" ref={posterImgRef} />
+            <div className="tv-spot-postermark" ref={posterMarkRef} />
+          </div>
         </button>
       </div>
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useGenre, useLang, useT } from '../../i18n/i18n';
 import { rasterLogo } from '../../lib/img';
+import { dayText } from '../../lib/glance';
 import { GlanceChips } from '../glance/Glance';
 import { useSettledGlance } from '../glance/useGlance';
 import { slideArt, warmPicture } from './slideArt';
@@ -158,9 +159,9 @@ function releaseText(item: SpotItem, lang: string, t: (k: string, v?: Record<str
   try {
     const sameYear = d.getFullYear() === now.getFullYear();
     if (d > now) {
-      return t('glance.coming', { when: new Intl.DateTimeFormat(lang, sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }).format(d) });
+      return t('glance.coming', { when: dayText(d, lang, sameYear ? 'monthDay' : 'monthDayYear') });
     }
-    if (sameYear) return new Intl.DateTimeFormat(lang, { month: 'short', day: 'numeric', year: 'numeric' }).format(d);
+    if (sameYear) return dayText(d, lang, 'monthDayYear');
   } catch { /* an engine without Intl dates: fall back to the year */ }
   return m[1];
 }

@@ -172,6 +172,9 @@ export interface StageSlot {
   /** The title's at-a-glance callouts ("New Season", "#2 in Shows This Week"), at most two, for the
    *  billboard's bottom-right corner — the reference's place for them. */
   glance?: Array<{ icon: GlanceIconName; text: string; kind: string }>;
+  /** What the card shows while its row is CLOSED: the strip tile's picture and name for this title
+   *  (tv.css THE CARD GROWS). Absent on the end card and an empty slot. */
+  poster?: { src: string; pos: string; mark: string; text: string };
 }
 
 /** The card parked at the screen edge: its picture, where to seat it, and the plate behind it. */
@@ -187,6 +190,10 @@ export interface StageParts {
   infos: [HTMLElement, HTMLElement];
   prev: HTMLElement;
   prevTrack: HTMLElement;
+  /** The closed row's poster: its box (which carries the plate), its picture and its name. */
+  poster: HTMLElement;
+  posterImg: HTMLElement;
+  posterMark: HTMLElement;
 }
 
 export interface ShowOpts { dir: 1 | -1; held: boolean; animate: boolean }
@@ -288,6 +295,10 @@ export class TvRowStage {
   private peekShown = false;
   /** A card's callouts waiting for the remote to be still (see CALLOUT_QUIET_MS): its cancel. */
   private chipsWait: (() => void) | null = null;
+  /** What the closed row's poster is painted with, so an unchanged one is not written again, and the
+   *  card it should show, for when the row closes. */
+  private posterKey = '';
+  private posterSlot: StageSlot | null = null;
 
   constructor(parts: StageParts) {
     this.p = parts;
@@ -357,6 +368,7 @@ export class TvRowStage {
     this.p.layers[b].replaceChildren();
     this.p.plates[b].replaceChildren();
     this.p.infos[b].replaceChildren();
+    this.setPoster(slot);
     this.setPeek(peek, 1, false, false);
   }
 
@@ -388,6 +400,7 @@ export class TvRowStage {
     const ik = infoKeyOf(slot);
     const fi = this.infoOn;
     if (!this.infoStale && this.infoKey[fi] !== ik) { this.fillInfo(fi, slot); this.infoKey[fi] = ik; changed = true; }
+    this.setPoster(slot);
     this.setPeek(peek, 1, false, false);
     return changed;
   }
@@ -458,6 +471,9 @@ export class TvRowStage {
       if (!o.held) this.arriveCopy(o.dir);
     }
     this.setPeek(peek, o.dir, o.held, o.animate);
+    /* Not painted here, on the press: the row is open, so the poster is not showing. `posterNow` paints
+     * it when the row closes, and React's catch-up (`refresh`) a beat after the walk stops. */
+    this.posterSlot = slot;
   }
 
   /** The key was let go: put up the copy for the card the walk stopped on, with the arrival a deliberate
@@ -762,6 +778,48 @@ export class TvRowStage {
   quietFront() {
     this.cancelChipsWait();
     this.chipsOf(this.front)?.classList.remove('gl-run', 'rise');
+  }
+
+  /* ---- THE CLOSED ROW'S POSTER ----------------------------------------------------------------
+   * What the card shows while the remote is on another row: the strip tile's picture and name for the
+   * title on the card (tv.css THE CARD GROWS). Kept in step with the front card on every fill, so it is
+   * already right when the row closes. Backgrounds, not <img>s, for the reason the peek's are: setting
+   * an image's `src` is a synchronous resource lookup on the press path, a background is a style write —
+   * and while the row is open the poster is invisible, so nothing is painted or decoded for it. */
+  /** The row is closing: the poster takes the card the walk is on. */
+  posterNow() { if (this.posterSlot) this.setPoster(this.posterSlot); }
+
+  private setPoster(slot: StageSlot) {
+    this.posterSlot = slot;
+    const { poster, posterImg, posterMark } = this.p;
+    const ps = slot.kind === 'title' ? slot.poster : undefined;
+    const key = slot.kind === 'end' ? `end|${slot.endIcon}|${slot.endLabel}`
+      : ps ? `${ps.src}|${ps.pos}|${ps.mark}|${ps.text}|${slot.fallback}` : '';
+    if (key === this.posterKey) return;
+    this.posterKey = key;
+    const end = slot.kind === 'end';
+    poster.classList.toggle('is-end', end);
+    const front = poster.querySelector(':scope > .tv-end-front');
+    if (end) {
+      if (front) front.remove();
+      poster.style.background = 'none';
+      posterImg.style.backgroundImage = 'none';
+      posterMark.style.backgroundImage = 'none';
+      posterMark.textContent = '';
+      const card = endFront(slot.endIcon);
+      if (slot.endLabel) card.appendChild(span('tv-spot-blank-label', slot.endLabel));
+      poster.appendChild(card);
+      return;
+    }
+    front?.remove();
+    /* The picture over the title's own plate, exactly as the tile stacks them — the plate alone until the
+     * row is allowed its artwork, and until the row shows its first pictures together (tv.css). */
+    poster.style.background = slot.fallback || 'none';
+    posterImg.style.backgroundImage = ps?.src ? `url('${ps.src}')` : 'none';
+    posterImg.style.backgroundPosition = ps?.src ? ps.pos : '50% 50%';
+    posterMark.style.backgroundImage = ps?.mark ? `url('${ps.mark}')` : 'none';
+    posterMark.classList.toggle('is-text', !!ps?.text);
+    posterMark.textContent = ps?.text || '';
   }
 
   /* ---- THE COPY ------------------------------------------------------------------------------ */

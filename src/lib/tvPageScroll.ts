@@ -174,6 +174,85 @@ export function endPageMove(): void {
 
 /** Route changes land at the top. Replaces `window.scrollTo(0, 0)` on the TV. */
 export function resetPage(): void {
+  stopFlip();
   if (usingTransformScroll()) { setPageY(0); endPageMove(); return; }
   window.scrollTo(0, 0);
+}
+
+/* ---- THE THIRD ARM, `flip` (THE DEFAULT) — THE REFERENCE'S CURVE, OFF THE MAIN
+ * THREAD ------------------------------------------------------------------------------------------------
+ *
+ * WHY IT EXISTS. The `window` arm hands the move to the browser's smooth scroll, which is the right
+ * call for cost and the wrong one for feel: the browser's curve is an ease-in-out of ~445ms for a row,
+ * still for the first ~25ms, where the reference moves the page on cubic-bezier(.33,1,.68,1) in ~280ms
+ * with 31% of the way gone in the first frame (measured, t=80.23s of the capture). And while ANY scroll
+ * animation runs, the engine produces a main-thread frame every vsync and re-styles every running
+ * animation's element in it, composited or not — so every transition the row change starts (the card
+ * growing, the rows dimming, the copy fading) costs a style pass per frame for as long as the scroll
+ * lasts. A bare test page: 4 style passes for a transition left alone, 15 beside a smooth scroll.
+ *
+ * WHAT IT DOES. The page is scrolled to its destination at once, and `<main>` is handed a transform
+ * that puts it back where it visibly was — then that transform animates to nothing, on the reference's
+ * curve, as ONE compositor animation. Nothing scrolls while it runs, so nothing asks the main thread for
+ * a frame. A press mid-glide re-aims from wherever the page visibly is (`flipOffset`), so a held key is
+ * still one continuous movement.
+ *
+ * WHAT IT COSTS. `<main>` is a layer the height of the home screen for the length of the glide, and the
+ * `transform` arm above lost on the 65UT8100 for reasons that may or may not apply to this one (that arm
+ * wrote the transform from script every frame). On the desktop at 6x CPU it brings the style passes of
+ * a row change back to where they were before the row learned to grow, at the price of more paint.
+ *
+ * IT IS THE DEFAULT, BECAUSE THE REFERENCE IS WHAT WAS ASKED FOR (2026-10-17): side by side with the
+ * capture, the browser's glide leaves the page still for ~80ms while the cards fold and grow, then
+ * carries it — two movements where the reference makes one, which is what reads as "not the same".
+ * Not yet measured on the set; the browser's glide is one key away for that comparison:
+ *   localStorage['groloo.tvscroll'] = 'window'      the browser's smooth scroll, as before
+ *
+ * WHAT READS GEOMETRY MUST SUBTRACT `flipOffset()`: a rectangle measured mid-glide includes the
+ * transform, and the page's own position (`pageY`) is already the destination. */
+let flipOn: boolean | null = null;
+/** True when the page moves by the `flip` arm — the default; `window` or `transform` turn it off. Read
+ *  once, like the other arms. */
+export function flipScroll(): boolean {
+  if (flipOn !== null) return flipOn;
+  flipOn = IS_TV;
+  try {
+    const v = localStorage.getItem('groloo.tvscroll');
+    if (v === 'window' || v === 'transform') flipOn = false;
+  } catch { /* default stands */ }
+  return flipOn;
+}
+let flip: { anim: Animation; from: number; ms: number; ease: (p: number) => number } | null = null;
+/** Where the page was last sent, so a press need not read the scroll position back. */
+let flipAt: number | null = null;
+
+/** How far the page is visibly from where it has been scrolled to, right now (0 when nothing moves). */
+export function flipOffset(): number {
+  if (!flip) return 0;
+  const p = Math.min(1, (Number(flip.anim.currentTime) || 0) / flip.ms);
+  return flip.from * (1 - flip.ease(p));
+}
+
+/** Move the page to `target` on `ease` over `ms`, starting from wherever it visibly is. */
+export function flipTo(target: number, ms: number, easing: string, ease: (p: number) => number): void {
+  if (!track) { window.scrollTo(0, target); return; }
+  const visible = flip && flipAt !== null ? flipAt - flipOffset() : window.scrollY;
+  stopFlip();
+  window.scrollTo(0, target);
+  flipAt = target;
+  const from = Math.round(target - visible);
+  if (Math.abs(from) < 1) return;
+  const anim = track.animate(
+    [{ transform: `translate3d(0,${from}px,0)` }, { transform: 'translate3d(0,0,0)' }],
+    { duration: ms, easing },
+  );
+  const run = { anim, from, ms, ease };
+  flip = run;
+  anim.onfinish = () => { if (flip === run) flip = null; };
+}
+
+/** Land the page where it was sent, now. */
+export function stopFlip(): void {
+  if (flip) { flip.anim.cancel(); flip = null; }
+  flipAt = null;
 }

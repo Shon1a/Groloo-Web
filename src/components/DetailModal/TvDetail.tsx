@@ -8,14 +8,18 @@ import { pickWatchServices } from '../../lib/watchProviders';
 import { registerBackHandler } from '../../lib/tvKeys';
 import TvChipMenu from './TvChipMenu';
 import TvEpisodeDeck, { hasEpisodeDeck } from './TvEpisodeDeck';
-import type { MetaDetail } from '../../lib/types';
+import type { MediaItem, MetaDetail } from '../../lib/types';
+import type { ImdbTrailer } from '../../lib/queries';
 import { currentEp } from '../../lib/episodeNumbering';
-import type { ModalTarget } from '../../stores/modal';
+import { useModal, type ModalTarget } from '../../stores/modal';
+import { useHistory, type Progress } from '../../stores/history';
 import Glance from '../glance/Glance';
 import { useIntro } from '../glance/useGlance';
 import RateButtons from '../glance/RateButtons';
 import { GlanceIcon } from '../glance/GlanceIcons';
 import { castFaces, faceReady, type CastFace } from './castFaces';
+import { WATCHED, dur, firstSeasonOf, seasonsOf } from './deckGeometry';
+import TvTrailerBox from './TvTrailerBox';
 
 /* ============================================================================
  * THE TITLE SCREEN ON A TV — a different SHAPE, not a stripped copy of the web modal.
@@ -114,8 +118,12 @@ export interface TvDetailProps {
   plot: string;
   epTotal: number;
   close: () => void;
-  /* No `onWatch`/`watchLabel`/resume props: the TV build has no WATCH button — see the note in
-   * DetailModal where `onWatchTv` used to be. Sources are chosen from the panel. */
+  /** Start the best source for this film (`null`) or this episode, the way the player's Next
+   *  Episode does. Resolves false when there was nothing it could start — the caller then shows
+   *  the sources instead. */
+  onPlayNow: (ep: { season: number; ep: number } | null) => Promise<boolean>;
+  /** IMDb's trailer file, once /api/imdb-trailer has answered with one. */
+  trailer?: ImdbTrailer;
   added: boolean;
   onAdd: () => void;
   onReport: () => void;
@@ -135,6 +143,71 @@ export interface TvDetailProps {
 }
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
+
+/* ---- WHAT PLAY PLAYS ON A SERIES -----------------------------------------------------------------
+ * The episode this viewer touched last — or, if they finished it, the one after it (the next season's
+ * first when that was a finale). Nothing watched: the episode the deck would open on (a pick, or what
+ * Continue Watching named), else the first real season's first. The deck asks the same question per
+ * season (`deckOpensOn`); this asks it across the whole show, because the button is not in a season. */
+interface UpNext { season: number; ep: number; pct: number; leftSec: number }
+function seriesUpNext(
+  meta: MetaDetail | undefined,
+  titleId: string | number,
+  progress: Record<string, Progress>,
+  fallback: { season: number; ep: number } | null,
+): UpNext | null {
+  if (!meta) return null;
+  const prefix = `${titleId}:S`;
+  let last: { season: number; ep: number; p: Progress } | null = null;
+  for (const [k, p] of Object.entries(progress)) {
+    if (!k.startsWith(prefix) || !(p.dur > 0)) continue;
+    const m = /^S(\d+)E(\d+)$/.exec(k.slice(prefix.length - 1));
+    if (m && (!last || (p.at || 0) > (last.p.at || 0))) last = { season: +m[1], ep: +m[2], p };
+  }
+  if (last) {
+    const pct = Math.min(100, (last.p.pos / last.p.dur) * 100);
+    if (pct < WATCHED * 100) return { season: last.season, ep: last.ep, pct, leftSec: Math.max(0, last.p.dur - last.p.pos) };
+    const seasons = seasonsOf(meta).filter((s) => s.season >= 1);
+    const here = seasons.find((s) => s.season === last!.season);
+    if (here && here.episodes > last.ep) return { season: last.season, ep: last.ep + 1, pct: 0, leftSec: 0 };
+    const after = seasons.find((s) => s.season > last!.season);
+    if (after) return { season: after.season, ep: 1, pct: 0, leftSec: 0 };
+    // The finale, finished: Play starts it again rather than offering nothing.
+    return { season: last.season, ep: last.ep, pct: 0, leftSec: 0 };
+  }
+  if (fallback) return { ...fallback, pct: 0, leftSec: 0 };
+  const first = firstSeasonOf(meta);
+  return first === undefined ? null : { season: first, ep: 1, pct: 0, leftSec: 0 };
+}
+
+/* ---- MORE LIKE THIS: one card ------------------------------------------------------------------
+ * A 16:9 picture with its name on it, like a row card. The picture fades in on load, and `complete`
+ * is read in the ref for the cached case — the same pattern as the cast faces above it. */
+function MoreCard({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
+  const [shown, setShown] = useState(false);
+  const pic = item.backdrop || item.poster;
+  const sub = [item.year, item.rating ? `★ ${item.rating}` : ''].filter(Boolean).join('  ·  ');
+  return (
+    <button className="tv-det-more-card" type="button" aria-label={item.title} onClick={onOpen}>
+      <span className="tv-det-more-pic" aria-hidden="true">
+        {pic && (
+          <img
+            className={shown ? 'rdy' : undefined}
+            src={pic}
+            alt=""
+            decoding="async"
+            ref={(el) => { if (el?.complete && el.naturalWidth > 0 && !shown) setShown(true); }}
+            onLoad={() => setShown(true)}
+          />
+        )}
+      </span>
+      <span className="tv-det-more-cap" aria-hidden="true">
+        <b>{item.title}</b>
+        {sub && <span>{sub}</span>}
+      </span>
+    </button>
+  );
+}
 
 /* ---- THE DISC ICONS: the Groloo 3D set ------------------------------------------------------
  * The discs wear the same lit objects as the callouts (components/glance): an azure plus, a tick,
@@ -183,7 +256,7 @@ export default function TvDetail(p: TvDetailProps) {
   const genre = useGenre();
   const {
     target, meta, ready, isSeries, title, titleLogo, rating, year, genreChips, plot, epTotal,
-    close, added, onAdd, onReport,
+    close, onPlayNow, trailer, added, onAdd, onReport,
     srcTab, setSrcTab, signedIn, openAuth, streamsLoading, shownStreams, availableLangs,
     lang, setLang, playStream, streamTitle, pickedEp, setPickedEp,
   } = p;
@@ -245,19 +318,21 @@ export default function TvDetail(p: TvDetailProps) {
   /* The credits: the cast as a row of faces (castFaces.ts). */
   const faces = castFaces(meta);
 
-  /* ---- ONE LINE OF FACTS, DIVIDED RATHER THAN JOINED -----------------------------------------
-   * ★ 6.8 │ 2020 │ 12+ │ 1h 55min │ Adventure · Fantasy · Action
+  /* ---- THE FACTS: UP TO THREE SHORT LINES -----------------------------------------------------
+   *   ★ 6.8 │ 2020 │ 12+ │ 1h 55min
+   *   2 Seasons · 24 Episodes
+   *   Adventure · Fantasy · Action
    *
-   * It was two lines (facts, then genres underneath) joined with "  ·  ". Three things changed
-   * and they are one change: the genres came UP into the line, because on a screen whose whole
-   * left column is a stack of paragraphs a second dimmer line of the same weight read as the
-   * start of the synopsis rather than as the end of the facts; the separator became a rule, which
-   * is what lets a certificate CHIP sit in the run without looking like a word; and the row is
-   * built from nodes instead of a string, because a chip cannot survive `.join()`.
+   * It was ONE wrapping flex row of cells, each after the first carrying a drawn rule. A row like
+   * that cannot know where it will break, so the seasons and the genres fell onto the next lines
+   * with their rule still in front of them — "│ 2 Seasons", "│ Animation · …" — a divider at the
+   * start of a line, dividing nothing. Each kind of fact owns its line now, so a line can only ever
+   * break inside the genres, and the rules only ever sit between the short facts of the first line.
    *
-   * THE GENRES STAY DOT-JOINED INSIDE THEIR OWN CELL. They are a set, not four more facts — one
-   * rule between "Adventure" and "Fantasy" would say they rank alongside the year and the
-   * runtime, and a line of six rules says nothing at all. */
+   * THE RULES ARE FOR THE FIRST LINE ONLY, which is built from nodes rather than a string because
+   * the certificate is a CHIP and a chip cannot survive `.join()`. The seasons and the genres are
+   * sets, dot-joined — one rule between "Adventure" and "Fantasy" would say they rank alongside the
+   * year and the runtime. */
   const metaBits: ReactNode[] = [
     rating ? `★ ${rating}` : '',
     year ? String(year) : '',
@@ -269,12 +344,14 @@ export default function TvDetail(p: TvDetailProps) {
       ? <span key="cert" className="tv-det-age">{meta.certification}</span>
       : '',
     meta?.runtime || '',
-    isSeries && meta?.seasons
-      ? [meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }),
-         epTotal ? t('modal.episodes_count', { n: epTotal }) : ''].filter(Boolean).join(' · ')
-      : '',
-    genreChips.length > 0 ? genreChips.map(genre).join(' · ') : '',
   ].filter(Boolean);
+  const seasonsLine = isSeries && meta?.seasons
+    ? [meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }),
+       epTotal ? t('modal.episodes_count', { n: epTotal }) : ''].filter(Boolean).join(' · ')
+    : '';
+  /* Three genres at most: the line has to stay ONE line, and a fourth and fifth ("· Kids · Family")
+   * only ever wrapped into a second line that began with a dot. */
+  const genresLine = genreChips.length > 0 ? genreChips.slice(0, 3).map(genre).join(' · ') : '';
 
   const services = srcTab === 'services' ? pickWatchServices(meta?.providers, title) : [];
   /* A series shows its episodes until one is chosen. `hasEpisodeDeck` is the same guard the deck
@@ -544,6 +621,69 @@ export default function TvDetail(p: TvDetailProps) {
     chip.focus({ preventScroll: true });
   };
 
+  /* ---- PLAY: ONE PRESS TO A PLAYING TITLE ---------------------------------------------------------
+   *
+   * THE WATCH BUTTON WENT, AND THIS IS WHAT IT TOOK WITH IT. DetailModal's note on `onWatchTv`
+   * records the loss: a quick resume. The deck still is how a viewer CHOOSES an episode; this is for
+   * the viewer who has already chosen — by watching — and wants to carry on. It plays what
+   * `seriesUpNext` names (or, once an episode is picked, that episode), or the film, from the best
+   * source, the way the player's Next Episode does (`playEpisode` in DetailModal, via `onPlayNow`).
+   *
+   * WHEN IT CANNOT, IT SHOWS WHERE THE SOURCES ARE rather than doing nothing: signed out (add-on
+   * sources need an account), or no source that can start here. A series opens that episode's
+   * sources, exactly as picking its card would; a film hands the remote to the first row of the
+   * panel beside it.
+   *
+   * The id is deliberately NOT `mWatch`: TvSpatialNav's recovery prefers that id to the deck's card,
+   * and Back out of the sources would then land here instead of on the episode it came from. */
+  const progress = useHistory((s) => s.progress);
+  const pickedP = pickedEp ? progress[`${target.id}:S${pickedEp.season}E${pickedEp.ep}`] : undefined;
+  const upNext: UpNext | null = !isSeries ? null
+    : pickedEp
+      ? {
+        ...pickedEp,
+        pct: pickedP && pickedP.dur > 0 && pickedP.pos / pickedP.dur < WATCHED ? (pickedP.pos / pickedP.dur) * 100 : 0,
+        leftSec: pickedP ? Math.max(0, pickedP.dur - pickedP.pos) : 0,
+      }
+      : deck ? seriesUpNext(meta, target.id, progress, deckPicked) : null;
+  const filmP = !isSeries ? progress[String(target.id)] : undefined;
+  const filmPct = filmP && filmP.dur > 0 ? (filmP.pos / filmP.dur) * 100 : 0;
+  const filmResume = filmPct >= 1 && filmPct < WATCHED * 100;
+  const resuming = isSeries ? !!upNext && upNext.pct >= 1 : filmResume;
+  const playPct = isSeries ? (upNext?.pct ?? 0) : filmPct;
+  const playSub = isSeries
+    ? (upNext ? `S${upNext.season}:E${upNext.ep}` : '')
+    : (filmResume && filmP ? t('modal.ep_left', { time: dur(filmP.dur - filmP.pos) }) : '');
+  const canPlay = !isSeries || !!upNext;
+  const [playBusy, setPlayBusy] = useState(false);
+  const toSources = () => {
+    // Choosing the episode swaps in its sources, and the panel's own seed takes the remote there.
+    if (isSeries && upNext && !pickedEp) { choose(upNext.season, upNext.ep); return; }
+    const first = panelRef.current?.querySelector<HTMLElement>('.tv-det-row')
+      || panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn');
+    first?.focus({ preventScroll: true });
+  };
+  const play = async () => {
+    if (playBusy || !canPlay) return;
+    if (!signedIn) { toSources(); return; }
+    setPlayBusy(true);
+    let started = false;
+    try { started = await onPlayNow(upNext ? { season: upNext.season, ep: upNext.ep } : null); }
+    catch { started = false; }
+    finally { setPlayBusy(false); }
+    if (!started) toSources();
+  };
+
+  /* ---- MORE LIKE THIS -------------------------------------------------------------------------
+   * Four of the recommendations /api/meta already carries — the web modal shows twenty as a grid;
+   * here a row the remote can walk, at the foot of the column, that opens the title in place. */
+  const openTitle = useModal((s) => s.open);
+  const recs = (meta?.recommendations ?? []).filter((r) => r && (r.backdrop || r.poster)).slice(0, 4);
+
+  const tagline = meta?.tagline?.trim() || '';
+  // IMDb's file plays in the box; a YouTube key alone still gets the box, full screen only.
+  const showTrailer = !!trailer?.url || !!meta?.trailerKey;
+
   /* THE PANEL IS ONE THING AT A TIME. A series shows its episodes until one is chosen, then the
    * sources FOR that episode — with a way back. Showing both at once is what makes the web
    * version a scroll: two stacked lists, neither of which fits. */
@@ -725,9 +865,15 @@ export default function TvDetail(p: TvDetailProps) {
                 : title}
             </h2>
 
-            {metaBits.length > 0 && (
+            {(metaBits.length > 0 || seasonsLine || genresLine) && (
               <div className="tv-det-meta">
-                {metaBits.map((b, i) => <span key={i} className="tv-det-metabit">{b}</span>)}
+                {metaBits.length > 0 && (
+                  <div className="tv-det-facts">
+                    {metaBits.map((b, i) => <span key={i} className="tv-det-metabit">{b}</span>)}
+                  </div>
+                )}
+                {seasonsLine && <div className="tv-det-metaline">{seasonsLine}</div>}
+                {genresLine && <div className="tv-det-metaline tv-det-genres">{genresLine}</div>}
               </div>
             )}
             {/* Info at a glance — the one line that says why: a new season, a top-ten place,
@@ -736,17 +882,71 @@ export default function TvDetail(p: TvDetailProps) {
 
             <p className="tv-det-plot">{plot}</p>
 
-            {/* THE CREDITS ARE THE CAST'S FACES, AND NOTHING ELSE. They were a small table: a
-                director line, and a "Casts & Credits" label in a column of its own beside the names
-                (then beside the faces). Both went; the row needs no caption to read as the cast, and
-                without the label's column it starts on the edge the rest of this column shares. The
-                label survives only as the list's name, for assistive tech. */}
-            {faces.length > 0 && (
-              <ul className="tv-det-faces" aria-label={t('modal.cast_credits')}>
-                {faces.map((f) => <CastFaceItem key={f.name} face={f} />)}
-              </ul>
+            {canPlay && (
+              <div className={`tv-det-cta${intro ? ' gl-run' : ''}`}>
+                <button
+                  className={`tv-det-play${resuming ? ' is-resume' : ''}${playBusy ? ' is-busy' : ''}`}
+                  id="tvPlay"
+                  type="button"
+                  aria-busy={playBusy}
+                  onClick={() => { void play(); }}
+                >
+                  <span className="ic3" aria-hidden="true"><GlanceIcon name="play" /></span>
+                  <span className="tv-det-play-label">{t(resuming ? 'tv.resume' : 'tv.play')}</span>
+                  {playSub && <span className="tv-det-play-sub">{playSub}</span>}
+                  {resuming && <span className="tv-det-play-bar" aria-hidden="true"><i style={{ width: `${playPct}%` }} /></span>}
+                </button>
+              </div>
             )}
 
+            {/* THE FOOT OF THE COLUMN: the trailer and the cast, then more like this. Pushed to the
+                bottom edge (`margin-top: auto`), so the copy above keeps the top line it shares with
+                the chip row and the row below keeps the bottom one, and a title's longer or shorter
+                copy is paid for in the space between rather than by moving either end. */}
+            <div className="tv-det-foot">
+              {(showTrailer || tagline || faces.length > 0) && (
+                <div className="tv-det-extra">
+                  {showTrailer && (
+                    <TvTrailerBox
+                      video={trailer}
+                      ytKey={meta?.trailerKey}
+                      still={meta?.backdrop ? imgW(meta.backdrop, 'w780') : undefined}
+                      title={title}
+                      logo={titleLogo ? rasterLogo(titleLogo, 'original') : undefined}
+                    />
+                  )}
+                  {(tagline || faces.length > 0) && (
+                    <div className="tv-det-extra-side">
+                      {tagline && <p className="tv-det-tagline">{tagline}</p>}
+                      {/* THE CREDITS ARE THE CAST'S FACES, AND NOTHING ELSE. They were a small table:
+                          a director line, and a "Casts & Credits" label in a column of its own beside
+                          the names (then beside the faces). Both went; the row needs no caption to read
+                          as the cast. The label survives only as the list's name, for assistive tech. */}
+                      {faces.length > 0 && (
+                        <ul className="tv-det-faces" aria-label={t('modal.cast_credits')}>
+                          {faces.map((f) => <CastFaceItem key={f.name} face={f} />)}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {recs.length > 0 && (
+                <section className="tv-det-more" aria-label={t('tv.more_like_this')}>
+                  <h3 className="tv-det-more-title">{t('tv.more_like_this')}</h3>
+                  <div className="tv-det-more-row">
+                    {recs.map((r) => (
+                      <MoreCard
+                        key={`${r.type}:${r.id}`}
+                        item={r}
+                        onOpen={() => openTitle({ id: r.id, type: r.type, title: r.title, year: r.year, rating: r.rating, poster: r.poster, seed: 0 })}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
           </div>
 
           {/* THE PANEL GIVES UP ITS CHROME FOR THE DECK. The dark slab exists to buy a LIST its
