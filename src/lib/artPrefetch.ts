@@ -26,6 +26,7 @@ import { bootDone, bootRevealing } from './bootGate';
 import { usePlayer } from '../stores/player';
 import { quietFor, whenQuiet } from './tvQuiet';
 import { focusedRowIndex } from './tvRowRegistry';
+import { slowLink } from './slowLink';
 
 /** Our art worker's urls exactly — the same test as the groloo-art rule in vite.config.ts. */
 const ART_PATH = /^\/(crop|img|logo)\/(w\d+|original)\/(f\d+\/)?[A-Za-z0-9]{8,64}\.webp$/;
@@ -45,6 +46,16 @@ const MAX_URLS = 900;
  * row's pictures — the row asks for them itself when the walk comes near (TvSpotlight's art window) —
  * they simply do not also get hundreds of pictures for rows nobody has reached, in the same second. */
 const QUIET_MS = 900;
+
+/* ---- ON A SLOW LINK, ONE AT A TIME AND ONLY NEAR THE REMOTE -------------------------------------
+ * Three downloads at once for rows nobody has reached is free on a household's Wi-Fi and is the whole
+ * link on a slow one: at Slow 4G (~1.4 Mbit/s) the queue's first screens are tens of seconds of
+ * transfer, and the trailer, a title opened, or the row the viewer actually walks to all wait behind
+ * it. When the connection says it is slow (or asks to save data), the queue keeps one download going
+ * and only for rows within SLOW_REACH of the remote; the rest wait until the remote comes near (each
+ * row queues its pictures again as it opens, which wakes the pump). Read at every pump, so a link that
+ * recovers gets the full queue back (lib/slowLink). */
+const SLOW_REACH = 1;
 
 /** `rank(focused)` — how far the job's row is from the row the remote is on (`focused`, -1 when the
  *  remote is not on a row). Lower goes first. Handed the focused row rather than finding it, because it
@@ -110,7 +121,8 @@ function pump(): void {
    * the row list, for each of hundreds of queued pictures, at every pick: O(queue x rows) per download,
    * ~600ms of main thread over one walk at the set's speed. Nothing moves within one pump. */
   const focused = focusedRowIndex();
-  while (inFlight < CONCURRENCY && queue.length) {
+  const slow = slowLink();
+  while (inFlight < (slow ? 1 : CONCURRENCY) && queue.length) {
     // Nearest row to the remote wins — read NOW, since the remote has moved since it was queued.
     let best = 0;
     let bestRank = Infinity;
@@ -118,6 +130,7 @@ function pump(): void {
       const r = queue[i].rank(focused);
       if (r < bestRank) { bestRank = r; best = i; if (r <= 0) break; }
     }
+    if (slow && bestRank > SLOW_REACH) break;
     const [job] = queue.splice(best, 1);
     inFlight++;
     /* THE SAME REQUEST AN <img> MAKES — no-cors, credentials included — so it is the same cache

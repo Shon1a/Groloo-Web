@@ -112,16 +112,45 @@ function daysUntil(d: Date, now: Date): number {
   return Math.round((startOfDay(d).getTime() - startOfDay(now).getTime()) / 86400000);
 }
 
+/* ---- A DATE AS A VIEWER READS IT: "Friday", "Oct 24", "Oct 24, 2027" --------------------------
+ *
+ * ENGLISH WITHOUT Intl, AND THAT IS THE WHOLE POINT. The first Intl.DateTimeFormat a page builds
+ * loads ICU's calendar and date-pattern data, and that one construction is expensive: 43ms on a fast
+ * desktop, and at 50x CPU on the TV build it was the largest single script cost of drawing the home
+ * screen (2.1s of it, inside the first render, for the Upcoming row's "Coming Oct 24"). Every later
+ * one is ~0.1ms, so caching them did not help — the cost is the first. English is the default and
+ * these are its three fixed shapes, written out exactly as Intl's `en` writes them; every other
+ * language still goes through Intl (one formatter per shape, kept), so a Georgian screen still says
+ * პარასკევი. A throw there (an engine without Intl dates) reaches the caller's fallback as before. */
+export type DayShape = 'weekday' | 'monthDay' | 'monthDayYear';
+const EN_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SHAPES: Record<DayShape, Intl.DateTimeFormatOptions> = {
+  weekday: { weekday: 'long' },
+  monthDay: { month: 'short', day: 'numeric' },
+  monthDayYear: { month: 'short', day: 'numeric', year: 'numeric' },
+};
+const formatters = new Map<string, Intl.DateTimeFormat>();
+export function dayText(d: Date, lang: string, shape: DayShape): string {
+  if (lang === 'en') {
+    if (shape === 'weekday') return EN_DAYS[d.getDay()];
+    return `${EN_MONTHS[d.getMonth()]} ${d.getDate()}${shape === 'monthDayYear' ? `, ${d.getFullYear()}` : ''}`;
+  }
+  const key = `${lang}|${shape}`;
+  let f = formatters.get(key);
+  if (!f) { f = new Intl.DateTimeFormat(lang, SHAPES[shape]); formatters.set(key, f); }
+  return f.format(d);
+}
+
 /* "Today", "Tomorrow", "Friday", "Oct 24", "Oct 24, 2027" — the nearer the date, the more
- * personal the word. In the UI language, through Intl, so a Georgian screen says პარასკევი. */
+ * personal the word. In the UI language, so a Georgian screen says პარასკევი. */
 function when(d: Date, now: Date, lang: string, t: GlanceInput['t']): string {
   const n = daysUntil(d, now);
   if (n === 0) return t('glance.today');
   if (n === 1) return t('glance.tomorrow');
   try {
-    if (n > 1 && n < 7) return new Intl.DateTimeFormat(lang, { weekday: 'long' }).format(d);
-    const sameYear = d.getFullYear() === now.getFullYear();
-    return new Intl.DateTimeFormat(lang, sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }).format(d);
+    if (n > 1 && n < 7) return dayText(d, lang, 'weekday');
+    return dayText(d, lang, d.getFullYear() === now.getFullYear() ? 'monthDay' : 'monthDayYear');
   } catch {
     return d.toDateString();
   }

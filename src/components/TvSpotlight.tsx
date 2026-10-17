@@ -24,6 +24,8 @@ import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
 import { barItemHere } from '../lib/tvBar';
 import { prefetchArt } from '../lib/artPrefetch';
+import { slowLink } from '../lib/slowLink';
+import { bootDone, onBootRevealing } from '../lib/bootGate';
 import { whenQuiet } from '../lib/tvQuiet';
 import { TvRowStage, SLIDE_MS, PRESS_SETTLED_MS, type StageSlot, type StagePeek } from '../lib/tvRowStage';
 
@@ -991,6 +993,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /* Sticky: set once the row first comes near the viewport, never cleared — scrolling past a row
    * must not throw its bitmaps away and re-fetch them on the way back. */
   const [visible, setVisible] = useState(false);
+  /* On a slow link during start-up, this row asks for no pictures at all — not even its front card's
+   * wordmark — until the intro's finale (see the latch effect below). Read once, at mount. */
+  const [artHeld, setArtHeld] = useState(() => slowLink() && !bootDone());
 
   /* ---- THE ROW WINDOW, `groloo.tvrows = 'virtual'` --------------------------------------------
    *
@@ -1734,17 +1739,31 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const el = sectionRef.current;
     if (!el) return;
     if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); }
-    }, { rootMargin: '800px 0px' });
-    io.observe(el);
-    /* THE ROW WINDOW ARMS IT FIRST, WHEN IT CAN — lib/tvRowRegistry `prepareRowWindow` fires this on
-     * an idle callback for the rows around the remote, so the latch (and the render that hands the
-     * tiles their `src`) happens between presses instead of on a frame of the vertical scroll, which
-     * is when the observer above would otherwise get there. The observer stays as the fallback. */
-    const arm = () => { setVisible(true); io.disconnect(); };
-    el.addEventListener(ROW_PREPARE_EVENT, arm);
-    return () => { io.disconnect(); el.removeEventListener(ROW_PREPARE_EVENT, arm); };
+    let live = true;
+    let io: IntersectionObserver | null = null;
+    const arm = () => { setVisible(true); io?.disconnect(); };
+    const start = () => {
+      if (!live) return;
+      io = new IntersectionObserver((entries) => {
+        if (entries.some((e) => e.isIntersecting)) arm();
+      }, { rootMargin: '800px 0px' });
+      io.observe(el);
+      /* THE ROW WINDOW ARMS IT FIRST, WHEN IT CAN — lib/tvRowRegistry `prepareRowWindow` fires this on
+       * an idle callback for the rows around the remote, so the latch (and the render that hands the
+       * tiles their `src`) happens between presses instead of on a frame of the vertical scroll, which
+       * is when the observer above would otherwise get there. The observer stays as the fallback. */
+      el.addEventListener(ROW_PREPARE_EVENT, arm);
+    };
+    /* ON A SLOW LINK, NOT UNTIL THE FIRST SCREEN IS IN. Every row arming at once is ~45 pictures (each
+     * row's billboard, its next card, the wordmarks) requested in the same instant as the featured
+     * billboard's, and a slow link splits between them evenly: measured at Slow 4G, the rows were up at
+     * 3.1s and the hero's photograph finished at 8.8s. None of the rows' pictures are on the first
+     * screen, so on such a link they wait for the start-up intro's finale — the first screen complete,
+     * the remote not yet live — and the hero has the link to itself. A fast link arms as it always did. */
+    if (artHeld) onBootRevealing(() => { if (live) { setArtHeld(false); start(); } });
+    else start();
+    return () => { live = false; io?.disconnect(); el.removeEventListener(ROW_PREPARE_EVENT, arm); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `artHeld` is the mount-time answer; it only ever clears
   }, []);
   /* The first row the remote lands on has not been reached by a vertical move, which is the only
    * thing that prepared the window — so the rows below the first focus were cold until the first
@@ -1782,7 +1801,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * matching it. Until the row is near the viewport it is '' and the layer keeps the branded
      * gradient, requesting no bitmap at all. */
     const bgUrl = billboardUrl(a);
-    const logoUrl = logoOf(a) || '';
+    // Held with the artwork on a slow start-up (`artHeld`): the card shows its title in type until then.
+    const logoUrl = artHeld ? '' : logoOf(a) || '';
     const bgPos = heroBgPosition(a);
     const progress = res?.pct ?? 0;
     return {

@@ -22,10 +22,13 @@ export interface FadeImgProps {
   fallback?: ReactNode;
   onError?: () => void;
   style?: CSSProperties;
+  /** 'high' for a picture the first screen is waiting on: the <img> asks for it ahead of the
+   *  Low-priority crowd of pictures a home screen requests when it mounts. */
+  priority?: 'high';
 }
 
 /** An <img> that is invisible until its bitmap is decoded, then fades in. */
-export function FadeImg({ src, alt = '', className, fallback, onError, style }: FadeImgProps) {
+export function FadeImg({ src, alt = '', className, fallback, onError, style, priority }: FadeImgProps) {
   const ready = useImageReady(src);
   if (!src) return <>{fallback ?? null}</>;
   return (
@@ -34,6 +37,7 @@ export function FadeImg({ src, alt = '', className, fallback, onError, style }: 
       src={src}
       alt={alt}
       decoding="async"
+      fetchPriority={priority}
       style={style}
       onError={onError}
     />
