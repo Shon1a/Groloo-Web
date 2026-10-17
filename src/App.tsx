@@ -11,6 +11,8 @@ import { useRatings } from './stores/ratings';
 import { useOfficial } from './stores/official';
 import { initHeartLibrary } from './lib/heartLibrary';
 import { initHeartCatalog } from './lib/heartCatalog';
+import { onBootRevealing } from './lib/bootGate';
+import { slowLink } from './lib/slowLink';
 import AppShell from './layout/AppShell';
 import Home from './routes/Home';
 import Browse from './routes/Browse';
@@ -91,10 +93,24 @@ export default function App() {
   const pullRatings = useRatings((s) => s.pull);
   const loadOfficial = useOfficial((s) => s.load);
   useEffect(() => {
-    refresh(); loadConfig(); loadOfficial();
-    initHeartCatalog().catch(() => {});
-    // once the Heart WASM library runtime is up, re-normalize the library through it
-    initHeartLibrary().then(reloadHistory).catch(() => {});
+    refresh(); loadConfig();
+    const coreWork = () => {
+      loadOfficial();
+      initHeartCatalog().catch(() => {});
+      // once the Heart WASM library runtime is up, re-normalize the library through it
+      initHeartLibrary().then(reloadHistory).catch(() => {});
+    };
+    /* ON A SLOW LINK, AT THE INTRO'S FINALE. None of this draws the home screen — the official list is
+     * read only by My Space, Home gates its rows in JS until the core is up (heartCatalog) — but the
+     * 435 KB core downloading at boot shares a slow link with the first screen's pictures. So there it
+     * starts when the finale does: the first screen complete, every key still held.
+     * NOT LATER, AND NOT ON A FAST LINK. It was moved past the hand-over once, and at 20x CPU its compile
+     * and first calls landed in the first presses (44 long tasks over a walk against 26, every press
+     * ~10% slower); under the splash, where it always ran, nobody is pressing anything. */
+    if (!IS_TV || !slowLink()) { coreWork(); return; }
+    let live = true;
+    onBootRevealing(() => { if (live) coreWork(); });
+    return () => { live = false; };
   }, [refresh, loadConfig, loadOfficial, reloadHistory]);
   // on sign-in/out the localStorage namespace (per-email) changes → reload, then
   // merge the server-stored add-on collection + watch history when signed in

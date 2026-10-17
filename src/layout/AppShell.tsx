@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { registerPageTrack, resetPage } from '../lib/tvPageScroll';
 import { pageArrived, registerPageSlide } from '../lib/tvPageSlide';
+import { keepTvGeometrySnapped } from '../lib/tvPixelGrid';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import { API_BASE } from '../lib/api';
@@ -43,6 +44,14 @@ export default function AppShell() {
     registerPageTrack(mainRef.current);
     registerPageSlide(mainRef.current);
     return () => { registerPageSlide(null); registerPageTrack(null); };
+  }, []);
+
+  /* The TV's card geometry, rounded to whole pixels before the first paint — see lib/tvPixelGrid.ts
+   * for the one-pixel poster slip this removes. */
+  const shellRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!IS_TV || !shellRef.current) return;
+    return keepTvGeometrySnapped(shellRef.current);
   }, []);
 
   /* The arriving half of the top-bar page slide (lib/tvPageSlide.ts). A LAYOUT effect so the first
@@ -89,7 +98,7 @@ export default function AppShell() {
   const showFooter = !IS_TV || pathname.startsWith('/library');
 
   return (
-    <div className={`shell${IS_TV ? ' tv-shell' : ''}`}>
+    <div className={`shell${IS_TV ? ' tv-shell' : ''}`} ref={shellRef}>
       {/* TV build: top menu bar + remote/D-pad navigation. Web build: the left icon rail. */}
       {IS_TV && <TvTopNav />}
       {IS_TV && <TvSpatialNav />}

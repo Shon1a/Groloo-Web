@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { pageY, pageMax, setPageY, beginPageMove, endPageMove, usingTransformScroll } from '../lib/tvPageScroll';
+import { pageY, pageMax, setPageY, beginPageMove, endPageMove, usingTransformScroll, flipScroll, flipTo, flipOffset, stopFlip } from '../lib/tvPageScroll';
 import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch, firstRow } from '../lib/tvRowRegistry';
 import { setActiveRowIndex } from '../lib/tvRowWindow';
 import { barItemHere } from '../lib/tvBar';
@@ -302,7 +302,19 @@ const HELD_SCROLL_MS = 440;
  * ~0.72 a quarter of the way through), and "close" is what makes two animations look like a fault
  * rather than a pair. Newton-Raphson converges in two or three iterations here; it is a handful of
  * multiplications on a path that already does more than this per frame. */
-const BEZIER = { x1: 0.22, y1: 1, x2: 0.36, y2: 1 };
+/* ---- AND THE PAIR HAD COME APART: THE STRIP MOVED TO (.33,1,.68,1) AND THIS DID NOT --------------
+ * The strip's curve was re-measured off the reference and changed (see `.tv-spot-strip` in tv.css);
+ * this one kept the old (.22,1,.36,1), so a diagonal move was running on two shapes after all. The
+ * reference's OWN row change says the same thing independently — the page's travel per frame at the
+ * row change at t=80.23s, a 797px move:
+ *
+ *     33ms .31   67 .54   100 .77   133 .87   167 .93   200 .97   233 .99   267 1.0
+ *
+ *     cubic-bezier(.33, 1, .68, 1)  280ms   1.5% RMS   <- the strip's curve, at this duration
+ *     cubic-bezier(.22, 1, .36, 1)  280ms   9.6% RMS      46% gone in the first frame, against 31%
+ *
+ * One curve for both again, and the page now leaves its first frame where the reference does. */
+const BEZIER = { x1: 0.33, y1: 1, x2: 0.68, y2: 1 };
 const bezierAxis = (t: number, a: number, b: number) => {
   const u = 1 - t;
   return 3 * u * u * t * a + 3 * u * t * t * b + t * t * t;
@@ -311,7 +323,7 @@ const bezierSlope = (t: number, a: number, b: number) => {
   const u = 1 - t;
   return 3 * u * u * (a) + 6 * u * t * (b - a) + 3 * t * t * (1 - b);
 };
-/** `cubic-bezier(.22, 1, .36, 1)` evaluated for a progress fraction — the same curve tv.css uses. */
+/** `cubic-bezier(.33, 1, .68, 1)` evaluated for a progress fraction — the same curve tv.css uses. */
 const tvEase = (p: number): number => {
   if (p <= 0) return 0;
   if (p >= 1) return 1;
@@ -406,7 +418,8 @@ function pageTopOf(el: HTMLElement): number {
   const hit = topCache.get(el);
   const r = getRowsEpoch();
   if (hit && hit.e === geoEpoch && hit.r === r) return hit.top;
-  const top = el.getBoundingClientRect().top + pageY();
+  /* Less the `flip` arm's glide, which a rectangle measured mid-move includes (lib/tvPageScroll). */
+  const top = el.getBoundingClientRect().top + pageY() - flipOffset();
   topCache.set(el, { top, e: geoEpoch, r });
   return top;
 }
@@ -473,6 +486,7 @@ function makeScroller() {
     /* A native glide is cancelled by scrolling to where the page is now, instantly. Only worth doing
      * while one can still be running — a scroll to the current offset is otherwise a no-op, but it is
      * not free. */
+    stopFlip();
     if (nativeAt && performance.now() - nativeAt < 900) {
       nativeAt = 0;
       window.scrollTo({ top: window.scrollY, behavior: 'auto' });
@@ -488,6 +502,14 @@ function makeScroller() {
     if (container !== box) { stop(); box = container; }
     const target = Math.max(0, Math.min(container ? scrollMax(container) : pageMaxCached(), y));
     if (instant) { stop(); box = container; scrollSet(container, target); return; }
+    /* THE `flip` ARM — the reference's curve, as one compositor animation (lib/tvPageScroll.ts). */
+    if (container === null && !usingTransformScroll() && flipScroll()) {
+      if (raf) cancelAnimationFrame(raf);
+      if (guard) window.clearTimeout(guard);
+      raf = 0; guard = 0; running = false;
+      flipTo(target, held ? HELD_SCROLL_MS : SCROLL_MS, held ? 'linear' : 'cubic-bezier(.33, 1, .68, 1)', held ? ((t: number) => t) : tvEase);
+      return;
+    }
     /* THE PAGE, NATIVELY. No `scrollPos` read first: it would flush layout to learn a number the
      * browser works out itself, and scrolling to where the page already is is a no-op. */
     if (container === null && !usingTransformScroll() && nativeScrollAllowed()) {
@@ -855,7 +877,7 @@ export default function TvSpatialNav() {
          * on: park it, then lift by whatever of that control would sit under the bottom edge.
          * Sections only — rows and the hero are sized to the screen and keep the cached path. */
         if (parked !== null && park && park !== next && park.hasAttribute('data-tv-park')) {
-          const bottomAfter = next.getBoundingClientRect().bottom + pageY() - parked;
+          const bottomAfter = next.getBoundingClientRect().bottom + pageY() - flipOffset() - parked;
           const limit = window.innerHeight - scrollMarginBottom(next);
           if (bottomAfter > limit) parked += bottomAfter - limit;
         }
@@ -905,8 +927,9 @@ export default function TvSpatialNav() {
           // Both edges read the element's own scroll-margin now — see scrollMarginBottom for the
           // half of that which used to be a constant.
           const r = next.getBoundingClientRect();
-          const overTop = r.top - scrollMarginTop(next);
-          const overBottom = r.bottom + scrollMarginBottom(next) - window.innerHeight;
+          const glide = flipOffset();
+          const overTop = r.top - glide - scrollMarginTop(next);
+          const overBottom = r.bottom - glide + scrollMarginBottom(next) - window.innerHeight;
           const y0 = pageY();
           /* HORIZONTAL CLIPPING (a rail scrolled sideways) is still the browser's job, and
            * `scrollIntoView` does both axes at once and instantly. Run BEFORE the page's own move,

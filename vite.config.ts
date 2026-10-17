@@ -1,5 +1,5 @@
 import { fileURLToPath, URL } from 'node:url'
-import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import postcss from 'postcss'
@@ -25,7 +25,61 @@ import { introMarkup } from './src/lib/bootIntroMarkup.ts'
 const INTRO = introMarkup()
 const ONCE_A_VISIT = "(function(){var s=document.getElementById('boot-splash');try{if(sessionStorage.getItem('groloo.intro')||!/^(#\\/?)?$/.test(location.hash)||matchMedia('(prefers-reduced-motion: reduce)').matches){s.remove();return}sessionStorage.setItem('groloo.intro','1')}catch(e){}})();"
 const BACKSTOP = "setTimeout(function(){var s=document.getElementById('boot-splash');if(s){s.className='out';setTimeout(function(){s.remove()},600)}},14000)"
-function bootSplash(mode: string): Plugin {
+
+/* ---- THE HOME PAYLOAD IS ASKED FOR BY THE PAGE, NOT BY THE APP (TV) ----------------------------
+ *
+ * The whole home screen hangs off /api/home, and the app used to ask for it from Home's first
+ * render — after the bundle had downloaded, been compiled and run, and React had committed once.
+ * Measured on the TV build at 50x CPU and Slow 4G: every script was in by 3.2s and the request
+ * went out at 25.6s. On a television that is the same queue at a smaller scale.
+ *
+ * So the document asks for it while it is still being parsed, with exactly the URL, header and
+ * credentials lib/api.ts would use, and `adoptEarly` (lib/api.ts) hands the app that response
+ * instead of making its own request. The app only adopts it when the URL and session token match
+ * what it was about to ask for itself, so if this copy of the API-base rule ever drifts from
+ * resolveApiBase, the cost is one wasted request — never the wrong payload. Through the service
+ * worker like any page fetch, so its NetworkFirst fallback for a sleeping backend still applies. */
+function earlyHome(apiBase: string, packaged: boolean): string {
+  return "(function(){try{"
+    + `var b=${JSON.stringify(apiBase)};`
+    + "if(!b){var m=document.querySelector('meta[name=\"api-base\"]');b=m&&m.content.trim()?m.content.trim():(/^(localhost|127\\.0\\.0\\.1|\\[::1\\])$/.test(location.hostname)?'':'https://groloo-server.onrender.com')}"
+    + "b=b.replace(/\\/$/,'');"
+    + "var l=localStorage.getItem('sf-lang')||'en',k=localStorage.getItem('groloo_session')||'',u=b+'/api/home?lang='+encodeURIComponent(l)+'&logos=1';"
+    + `var r=fetch(u,{headers:k?{Authorization:'Bearer '+k}:{},credentials:'${packaged ? 'omit' : 'include'}'});`
+    + "r.catch(function(){});window.__grolooHome={url:u,auth:k,res:r}"
+    + "}catch(e){}})();"
+}
+
+/* ---- THE INTRO IS PAINTED BEFORE THE APP RUNS (TV) ---------------------------------------------
+ *
+ * The intro is in the markup so that it is on screen before a single script has run — and it often
+ * was not. A module script runs as soon as the document is parsed and the stylesheet is in, and by
+ * then the bundle had usually arrived too (it is fetched alongside the sheet), so the browser went
+ * straight from parsing into running the whole app and painted nothing until that finished. At 50x
+ * CPU the first frame landed anywhere from 5s to 24s in; the intro was simply black until then.
+ *
+ * So the entry is started from the first frame instead: still fetched at once (modulepreload), but
+ * run one frame later, after the intro has been painted. On a set that is one frame of delay for an
+ * intro that is up from the moment the stylesheet is. A hidden document paints nothing, so it starts
+ * at once; and a frame that never comes cannot strand the app — the timer starts it regardless. */
+function paintFirst(html: string): string {
+  return html.replace(/<script type="module" crossorigin src="([^"]+)"><\/script>/, (_m, src: string) =>
+    `<link rel="modulepreload" crossorigin href="${src}">`
+    + '<script>(function(){var d=0,go=function(){if(d)return;d=1;var s=document.createElement(\'script\');'
+    + `s.type='module';s.crossOrigin='anonymous';s.src=${JSON.stringify(src)};document.head.appendChild(s)};`
+    + "if(document.visibilityState==='hidden')go();else requestAnimationFrame(function(){setTimeout(go,0)});setTimeout(go,5000)})();</script>")
+}
+
+function paintFirstPlugin(): Plugin {
+  return {
+    name: 'groloo-paint-first',
+    apply: 'build',
+    // After Vite has written the entry <script> into the page.
+    transformIndexHtml: { order: 'post', handler: paintFirst },
+  }
+}
+
+function bootSplash(mode: string, apiBase: string, packaged: boolean): Plugin {
   return {
     name: 'groloo-boot-splash',
     transformIndexHtml() {
@@ -35,6 +89,10 @@ function bootSplash(mode: string): Plugin {
         { tag: 'div', attrs: { id: 'boot-splash', 'aria-hidden': 'true' }, injectTo: 'body-prepend', children: INTRO.html },
         { tag: 'script', injectTo: 'body-prepend', children: (mode === 'tv' ? '' : ONCE_A_VISIT) + BACKSTOP },
       ]
+      /* At the TOP of the head: an inline script after a stylesheet <link> waits for that sheet to
+       * download before it runs. (A <meta name="api-base"> placed after it is not seen; the app then
+       * simply makes its own request.) */
+      if (mode === 'tv') tags.push({ tag: 'script', injectTo: 'head-prepend', children: earlyHome(apiBase, packaged) })
       return tags
     },
   }
@@ -216,9 +274,9 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
-    bootSplash(mode),
+    bootSplash(mode, loadEnv(mode, process.cwd(), 'VITE_').VITE_API_BASE || '', packagedTv(mode)),
     /* TV ONLY, so the website's stylesheet is provably untouched. See tvCssDiet above. */
-    ...(mode === 'tv' ? [tvCssDiet()] : []),
+    ...(mode === 'tv' ? [tvCssDiet(), paintFirstPlugin()] : []),
     ...(packagedTv(mode) ? [] : [VitePWA({
       // A new build's service worker takes over on the next load rather than waiting for
       // every tab to close. That also means a bad deploy can be undone by shipping a good
