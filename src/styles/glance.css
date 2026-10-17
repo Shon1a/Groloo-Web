@@ -57,7 +57,7 @@
   /* web detail sheet: under the facts line */
   .m-hero-inner .gl-chips{margin:10px 0 2px;font-size:13.5px}
   /* TV title screen */
-  .tv-det-info .gl-chips{margin:12px 0 4px;font-size:clamp(14px,1vw,19px)}
+  .tv-det-info .gl-chips{margin:0 0 clamp(10px,calc(var(--u)*1.05),24px);font-size:clamp(10px,calc(var(--u)*.84),19px)}
 
   /* ON THE BILLBOARD: the bottom-right corner, side by side, the reference's place for them — the
      wordmark holds the bottom-left. One row, and never a squeezed one: when the pair does not fit

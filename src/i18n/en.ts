@@ -186,6 +186,12 @@ const SEED: Record<string, string> = {
   'modal.ep_left': '{time} left',
   'modal.ep_watched': 'Watched',
   'modal.trailer_title': 'Trailer: {title}',
+  // TV title screen: the Play button, the trailer box and the row at the foot of the column.
+  'tv.play': 'Play',
+  'tv.resume': 'Resume',
+  'tv.official_trailer': 'Official Trailer',
+  'tv.watch_trailer': 'Watch the trailer: {title}',
+  'tv.more_like_this': 'More Like This',
   'mylist.add': 'Add to My List',
   'mylist.remove': 'Remove from My List',
 
