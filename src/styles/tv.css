@@ -551,6 +551,12 @@
      it sitting on the card rather than on its edge at the size the billboard is now. */
   left: 64px; bottom: 72px;
   max-width: 46%;
+  /* THE COPY'S OWN LEGIBILITY, now the scrim is gone. White meta and synopsis vanished on a pale
+     still (Hope's snowfield): a tight shadow keeps the letter edges, a soft one darkens just the
+     picture behind the words. Inherited by the meta line, the synopsis and the fallback title; the
+     wordmark is an image and is untouched. A notch heavier than the episode cards' titles
+     (.ep-title): at that weight the synopsis was still pale on near-white. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7), 0 0 18px rgba(0, 0, 0, .5);
   /* `backwards`, not `both` — see the note at `.tv-spot.is-open .tv-spot-info`: a held final frame
      keeps this "active" forever, and the featured hero paints before EVERY row, so it made the
      compositor assume overlap with the whole page. The resting style is the last keyframe. */

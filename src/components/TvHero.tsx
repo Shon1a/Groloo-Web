@@ -464,6 +464,7 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
           <FadeImg
             className="tv-hero-logo"
             src={showLogo ? logo : undefined}
+            priority="high"
             alt={cur.title}
             fallback={<h2 className="tv-hero-title">{cur.title}</h2>}
             onError={() => setLogoFail((s) => ({ ...s, [String(cur.id)]: true }))}

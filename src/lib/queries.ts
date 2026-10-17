@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError } from './api';
+import { adoptEarly, api, ApiError } from './api';
 import { homeNetworkFirst } from './homeCache';
 import { collectAddonMeta } from './addonClient';
 import type { Awards, HomePayload, MediaItem, MetaDetail, SeasonEpisodes } from './types';
@@ -69,8 +69,10 @@ export function useCards(ids: string[], everywhere = false) {
 }
 
 function homeQueryFn(lang: string) {
-  /* Wrapped for the packaged TV build only — see lib/homeCache.ts; elsewhere a pass-through. */
-  return () => homeNetworkFirst(lang, () => api<HomePayload>(`/api/home?lang=${encodeURIComponent(lang)}${HOME_QUERY}`));
+  const path = `/api/home?lang=${encodeURIComponent(lang)}${HOME_QUERY}`;
+  /* Wrapped for the packaged TV build only — see lib/homeCache.ts; elsewhere a pass-through.
+   * The first ask on a TV takes over the request the page already made (`adoptEarly`). */
+  return () => homeNetworkFirst(lang, () => adoptEarly<HomePayload>(path) ?? api<HomePayload>(path));
 }
 
 /* A FAILURE THAT CLEARS ON ITS OWN: no answer at all (offline, a dropped connection), or an answer
