@@ -241,6 +241,11 @@
      the one number to change if it wants to go further; the ceiling is roughly 0.30, past which the
      group starts to collide with the top of the bar and the gradient stops sitting behind it. */
   padding: 0 48px calc(var(--tv-topnav-h) * 0.16);
+  /* ---- AND NOW A LITTLE BELOW IT, WHERE THE REFERENCE'S IS. Measured off its bar at 1080p: the
+     items' centre line is 68-69px from the top (its pill 40-96 at rest, 32-106 grown); ours was 54.
+     Top padding of 1/16 of the bar centres them at 68 in the 128px bar. The page's own clearance
+     (`--tv-topbar-pad`) is not moved by this — the billboard keeps its own gap below (`.tv-hero`). */
+  padding: calc(var(--tv-topnav-h) * 0.0625) 48px 0;
   /* NO WASH. This was a 180deg black-to-transparent gradient over the top of every page — the
      user's rule is no gradient over anything on the browse pages. The items carry a text shadow
      instead (`.tv-nav-item`), which is enough for type over artwork. */
@@ -268,9 +273,19 @@
    side of it (141.375 / 646.250 both times) — nothing actually moves, it is re-drawn slightly
    differently, which the eye reads as a small jump.
 
-   So the layer is never given up: `scale(1)` keeps a transform on the element in its resting
-   state, and will-change keeps it composited throughout. One rasterisation, start to finish, so
-   there is no handover to see. */
+   So the layer is never given up: a transform stays on the element in its resting state, and keeps
+   it composited throughout, so there is no handover to see.
+
+   ---- 1.19 ON THE REFERENCE'S CURVE, AND COMPOSITED BY `translateZ(0)` RATHER THAN will-change ----
+   MEASURED (source video 65.67-65.93s and 117.43-117.70s, the labels' extents per frame): the
+   reference's bar grows by 1.19 when the remote enters it (My Netflix's far edge 367px from the
+   centre -> 438px; Films 57px wide -> 69px) and shrinks back the same way when it leaves — 30% of the
+   way in the first frame, done by ~270ms; cubic-bezier(.33,1,.68,1) over 300ms, the row slide's own
+   curve. It was 1.08 over 340ms here.
+   will-change: transform freezes a layer's raster at the scale it was first drawn at, and 1.19 of a
+   frozen raster is soft: in a test page the focused labels' edge sharpness was 70.6 against 92.4 for
+   the same text drawn at that size. A 3D transform keeps the layer just as permanent (no handover) and
+   lets the engine draw it again at its new scale when the move ends: 88.0. */
 .tv-nav-items {
   justify-self: center;
   /* `relative` so the travelling pill below is placed in THIS box's coordinates — it is also what
@@ -279,11 +294,10 @@
   position: relative;
   display: flex; align-items: center; gap: calc(var(--tv-nav-fs) * 0.55);
   transform-origin: 50% 50%;
-  transform: scale(1);
-  will-change: transform;
-  transition: transform .34s cubic-bezier(.2, .7, .2, 1);
+  transform: scale(1) translateZ(0);
+  transition: transform .3s cubic-bezier(.33, 1, .68, 1);
 }
-.tv-nav-items.is-focused { transform: scale(1.08); }
+.tv-nav-items.is-focused { transform: scale(1.19) translateZ(0); }
 
 /* THE TRAVELLING PILL. One white pill behind the items, moved and resized to whichever one has
    focus (positions come from TvTopNav). It replaces the per-item `:focus-visible` fill this bar
@@ -305,16 +319,38 @@
   border-radius: 999px;
   background: #fff;
   pointer-events: none;
-  z-index: 0;
+  /* ABOVE the items now, and clipping: the dark labels are drawn inside it (`.tv-nav-ink`), so the
+     items' own white letters are simply covered wherever the pill is. */
+  z-index: 2;
+  overflow: hidden;
 }
+/* The second, dark copy of the labels, laid out exactly as the items are (same classes, same flex
+   row) and held still under the pill by an equal and opposite transform. */
+.tv-nav-ink {
+  position: absolute;
+  left: 0; top: 0;
+  display: flex; align-items: center; gap: calc(var(--tv-nav-fs) * 0.55);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.tv-shell .tv-nav-ink .tv-nav-item { color: #0b0b0b; background: none; transition: none; cursor: default; }
 /* Armed one frame after the pill is first placed — see the note in TvTopNav. Without the gate,
-   arriving on the bar would animate the pill in from the group's left edge. */
+   arriving on the bar would animate the pill in from the group's left edge.
+
+   480ms ON cubic-bezier(.25, .7, .5, 1), MEASURED. The reference's pill, walking its tab bar
+   (left edge per frame, two moves): 19% of the way after one frame, 49% after three, 87% after
+   eight, settled by ~450ms — fitted at 0.8% RMS. It was 280ms on (.2,.7,.2,1), 20% RMS off: there,
+   the pill jumped to an item; here it glides to it. The ink rides the same clock or it would slide
+   under the pill instead of standing still. */
 .tv-nav-items.is-armed .tv-nav-mark {
   transition:
-    transform .28s cubic-bezier(.2, .7, .2, 1),
-    width .28s cubic-bezier(.2, .7, .2, 1),
-    height .28s cubic-bezier(.2, .7, .2, 1);
+    transform .48s cubic-bezier(.25, .7, .5, 1),
+    width .48s cubic-bezier(.25, .7, .5, 1),
+    height .48s cubic-bezier(.25, .7, .5, 1);
 }
+.tv-nav-items.is-armed .tv-nav-ink { transition: transform .48s cubic-bezier(.25, .7, .5, 1); }
+/* The pill's word darkens into it as the pill first appears — a 100ms fade TvTopNav starts in the focus
+   event that places the pill (see `place` there). */
 
 /* `.tv-nav-profile` has no styles of its own any more. It was a 44px disc with its own fill and
    focus treatment when it stood alone in the left corner; then a glyph padded to the row's height
@@ -335,7 +371,9 @@
   font-size: var(--tv-nav-fs);
   font-weight: 500;
   line-height: 1;
-  color: rgba(255,255,255,0.62);
+  /* NEAR-WHITE AT REST, as the reference's are: its unselected labels peak at 230-255 of 255 where
+     ours, at 62% white, peaked at 160 — a bar that read as greyed out beside it. */
+  color: rgba(255,255,255,0.9);
   background: none;
   border: 0;
   border-radius: 999px;
@@ -363,7 +401,8 @@
   padding: calc(var(--tv-nav-fs) * 0.87) calc(var(--tv-nav-fs) * 1.35) calc(var(--tv-nav-fs) * 0.80);
   cursor: pointer;
   display: inline-flex; align-items: center;
-  transition: color .22s ease, background-color .22s ease;
+  /* The grey wash is NOT faded: leaving the bar, the reference's white pill turns grey in one frame. */
+  transition: color .22s ease;
 }
 .tv-nav-item:hover { color: #fff; }
 
@@ -384,16 +423,18 @@
   color: #fff;
   background: rgba(255,255,255,0.14);
 }
-/* The ink flips against the pill, and the ring goes.
-   `:focus`, NOT `:focus-visible`, and the difference is the same bug the chip menu's options hit.
-   The pill is positioned from the item's `focus` event, which fires however focus arrived; keyed
-   to `:focus-visible` the ink would not flip for a mouse click, so the white pill would slide
-   under text that stayed pale grey and the label would vanish. `:focus` is the superset, so both
-   halves of one indicator agree by construction. (Only visible with a pointer — `npm run dev:tv`
-   is a browser, which is where it shows.) */
+/* NO WASH WHILE THE REMOTE IS IN THE BAR. The reference shows the white pill and nothing else up there:
+   the grey "you are on this page" pill appears only when the remote leaves the bar (the white one turns
+   grey in that frame — measured, 255 to 68 of 255). Ours put the wash under every item the pill was
+   sent to, the moment it was sent (`heading` in TvTopNav), so a grey pill sat waiting at the far end of
+   each glide — the user, 2026-10-17: "that back grey layer, where you see that on netflix". */
+.tv-nav-items.is-focused .tv-nav-item.active { background: none; }
+/* The ring goes. The ink no longer flips here: the dark letters are the pill's own copy of the labels
+   (`.tv-nav-ink`), so they are dark exactly where the pill is, on every frame of its glide.
+   `:focus`, NOT `:focus-visible`, and the difference is the same bug the chip menu's options hit:
+   the pill is positioned from the item's `focus` event, which fires however focus arrived. */
 .tv-shell .tv-nav-item:focus {
   outline: none;
-  color: #0b0b0b;
 }
 .tv-shell .tv-nav-item:focus-visible { outline: none; }
 
@@ -413,7 +454,7 @@
    the labels beside it — 1.2em is 24px at the 20px the bar settles on for a 1080p panel. The
    padding then closes the difference between the glyph's box and a label's, which is what keeps
    both items the same height and the travelling pill the same shape as it crosses between them. */
-.tv-nav-search { padding: calc(var(--tv-nav-fs) * 0.735) calc(var(--tv-nav-fs) * 0.6); color: rgba(255,255,255,0.72); }
+.tv-nav-search { padding: calc(var(--tv-nav-fs) * 0.735) calc(var(--tv-nav-fs) * 0.6); color: rgba(255,255,255,0.9); }
 .tv-nav-search svg { width: 1.2em; height: 1.2em; }
 .tv-nav-search:hover { color: #fff; }
 
@@ -437,8 +478,14 @@
    left the billboard itself three-quarters off the top of the screen. The margin is the bar plus
    the page's own top padding, which is exactly where the hero sits when the page is at rest — so
    coming back up to it restores the screen you started on. */
+/* ---- THE BILLBOARD'S PLACE ON THE SCREEN, MEASURED OFF THE REFERENCE AT 1080p -----------------
+   card top 144px (13.3vh), 764px tall (70.7vh), the first row's heading at 962 and its posters
+   peeking from ~1000 — the bar has ~48px of black under its pill before the picture starts. Ours sat
+   16px under the pill at 82vh with the first row wholly below the screen; the user, 2026-10-17: "the
+   space between top nav and hero bg is too close, make that layout perfect". The values below are
+   the reference's, stated against the viewport the way it states them. */
 .tv-hero {
-  padding-top: 6px;
+  padding-top: max(6px, calc(13.3vh - var(--tv-topbar-pad)));
   /* THE ROW BELOW STARTS BELOW THE FOLD, and this margin is what puts it there. The billboard is
      tall enough now that the first row's HEADING — "Continue Watching" — landed in the last few
      pixels of the screen: a title with no pictures under it, cut off by the bottom edge. A peek
@@ -452,12 +499,21 @@
 
      It reads as deliberate once you scroll: the billboard is its own screen and the rows are the
      next one, which is the arrangement the height was chosen for. */
-  margin-bottom: clamp(40px, 7vh, 96px);
+  /* NOW IT IS THE OTHER WAY ROUND: the first row's heading and the top of its posters show under the
+     billboard, as the reference's do — "there is more down here" said by pictures rather than by a
+     stranded heading, because the card is short enough now (70.7vh) to leave room for both. 2.5vh
+     plus the row's own top margin puts the heading ~54px under the card, which is the reference's. */
+  margin-bottom: clamp(16px, 2.5vh, 40px);
   scroll-margin-top: calc(var(--tv-topnav-h) + 24px);
+  /* THE BILLBOARD GOES OUT AS THE PAGE GOES DOWN TO THE ROWS — `is-away`, set by TvHero when the remote
+     leaves it for a row below. The reference: gone to black ~0.3s after the press, while the page
+     carries it up. Back in faster, because coming back up to it the picture is the destination. */
+  transition: opacity .15s linear;
 }
+.tv-hero.is-away { opacity: 0; transition: opacity .3s linear; }
 .tv-hero-stage {
   position: relative;
-  height: clamp(440px, 82vh, 920px);
+  height: clamp(400px, 70.7vh, 820px);
   border-radius: 12px;
   overflow: hidden;
   background: #000;
@@ -550,6 +606,11 @@
      stage does not move it — it only puts more empty picture above it. 72px of bottom inset keeps
      it sitting on the card rather than on its edge at the size the billboard is now. */
   left: 64px; bottom: 72px;
+  /* ---- LOWER AND FURTHER INTO THE CORNER, where the reference keeps its wordmark at rest: ~30px in
+     from the card's left edge, its info line ~70px above the bottom. Ours rests as the wordmark alone,
+     so its foot comes to ~58px above the card's bottom (the user, 2026-10-17: "move it little bit down
+     at corner"). The open copy grows upward from the same place. */
+  left: clamp(28px, 2.1vw, 48px); bottom: clamp(28px, 3.7vh, 48px);
   max-width: 46%;
   /* THE COPY'S OWN LEGIBILITY, now the scrim is gone. White meta and synopsis vanished on a pale
      still (Hope's snowfield): a tight shadow keeps the letter edges, a soft one darkens just the
@@ -623,13 +684,12 @@
   max-height: 0;
   opacity: 0;
   overflow: hidden;
-  transition:
-    max-height .44s cubic-bezier(.2, .7, .2, 1),
-    opacity .3s ease;
 }
-/* No stagger on the way in, unlike the synopsis — this line leads it by the .06s the reveal
-   holds back, so the block assembles top-down rather than arriving all at once. */
-.tv-hero.is-focused .tv-hero-meta {
+/* OPEN WHILE THE REMOTE IS HERE AND NO TRAILER HAS TAKEN OVER. It takes its room AT ONCE — the motion
+   is TvHero's: the whole copy block is played from where it was to where it now is as one transform,
+   and these two fade in under it (THE COPY MOVES AS ONE BLOCK there; the reference's numbers are on
+   its constants). The `max-height` easing this used to carry was a layout on every frame. */
+.tv-hero.is-focused:not(.is-folded) .tv-hero-meta {
   max-height: 80px;
   opacity: 1;
 }
@@ -652,39 +712,17 @@
   max-height: 0;
   opacity: 0;
   overflow: hidden;
-  transition:
-    max-height .44s cubic-bezier(.2, .7, .2, 1),
-    opacity .3s ease;
 }
-.tv-hero.is-focused .tv-hero-reveal {
+.tv-hero.is-focused:not(.is-folded) .tv-hero-reveal {
   max-height: 130px;
   opacity: 1;
-  transition:
-    max-height .44s cubic-bezier(.2, .7, .2, 1),
-    opacity .34s ease .06s;
 }
-/* ---- BUT NOT WHILE THE PAGE IS MOVING -----------------------------------------------------------
-   The fold and the unfold animate `max-height`, which is a LAYOUT on every frame — the one kind of
-   animation the compositor cannot run — and both used to coincide with the page's own scroll: Down off
-   the billboard folded it for 440ms while the page carried it off the top of the screen (traced at
-   startup: the first press of a session, every time), and Up onto it unfolded it while the page brought
-   it back down.
-     · LEAVING, it folds at once. The page is taking it off the screen; nobody watches it fold.
-     · ARRIVING, it waits out most of the scroll (~450ms) and then unfolds, so the billboard lands first
-       and its copy opens on a still card — one movement after the other rather than both at once. */
-.tv-hero:not(.is-focused) .tv-hero-meta,
-.tv-hero:not(.is-focused) .tv-hero-reveal {
-  transition: none;
-}
-.tv-hero.is-focused .tv-hero-meta {
-  transition:
-    max-height .44s cubic-bezier(.2, .7, .2, 1) .32s,
-    opacity .3s ease .32s;
-}
-.tv-hero.is-focused .tv-hero-reveal {
-  transition:
-    max-height .44s cubic-bezier(.2, .7, .2, 1) .32s,
-    opacity .34s ease .38s;
+/* A TRAILER HAS STARTED: the description is let go first — faded where it stands — and only then does
+   its room go (`is-folded`), so the wordmark glides back down to the corner (TvHero). */
+.tv-hero.is-fading .tv-hero-meta,
+.tv-hero.is-fading .tv-hero-reveal {
+  opacity: 0;
+  transition: opacity .22s linear;
 }
 
 .tv-hero-plot {
@@ -693,38 +731,6 @@
   font-size: 19px; line-height: 1.45; color: rgba(255,255,255,0.92);
   display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3;
   -webkit-box-orient: vertical; overflow: hidden;
-}
-
-/* ---- ONCE THE TRAILER IS PLAYING, THE WORDMARK IS THE ONLY COPY LEFT --------------------------
-   The synopsis and the meta line are there to describe a title you are looking at a still of. When
-   the trailer takes over, the picture is doing that job better than the text can, and three lines
-   of it over moving footage is the thing that makes a billboard look busy. So both fade and the
-   wordmark stays — enough to say what is playing, nothing competing with it.
-
-   TIED TO `has-trailer`, which the engine only adds once a frame has actually been presented, so
-   the text never goes for a preview that then fails to start.
-
-   IT FOLDS, IT DOES NOT MERELY FADE, and that is the whole feel of it. `.tv-hero-copy` is anchored
-   to the BOTTOM of the card, so collapsing these two heights lets the wordmark travel back DOWN —
-   the same movement the focus unfold made, run backwards. Fading alone left the logo stranded at
-   the top of a block of empty space, which reads as text that has been hidden rather than as a
-   card settling into playing something.
-
-   ONE MOVEMENT, SAME CURVE AND DURATION AS THE UNFOLD (.44s), so the two are recognisably the same
-   gesture in both directions rather than two effects that happen to involve the same element.
-
-   Must come AFTER `.tv-hero.is-focused .tv-hero-meta` and `.tv-hero.is-focused .tv-hero-reveal` —
-   both set max-height and opacity at THE SAME specificity as these selectors (three classes
-   either way), so source order is the only thing deciding it. A trailer only starts on a focused
-   card, so those two rules are always live when this one has to win. Moving this block above
-   them silently stops the copy folding for the trailer. */
-.tv-hero-stage.has-trailer .tv-hero-meta,
-.tv-hero-stage.has-trailer .tv-hero-reveal {
-  max-height: 0;
-  opacity: 0;
-  transition:
-    max-height .44s cubic-bezier(.2, .7, .2, 1),
-    opacity .3s ease;
 }
 
 /* ---- THE CALLOUTS GO WITH THE COPY ---------------------------------------------------------------
@@ -746,12 +752,34 @@
   opacity: 1;
   transition: opacity .34s ease .06s;
 }
-.tv-hero.is-focused .tv-hero-stage.has-trailer .gl-chips.on-art.rise {
-  opacity: 0;
-  transition: opacity .3s ease;
+/* WHILE A TRAILER PLAYS THEY STAY, AND STEP LEFT FOR THE SOUND BADGE — the row billboard's arrangement
+   (`.tv-spot-hero.has-trailer .gl-chips.on-art`), at this card's sizes. They used to go out with the
+   copy; the badge beside them is the user's ask (2026-10-17), and it means nothing without them. */
+.tv-hero-stage .gl-chips.on-art { transition: opacity .3s ease, transform .4s cubic-bezier(.2, .7, .2, 1); }
+.tv-hero.is-focused .tv-hero-stage .gl-chips.on-art.rise { transition: opacity .34s ease .06s, transform .4s cubic-bezier(.2, .7, .2, 1); }
+.tv-hero-stage.has-trailer .gl-chips.on-art {
+  transform: translateX(-2.45em);
+  max-width: calc(70% - 2.45em);
 }
+.tv-hero-sound {
+  position: absolute; z-index: 4;
+  right: clamp(24px, 1.9vw, 36px);
+  bottom: clamp(24px, 1.9vw, 36px);
+  font-size: clamp(14.5px, 1.02vw, 19.5px);
+  width: 1.95em; height: 1.95em;
+  display: grid; place-items: center;
+  border-radius: .45em;
+  background: rgba(18, 18, 18, .74);
+  color: #fff;
+  opacity: 0;
+  transition: opacity .4s ease;
+  pointer-events: none;
+}
+.tv-hero-sound svg { display: block; }
+.tv-hero-sound .ic3 .gl-ic { width: 1.35em; height: 1.35em; }
+.tv-hero-stage.has-trailer .tv-hero-sound { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
-  .tv-hero-stage .gl-chips.on-art { transition: none; }
+  .tv-hero-stage .gl-chips.on-art, .tv-hero-sound { transition: none; }
 }
 
 /* `.tv-hero-actions` / `.tv-hero-btn` USED TO BE HERE — the MORE and My List pills, their
@@ -891,6 +919,25 @@
      Chromium 85, comfortably inside this build's 87 floor; older engines ignore it and paint as
      they always did. */
   content-visibility: auto;
+
+  /* ---- CLOSED, THE RAIL STANDS `--sp-d` TO THE LEFT (see THE CARD GROWS) -------------------------
+     so the first poster after the card sits a gap past a POSTER-wide card instead of a billboard.
+     Moving the rail rather than the strip carries the clip above with it: closed, the clip is at the
+     poster's right edge, open at the billboard's, and on every frame between it is wherever the card's
+     edge is. The strip's own transform — the walk — is not touched.
+
+     IT RUNS ON PAST THE SCREEN'S RIGHT EDGE, by the gutter and by `--sp-d`, so the shifted rail still
+     reaches the edge and the posters run off it as the reference's do, open or closed. The gutter on
+     that side was the stage's, never a margin the design asked for. */
+  right: calc(-1 * (var(--page-pad) + var(--sp-d)));
+  transform: translateX(calc(-1 * var(--sp-d)));
+  opacity: 0.39;
+  transition: transform var(--sp-grow, 240ms cubic-bezier(0, 1, 0, 1)), opacity 130ms linear;
+}
+.tv-spot.is-open .tv-spot-rail {
+  transform: none;
+  opacity: 1;
+  transition: transform var(--sp-grow, 240ms cubic-bezier(0, 1, 0, 1)), opacity 180ms cubic-bezier(.4, .3, .4, 1);
 }
 
 /* THE PREVIOUS CARD PEEKS IN FROM THE LEFT EDGE. The stage starts at --page-pad; positioning a
@@ -1518,7 +1565,9 @@
   position: absolute; left: 0; top: 0;
   width: var(--sp-wl); height: 100%;
   padding: 0; border: 0; margin: 0;
-  background: #000; cursor: pointer;
+  /* NO BACKGROUND OF ITS OWN ANY MORE: the black card is `.tv-spot-win`, which is narrower than this
+     box while the row is closed, and what shows past it there is the strip. */
+  background: none; cursor: pointer;
   border-radius: 12px; overflow: hidden;
   outline: none; z-index: 2;
   transform: scale(1);
@@ -1548,6 +1597,150 @@
  * The brief asks to "promote only the currently moving surface, not every row". This is the one
  * place that guidance measured backwards, and the numbers above are why it is not followed here. */
 .tv-spot .tv-spot-hero { will-change: transform; }
+
+/* ---- THE CARD GROWS: A ROW THE REMOTE IS NOT ON IS A LINE OF POSTERS ------------------------------
+ *
+ * WHAT THE REFERENCE DOES, MEASURED (1080p30 capture, the row change at t=80.23s, every frame
+ * template-matched against the settled one). A row you are not on shows no billboard at all: its first
+ * card is a poster like the rest, and the whole row sits at ~0.39 brightness (a poster's pixels against
+ * the same poster once its row is focused: k = 0.39 on all three channels). Press Down and, while the
+ * page scrolls, the arriving row's first card GROWS into the billboard — the posters beside it pushed
+ * right by the difference — and the row brightens:
+ *
+ *                   33ms   67   100   133   167   200ms
+ *     card width     .90   .94   .98   .99  1.00         of the way from poster to billboard
+ *     brightness     .13   .33   .61   .80   .92   .98   of the way from 0.39 to 1
+ *
+ * So the growth is all but done in the first frame — fitted, cubic-bezier(0,1,0,1) (1.1% RMS) — and
+ * the brightening is the slower, softer half: (.4,.3,.4,1) over 240ms (0.9%; run here at 180ms, the
+ * growth's own length, so every animation a row change starts has ended together). The row being left does
+ * the opposite: shrinks back to a poster on the same curve and dims in ~130ms, linearly (.85, .69 at
+ * 33/67ms). The card's picture changes to its landscape art inside the growing frame within the first
+ * two frames.
+ *
+ * HOW IT IS BUILT, AND WHY NOTHING HERE LAYS ANYTHING OUT. The card's width cannot be what changes —
+ * a width is a layout on every frame, and the picture inside would be re-rastered at each size. Instead
+ * the button keeps the billboard's whole box and clips its own left edge, and the visible card is a
+ * WINDOW inside it (`.tv-spot-win`) that slides: parked `--sp-d` to the left while the row is closed,
+ * so at most a poster's width of it could show, and slid home as the row opens — so its right edge
+ * travels from the poster's edge to the billboard's. The strip's rail slides by the same `--sp-d` on
+ * the same curve, which carries the posters AND the rail's clip at the card's edge with it, so the gap
+ * beside the card is the strip's own gap on every frame. While the row is closed the window is also
+ * transparent and the poster (`.tv-spot-poster`, the tile's picture and name, at the row's dim) stands
+ * in its place; opening, the poster goes and the window comes up to full brightness as it grows.
+ *
+ * THREE ELEMENTS MOVE PER ROW, AND THAT NUMBER IS THE BUDGET. A first version had five (the window, a
+ * pane sliding back inside it to hold the picture still, the button's own dim, the poster, the rail).
+ * Each was a compositor animation — and it did not matter: while the page's smooth scroll runs, the
+ * engine re-styles EVERY running animation's element on every frame, composited or not (a bare test
+ * page: 4 style passes for a 240ms transform transition left alone, 15 with a smooth scroll beside
+ * it). Measured on the home screen at 6x CPU: ~30 elements re-styled per frame against 2-3 before,
+ * style time per vertical press 24ms -> 52ms. So the picture rides with its window instead of being
+ * held still (it is under the outgoing poster for the first frames, and 90% home in one), the dim is
+ * carried by the window and the poster themselves, and the growth is 180ms rather than 240 — the
+ * curve is 99% home by 100ms either way, and every frame cut is a frame of nobody's re-styling.
+ * The transitions hang off `is-open`, which the focus handler already writes to the node, so a
+ * vertical press runs no script for any of this. */
+.tv-spot {
+  /* What the card gains opening: a billboard's width less a poster's. Whole pixels, because
+     lib/tvPixelGrid.ts pins both terms whole. */
+  --sp-d: calc(var(--sp-wl) - var(--sp-wp));
+  --sp-grow: 180ms cubic-bezier(0, 1, 0, 1);
+}
+.tv-spot-win {
+  position: absolute; inset: 0;
+  /* z-index makes it a stacking context in BOTH states, so its children never change places with the
+     poster when its transform comes and goes. */
+  z-index: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #000;
+  transform: translateX(calc(-1 * var(--sp-d)));
+  opacity: 0;
+  transition: transform var(--sp-grow), opacity 130ms linear;
+}
+.tv-spot-pane {
+  position: absolute; inset: 0;
+  z-index: 0;
+}
+.tv-spot-poster {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: var(--sp-wp);
+  z-index: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  pointer-events: none;
+  /* THE DIM, on the closed card: the strip beside it is at the same 0.39 (`.tv-spot-rail`). */
+  opacity: 0.39;
+  transition: opacity 80ms linear;
+}
+/* The tile's picture over the title's plate (the poster's own background), and its wordmark box
+   (`.tv-spot-thumbmark`) — both backgrounds, so filling them is a style write. They wait for the row's
+   first pictures like the tiles do, on the tiles' own fade (see A ROW'S FIRST PICTURES). */
+.tv-spot-posterimg {
+  position: absolute; inset: 0;
+  background-repeat: no-repeat;
+  background-size: cover;
+  transition: opacity .35s ease;
+}
+.tv-spot-postermark {
+  position: absolute; left: 8%; right: 8%; bottom: 7%;
+  height: 22%;
+  background: no-repeat 50% 100% / contain;
+  transition: opacity .35s ease;
+}
+/* A title with no wordmark is named in type, exactly as its tile is (`.tv-spot-thumbtitle`). */
+.tv-spot-postermark.is-text {
+  height: auto;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
+  overflow: hidden;
+  text-align: center;
+  font-size: clamp(13px, calc(var(--spot-h) * 0.055), 34px);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: .005em;
+  text-transform: uppercase;
+  color: #fff;
+}
+/* The end card, closed: the strip's silver front card at a poster's size. */
+.tv-spot-poster.is-end { --end-r: 12px; --end-w: var(--sp-wp); background: none; }
+.tv-spot-poster .tv-end-front { right: 0; box-shadow: none; }
+
+.tv-spot.is-open .tv-spot-win {
+  transform: none;
+  opacity: 1;
+  transition: transform var(--sp-grow), opacity 180ms cubic-bezier(.4, .3, .4, 1);
+}
+.tv-spot.is-open .tv-spot-poster { opacity: 0; transition: opacity 100ms linear; }
+
+/* A ROW ABOVE THE REMOTE'S KEEPS ITS SHAPE (TvSpotlight, A ROW ABOVE THE REMOTE KEEPS ITS BILLBOARD): the
+   reference scrolls the row a Down press leaves off the top as it was, billboard and posters where they
+   stood, only dimming — `.85, .69` of its brightness at 33/67ms, the same ~130ms fall a closed row takes.
+   Every row above the remote's stays that way; only rows below it are posters. */
+.tv-spot.is-above .tv-spot-win,
+.tv-spot.is-above .tv-spot-rail { transform: none; opacity: 0.39; transition: opacity 130ms linear; }
+.tv-spot.is-above .tv-spot-poster { opacity: 0; transition: none; }
+
+/* A PAGE THAT IS ONE ROW FOLDS LIKE ANY OTHER. Series / Movies / Anime and Search are a single row, and
+   for a while they kept their card open while the remote was up in the bar, on the reasoning that a
+   folded row would leave the screen a dim shelf. The user, 2026-10-17, beside My Space's folded row:
+   "why is it not folded like this?" — every row closes when the remote is not on it, one page or many. */
+
+.tv-spot.no-anim :is(.tv-spot-win, .tv-spot-poster, .tv-spot-rail) { transition: none; }
+
+/* ---- A ROW'S FIRST PICTURES ARRIVE TOGETHER (`revealWhenReady` in TvSpotlight) --------------------
+   Until the row has shown its first set, every picture in it stays transparent over its plate — the
+   tiles, their wordmarks, the closed card's poster and the billboard's photograph — however early its
+   own decode came in; `is-shown` then lets them all up in one frame, on the fades they already had.
+   After that the row is on screen and a picture arriving late simply fades in by itself.
+   `no-reveal-fade`: the set was shown while the row was off the screen, so there is nothing to watch. */
+.tv-spot:not(.is-shown) .tv-spot-thumbimg.rdy,
+.tv-spot:not(.is-shown) .tv-spot-thumbmark.rdy,
+.tv-spot:not(.is-shown) .tv-spot-pane .art-photo.rdy,
+.tv-spot:not(.is-shown) .tv-spot-pane .tv-spot-logo.rdy,
+.tv-spot:not(.is-shown) .tv-spot-posterimg,
+.tv-spot:not(.is-shown) .tv-spot-postermark { opacity: 0; }
+.tv-spot.no-reveal-fade :is(.tv-spot-posterimg, .tv-spot-postermark, .tv-spot-pane .art-photo, .tv-spot-pane .tv-spot-logo) { transition: none; }
 
 /* ---- THE INFO PANEL IS NOT PROMOTED, AND THAT IS A MEASURED DECISION -------------------------
  *
@@ -2068,9 +2261,12 @@
   height: var(--sp-info-h);
   overflow: hidden;
   opacity: 0;
-  /* The LEAVING row's panel is cut, not faded: there is no transition here, only the arrival
-     animation on `.is-open` below. A fade-out is a second animation per vertical press for text that
-     is scrolling off the screen anyway. */
+  /* THE LEAVING ROW'S PANEL FADES, ~120ms. It was cut, on the grounds that a fade-out is a second
+     animation per vertical press for text scrolling off the screen anyway — but the reference fades it
+     (.73 .46 .15 .03 of its strength at 33ms steps), and on an Up press the row being left does not
+     scroll off at all: it sits under the new row with its words dimming away. The arrival is the
+     animation on `.is-open` below, which turns this off so the two never run at once. */
+  transition: opacity 120ms linear;
 
   /* ---- ROOM FOR THE SLIDE TO ARRIVE FROM, ON BOTH SIDES ------------------------------------
    * THE DEFECT: press LEFT and the copy arrived with its first letters sliced off — "Action"
@@ -2119,9 +2315,16 @@
    vertical move because `is-open` moves. Measured on the 65UT8100 as the difference between a row near
    the top (69.4% on time, a dozen rows promoted beneath it) and an add-on row at the bottom (82.0%).
    The resting style here IS the last keyframe (opacity 1, no transform), so `backwards` looks the same. */
+/* THE COPY COMES UP SLOWLY, AFTER THE CARD, AND DOES NOT MOVE. Measured on the reference's row change
+   (the copy's luminance at its settled place, tracked through the scroll): nothing for the first frame
+   and a half, then .15 .24 .32 .41 .49 .53 .60 .65 .70 .75 .79 … 1.0 at ~670ms — a long ease-out the
+   card has finished growing long before — and its offset from the row's heading is the same 589px on
+   every frame it can be found, so there is no rise. Fitted: cubic-bezier(.3,.4,.5,1) over 780ms from
+   the press (1.5% RMS), whose slow start is the delay. It was an 8px rise over 420ms. */
 .tv-spot.is-open .tv-spot-info {
   opacity: 1;
-  animation: tvSpotFade .42s cubic-bezier(.2, .7, .2, 1) backwards;   /* fades with the billboard */
+  transition: none;
+  animation: tvSpotFade .78s cubic-bezier(.3, .4, .5, 1) backwards;
 }
 /* NO COPY WHILE THE KEY IS HELD. At three cards a second a synopsis cannot be read, and writing it is the
    dearest thing a step does (see `show` in lib/tvRowStage.ts), so a hold leaves the block alone and this
@@ -2155,12 +2358,13 @@
    and the row reads as a slideshow advancing on its own rather than as something being driven.
 
    THIS IS THE ROW BEING ARRIVED AT, NOT WALKED — it runs when a row OPENS (Up/Down onto it), and
-   the 8px rise is the whole of it. Walking the row sideways is handled by the two copy blocks
-   above, which do not move at all; the directional slide this keyframe briefly carried was
-   measured out of the reference along with the billboard's drift. */
+   it is a fade and nothing else: the 8px rise it carried after that is gone too, measured out of the
+   reference (see `.tv-spot.is-open .tv-spot-info`). Walking the row sideways is handled by the two
+   copy blocks above; the directional slide this keyframe briefly carried was measured out of the
+   reference along with the billboard's drift. */
 @keyframes tvSpotFade {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* ---- The rails that are STILL rails, matched to the spotlight -----------------------------
@@ -3670,7 +3874,10 @@
    this element's children are two artwork layers at inset:0 that cover it completely. The
    pseudo-element is a child, painted last, so it lands on top of the picture where it belongs. */
 .tv-shell .tv-spot-hero:focus-visible { outline: none; }
-.tv-shell .tv-spot-hero:focus-visible::after {
+/* ---- THE RING RIDES THE CARD'S WINDOW, BECAUSE THE CARD GROWS UNDER IT (see THE CARD GROWS) ------
+   On the button it would hang out past a card still growing; on the window it is the card's own
+   edge, and it comes up with the card as the row opens. */
+.tv-shell .tv-spot-hero:focus-visible .tv-spot-win::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -3682,7 +3889,7 @@
 /* The end card on the billboard is SILVER (see THE END CARD), and the ring's white disappears into
    it: on that card the ring is drawn dark instead. The stage sets `is-end` while the end card is the
    one on screen. */
-.tv-shell .tv-spot-hero.is-end:focus-visible::after { border-color: rgba(12, 12, 13, 0.55); }
+.tv-shell .tv-spot-hero.is-end:focus-visible .tv-spot-win::after { border-color: rgba(12, 12, 13, 0.55); }
 
 /* THE BOTTOM IS EXPLICITLY 0, AND THAT ZERO IS LOAD-BEARING RATHER THAN LAZY.
    This was a two-value shorthand, which sets block-START and block-END — so every focusable in
@@ -3699,9 +3906,11 @@
 }
 /* The row billboard needs MORE than the bar's height: TvSpatialNav parks a row with `start`, and
    the row's TITLE sits above this element, so clearing only the bar would tuck the title under
-   it. 58px is the title line plus its margin, and it must come after the shorthand above —
-   `scroll-margin` resets all four sides, so an earlier scroll-margin-top would be wiped. */
-.tv-shell .tv-spot-hero { scroll-margin-top: calc(var(--tv-topnav-h) + 58px); }
+   it. 58px was the title line plus its margin; 72 parks the cards ~200px down at 1080p with the
+   heading above them at ~144, where the reference parks its rows (heading 150, cards ~200). It must
+   come after the shorthand above — `scroll-margin` resets all four sides, so an earlier
+   scroll-margin-top would be wiped. */
+.tv-shell .tv-spot-hero { scroll-margin-top: calc(var(--tv-topnav-h) + 72px); }
 /* Reduced motion: no dissolves / scroll animation (swap is instant); auto-advance is already
    off in the component under the same query. */
 @media (prefers-reduced-motion: reduce) {
@@ -3729,6 +3938,9 @@
   .tv-spot-rowtitle, .tv-spot-info { transition: none; }
   .tv-spot.is-open .tv-spot-info { animation: none; }
   .tv-spot-hero { transition: none; }
+  /* The card still opens and the row still brightens — they say which row you are on — but at once. */
+  .tv-spot-win, .tv-spot-poster, .tv-spot-rail,
+  .tv-spot.is-open :is(.tv-spot-win, .tv-spot-poster, .tv-spot-rail) { transition: none; }
   .tv-shell .tv-spot-hero:focus-visible { transform: scale(1); }
   /* The search bar keeps its WHITE FILL under this query and loses only the growing — the fill is
      the whole of what says "the remote is in here", and dropping it would leave the one focus stop
