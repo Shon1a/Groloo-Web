@@ -130,6 +130,12 @@ function officialFromWire(m: WireMap): WireMap {
   return out;
 }
 
+/** Whether two wire maps say the same thing: the same keys with the same values, in any order. */
+function sameWire(a: WireMap, b: WireMap): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => b[k] === a[k]);
+}
+
 /** The per-row selections carried in the same map. `cat` is taken as everything after the
  *  SECOND colon rather than by splitting on every colon — a category token containing one
  *  would otherwise be truncated into a different row. */
@@ -357,6 +363,13 @@ export const useHomeConfig = create<HomeConfigState>((set, get) => ({
         const config: HomeConfig = { ...local, ...official, ...rowsFromWire(remoteMap) };
         save(config, verdict.at); set({ config, at: verdict.at });
       } else if (verdict.decision === 'uploadLocal') {
+        /* NOT WHEN THE SERVER ALREADY HOLDS THIS DOCUMENT. The core uploads on newer-OR-EQUAL, so
+         * every pull after a sync lands here with nothing to send — and the PUT it sent was
+         * announced on the live-sync stream, this device's own included, which pulled again 400ms
+         * later. An endless loop: 67 requests to /api/addon-state in 29 seconds from one idle TV
+         * (2026-10-17), each one main-thread work while the viewer was walking the rows. The server
+         * now refuses to echo an identical PUT as well; this keeps the request from being made. */
+        if (localAt === remoteAt && sameWire(toWire(local), remoteMap)) return;
         // Straight out, not debounced: this is a reconciliation settling, not a burst of
         // clicks, and there is nothing following it to coalesce with.
         push(local, localAt, owner);
