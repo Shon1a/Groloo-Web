@@ -61,11 +61,15 @@ const GATED = ['/addons', '/settings', '/library'];
  * mount (the remote stays in the bar until Down), and My Space renders for a guest too, with its own
  * Sign in button — so walking onto it signed out shows the page, and only OK raises the sign-in sheet.
  *
- * DWELL is how long the remote has to rest on an item before its page is mounted (the old page
- * starts sliding away at once — see lib/tvPageSlide.ts). It is what makes a walk from Home to Anime
- * cost one page mount instead of three: a remote's repeat and a deliberate run of taps both arrive
- * faster than this, so the pages passed on the way are never built. */
-const DWELL = 260;
+ * DWELL is how long the remote has to rest on an item before its page is swapped in. It is what makes a
+ * walk from Home to Anime cost one page mount instead of three: a remote's repeat and a deliberate run
+ * of taps both arrive faster than this, so the pages passed on the way are never built.
+ *
+ * 700, MEASURED: the reference swaps its page 670-750ms after the last press of a walk along its bar
+ * (lib/tvPageSlide.ts has the frames). It was 260 here, with the old page starting to leave on the press
+ * itself; now the page you are on stays up while the pill moves, as the reference's does, so the wait
+ * is spent looking at a page rather than at black. */
+const DWELL = 700;
 /** How long a Down pressed during a page switch waits for the new page to have something to land on. */
 const DOWN_OWED_MS = 2500;
 
@@ -138,8 +142,19 @@ export default function TvTopNav() {
      inside the brightest shape on the screen. Measured on the focused Home item: 6.7px of white
      above the glyphs and 3.46px below. Measuring the item's own top is the fix, and it stays
      correct if any future item introduces a third height. */
-  const place = (el: HTMLElement) =>
+  /* THE PILL ARRIVES WHITE AND ITS WORD DARKENS INTO IT — measured on the reference entering its bar:
+   * the pill whole on the first frame with the label under it pale, dark by the fourth (~100ms). Started
+   * here, in the focus event that places the pill, rather than from `is-armed`, which lands a frame or
+   * two later and left the pill blank for three frames. */
+  const inkRef = useRef<HTMLSpanElement>(null);
+  const shown = useRef(false);
+  const place = (el: HTMLElement) => {
+    if (!shown.current) {
+      shown.current = true;
+      inkRef.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 100, easing: 'linear' });
+    }
     setMark({ left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight });
+  };
 
   // Same sign-in gate the rail uses: My space (and the other gated routes) bounce to the
   // auth modal until there's a session, then land on the page.
@@ -266,6 +281,7 @@ export default function TvTopNav() {
           if (e.currentTarget.contains(e.relatedTarget as Node)) return;
           setItemsFocused(false);
           setMark(null);
+          shown.current = false;
           setArmed(false);
         }}
       >
@@ -277,7 +293,23 @@ export default function TvTopNav() {
           style={mark
             ? { transform: `translate(${mark.left}px, ${mark.top}px)`, width: `${mark.width}px`, height: `${mark.height}px`, opacity: 1 }
             : undefined}
-        />
+        >
+          {/* THE DARK INK IS A SECOND COPY OF THE LABELS, INSIDE THE PILL. The pill clips it and it is
+              slid back by exactly as far as the pill has travelled (same transition, same clock), so
+              it stands still under the moving pill: wherever the white is, the letters beneath it are
+              dark, and a word half-covered mid-glide is half dark — the reference's tab bar, measured.
+              Flipping the focused item's own colour instead put dark letters on the dark bar for as
+              long as the pill took to arrive, and white ones on the pill it was leaving. */}
+          <span
+            ref={inkRef}
+            className="tv-nav-ink"
+            style={mark ? { transform: `translate(${-mark.left}px, ${-mark.top}px)` } : undefined}
+          >
+            <span className="tv-nav-item tv-nav-search"><SearchGlyph /></span>
+            {ITEMS.map((it) => <span key={it.to} className="tv-nav-item">{t(it.key)}</span>)}
+            <span className="tv-nav-item tv-nav-profile">{t('myspace.title')}</span>
+          </span>
+        </span>
         <button
           type="button"
           className="tv-nav-item tv-nav-search"

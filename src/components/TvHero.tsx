@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MediaItem } from '../lib/types';
 import { useT, useGenre } from '../i18n/i18n';
 import { imgW, rasterLogo } from '../lib/img';
@@ -12,6 +12,9 @@ import { FadeBg, FadeImg } from './FadeArt';
 import { useBootDone } from '../lib/bootGate';
 import { usePlayer } from '../stores/player';
 import { whenQuiet } from '../lib/tvQuiet';
+import { usePreviewSound } from '../stores/previewSound';
+import { isPreviewSoundKey } from '../lib/tvKeys';
+import { GlanceIcon } from './glance/GlanceIcons';
 
 /* THE TV FEATURED BILLBOARD — the top of the TV home, and only the top.
  *
@@ -57,6 +60,21 @@ import { whenQuiet } from '../lib/tvQuiet';
 
 const HERO_MAX = 10;
 const ADVANCE_MS = 7000;
+
+/* ---- THE COPY'S MOTION, MEASURED OFF THE REFERENCE'S BILLBOARD (source video, 1080p30) -------------
+ *   FOCUS ARRIVES: the copy block rises as the synopsis opens under it — 207px of its 253 on the very
+ *   next frame, the rest over ~0.4s (cubic-bezier(0,.7,0,1) 460ms, 1.6% RMS) — and the synopsis fades
+ *   in under it on (.45,.7,.4,1) 420ms (2.0%).
+ *   FOCUS LEAVES: the copy is gone the next frame and the resting wordmark fades back in where it rests,
+ *   ~30% a frame later, whole by ~150ms.
+ *   A TRAILER STARTS: the description is let go the same way in reverse — it fades out, and then the
+ *   wordmark glides back down to the corner on the rise's own curve. */
+const COPY_GLIDE_MS = 460;
+const COPY_GLIDE_EASE = 'cubic-bezier(0, .7, 0, 1)';
+const COPY_IN_MS = 420;
+const COPY_IN_EASE = 'cubic-bezier(.45, .7, .4, 1)';
+const COPY_BACK_MS = 150;
+const COPY_FADE_OUT_MS = 220;
 
 /* ---- THE FEATURED CARD WAITS LONGER FOR ITS TRAILER, AND IT WAITS FOR THE REMOTE ---------------------
  * This card is where every session starts: the splash hands the remote over with focus already on it.
@@ -111,6 +129,16 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
 
   const [active, setActive] = useState(0);
   const [focused, setFocused] = useState(false);
+  /** The remote went down into the rows: the billboard goes out (see `is-away` in tv.css). State rather
+   *  than a class on the node — the same blur re-renders this section, and its className would win. */
+  const [away, setAway] = useState(false);
+  /** A preview is on screen (the engine's `has-trailer` on the stage, mirrored), and the copy's two
+   *  steps out of its way: `fading` lets the description go, `folded` takes its room away. */
+  const [trailerOn, setTrailerOn] = useState(false);
+  const [fading, setFading] = useState(false);
+  const [folded, setFolded] = useState(false);
+  const soundOn = usePreviewSound((s) => s.on);
+  const toggleSound = usePreviewSound((s) => s.toggle);
   const [logoFail, setLogoFail] = useState<Record<string, boolean>>({});
   // Two layers that swap which is in front, so a change dissolves rather than cuts. `b` starts
   // null — there is nothing to dissolve from on first paint.
@@ -209,6 +237,17 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
     );
     io.observe(el);
     return () => io.disconnect();
+  }, []);
+
+  /* The billboard comes back whenever the remote goes up into the bar from the rows (Left off a row's
+   * first card does that), because the page goes back to the top with it — see `is-away` below. */
+  useEffect(() => {
+    const back = (e: FocusEvent) => {
+      const t = e.target as Element | null;
+      if (t && !t.closest?.('main')) setAway(false);
+    };
+    document.addEventListener('focusin', back);
+    return () => document.removeEventListener('focusin', back);
   }, []);
 
   /* NOT UNDER THE PLAYER EITHER. The player is an overlay: the home screen stays mounted beneath it so
@@ -352,8 +391,68 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
        * larger first few seconds to fetch before the picture can appear. */
       maxRenditionPx: 1920,
       onFail: () => setTrailerFailed(true),
+      /* Sound is the store's, as on the rows (previewSound.ts): the red button turns it on and off, and
+       * the badge in the corner says which it is. */
+      sound: soundOn,
     },
   );
+
+  /* THE RED BUTTON, as on a row (TvSpotlight, THE RED BUTTON): only while the remote is on this card. */
+  useEffect(() => {
+    if (!focused || !heroTrailers) return;
+    const onKey = (e: KeyboardEvent) => { if (isPreviewSoundKey(e)) toggleSound(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [focused, heroTrailers, toggleSound]);
+
+  /* THE TRAILER, AS THE ENGINE SEES IT. It puts `has-trailer` on the stage the frame a picture is
+   * presented and takes it off at teardown; the copy follows it from here, in two steps (see the
+   * constants): the description fades, then the wordmark is let back down. */
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof MutationObserver === 'undefined') return;
+    const read = () => setTrailerOn(el.classList.contains('has-trailer'));
+    const mo = new MutationObserver(read);
+    mo.observe(el, { attributes: true, attributeFilter: ['class'] });
+    read();
+    return () => mo.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!trailerOn || !focused) { setFading(false); setFolded(false); return; }
+    setFading(true);
+    const id = window.setTimeout(() => setFolded(true), reduceMotion ? 0 : COPY_FADE_OUT_MS);
+    return () => window.clearTimeout(id);
+  }, [trailerOn, focused, reduceMotion]);
+
+  /* ---- THE COPY MOVES AS ONE BLOCK, ON THE COMPOSITOR --------------------------------------------
+   * The meta line and the synopsis take or give back their room at once (no `max-height` easing: that
+   * is a layout on every frame), and the block is then played from where it visibly was to where it now
+   * is — a transform, measured once per change of state (one `offsetHeight`, never per frame). The copy
+   * is anchored to the card's bottom edge, so the height it gained is exactly how far its top rose. */
+  const copyRef = useRef<HTMLDivElement>(null);
+  const copyLast = useRef<{ el: HTMLElement | null; h: number; open: boolean }>({ el: null, h: 0, open: false });
+  const copyOpen = focused && !folded;
+  useLayoutEffect(() => {
+    const el = copyRef.current;
+    const last = copyLast.current;
+    if (!el) { copyLast.current = { el: null, h: 0, open: copyOpen }; return; }
+    const h = el.offsetHeight;
+    copyLast.current = { el, h, open: copyOpen };
+    if (last.el !== el || last.open === copyOpen || reduceMotion) return;
+    const d = h - last.h;
+    if (copyOpen) {
+      if (d > 0) el.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: COPY_GLIDE_MS, easing: COPY_GLIDE_EASE });
+      el.querySelectorAll('.tv-hero-meta, .tv-hero-reveal').forEach((part) => {
+        part.animate([{ opacity: 0 }, { opacity: 1 }], { duration: COPY_IN_MS, easing: COPY_IN_EASE });
+      });
+    } else if (focused) {
+      // Folded for a trailer: the wordmark glides back down into the corner.
+      if (d < 0) el.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: COPY_GLIDE_MS, easing: COPY_GLIDE_EASE });
+    } else {
+      // Focus left: gone this frame, the resting wordmark back where it rests a frame later.
+      el.animate([{ opacity: 0 }, { opacity: 0, offset: 0.18 }, { opacity: 1 }], { duration: COPY_BACK_MS + 33, easing: 'linear' });
+    }
+  }, [copyOpen, focused, active, reduceMotion]);
 
   // The callouts read the title's detail only when something else already fetched it — see
   // useMetaCached. Declared above the early return so the hook order never changes.
@@ -404,13 +503,21 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
   return (
     <section
       ref={sectionRef}
-      className={`tv-hero${focused ? ' is-focused' : ''}`}
+      className={`tv-hero${focused ? ' is-focused' : ''}${away ? ' is-away' : ''}${fading ? ' is-fading' : ''}${folded ? ' is-folded' : ''}`}
       aria-label={t('ui.featured_title')}
       onFocus={() => setFocused(true)}
       onBlur={(e) => {
         if (e.currentTarget.contains(e.relatedTarget as Node)) return;
         setFocused(false);
+        /* GOING DOWN INTO THE ROWS, THE BILLBOARD GOES OUT. Measured on the reference: Down from its
+         * billboard to the first row and the billboard fades to black over ~0.3s while the page carries
+         * it up, so nothing of it is left behind the bar once the row has settled (ours left its last
+         * 48px there, bright, under the menu — the user, 2026-10-17). Up to the bar keeps it: the page
+         * is at the top again and the billboard is the screen. */
+        const to = e.relatedTarget as Node | null;
+        setAway(!!to && !!(e.currentTarget.compareDocumentPosition(to) & Node.DOCUMENT_POSITION_FOLLOWING));
       }}
+      onFocusCapture={() => setAway(false)}
     >
       <div className="tv-hero-stage" ref={stageRef}>
         {/* UNDERNEATH THE ART, first in the DOM so it needs no z-index of its own — the art layers
@@ -452,8 +559,15 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
             slide so they change with it. */}
         <Glance key={`glance-${active}`} item={cur} meta={curMeta} awards={focused} rise={calloutsGo} className="on-art" />
 
+        {/* THE SOUND BADGE, the row billboard's own (`.tv-spot-sound`): a speaker, crossed while the
+            preview is muted, in the corner while a trailer plays — the callouts step left to make room,
+            exactly as they do on a row. Decorative to a screen reader; red is what changes it. */}
+        <span className="tv-hero-sound" aria-hidden="true">
+          <span className="ic3"><GlanceIcon name={soundOn ? 'soundOn' : 'soundOff'} /></span>
+        </span>
+
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
-        <div className="tv-hero-copy" key={`copy-${active}`}>
+        <div className="tv-hero-copy" key={`copy-${active}`} ref={copyRef}>
           {/* `.tv-hero-tag` USED TO BE HERE — a standalone MOVIES / SERIES label above the wordmark.
               Removed: the meta line directly below already opens with the same word, so the card
               was saying "Movies" twice within about forty pixels, once in caps and once not. The
