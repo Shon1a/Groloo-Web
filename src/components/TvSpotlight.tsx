@@ -560,7 +560,7 @@ const warmDecoded = new WeakSet<HTMLImageElement>();
 const BILLBOARD_RENDITION = 'w780';
 const THUMB_RENDITION = 'w342';
 /** Wordmarks paint at 201px wide at most on the billboard; w500 was 2.5x that. */
-const LOGO_RENDITION = 'w300';
+export const LOGO_RENDITION = 'w300';
 
 /* ---- ONE PICTURE PER TITLE, AND THE BAKED CROP IS ONLY A POSITION IN IT --------------------------
  * The add-on rows glided and the movie rows did not, and the difference was not the rows: on an
@@ -631,7 +631,7 @@ function peekArtOf(it: MediaItem): PeekArt {
 
 /** A tile's picture, its one fallback, and where to sit it — the Tile's choice, in one place so the
  *  prefetch below asks for exactly the URL the tile will. */
-function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: string; own: boolean } {
+export function tilePictureOf(it: MediaItem): { src: string; fallbackSrc: string; pos: string; own: boolean } {
   /* THE BILLBOARD'S OWN PICTURE FIRST — see `sharedArtOf`. The pre-cut slice is now the fallback
    * for when that one fails to load, which is the role the backdrop used to play for it. */
   const one = sharedArtOf(it);

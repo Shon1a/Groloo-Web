@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { gridUrl, type GridDesc } from '../lib/grid';
@@ -43,19 +43,9 @@ export interface TvCatalogRowProps {
   desc: GridDesc;
   title: string;
   onSelect?: (m: MediaItem) => void;
-  /** What to say when the descriptor matches nothing. A catalogue page has one honest answer
-   *  ("no titles found") and needs no prop; a SEARCH has a better one — it can name the query that
-   *  found nothing — and the search page is the only caller that knows what was typed. */
-  emptyMessage?: ReactNode;
-  /** Titles to add to the row — the search page's answers from installed add-ons. Any that
-   *  the catalogue already returned (same IMDb id, or same title and year) are dropped, so what
-   *  is added is only what the add-ons found and TMDB did not. */
-  lead?: MediaItem[];
 }
 
-const sameKey = (m: MediaItem) => `${String(m.title || '').trim().toLowerCase()}|${String(m.year || '').slice(0, 4)}`;
-
-export default function TvCatalogRow({ desc, title, onSelect, emptyMessage, lead }: TvCatalogRowProps) {
+export default function TvCatalogRow({ desc, title, onSelect }: TvCatalogRowProps) {
   const t = useT();
   const { lang } = useLang();
   const [shown, setShown] = useState(FIRST);
@@ -88,22 +78,12 @@ export default function TvCatalogRow({ desc, title, onSelect, emptyMessage, lead
     if (short && q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
   }, [short, q.hasNextPage, q.isFetchingNextPage, q.fetchNextPage, q]);
 
-  const extra = useMemo(() => {
-    if (!lead?.length) return [];
-    const have = new Set(all.map(sameKey));
-    const imdbs = new Set(all.map((m) => m.imdb).filter(Boolean));
-    return lead.filter((m) => m.poster && !have.has(sameKey(m)) && !(m.imdb && imdbs.has(m.imdb)) && !imdbs.has(String(m.id)));
-  }, [lead, all]);
-
-  if (q.isLoading && !extra.length) {
+  if (q.isLoading) {
     return <div className="grid-loader"><span className="cat-loader" role="status" aria-label={t('grid.loading')} /></div>;
   }
-  if (!all.length && !extra.length) return <>{emptyMessage ?? <div className="grid-msg">{t('grid.no_titles')}</div>}</>;
+  if (!all.length) return <div className="grid-msg">{t('grid.no_titles')}</div>;
 
-  /* AFTER the catalogue's window, not before it: the best match for what was typed is TMDB's
-   * first result, and add-on answers placed in front pushed it off the billboard. The "+" card
-   * still ends the row; lengthening it inserts the next catalogue titles ahead of these. */
-  const items = [...all.slice(0, shown), ...extra];
+  const items = all.slice(0, shown);
   // The end card is offered while the catalogue still has anything left to give — either already
   // fetched and outside the window, or another page to ask for.
   const canMore = all.length > shown || q.hasNextPage;
@@ -112,7 +92,7 @@ export default function TvCatalogRow({ desc, title, onSelect, emptyMessage, lead
     <TvSpotlight
       items={items}
       title={title}
-      max={extra.length + shown}
+      max={shown}
       /* /api/browse answers with `titleLogo` now (`logos=1`, as the home payload does), so the
        * billboard on these three pages is no longer the one in the build showing a title in plain
        * type. This stays for what browse still omits — the textless backdrop and the synopsis —

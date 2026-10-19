@@ -185,11 +185,12 @@ const BACK_CODES = new Set([461, 10009]);
  * button, and Escape is not what anyone reaches for — but a Backspace that navigated out of the
  * search box mid-word instead of deleting a letter would be a far worse bug than the one it
  * fixes. Escape and the two platform codes need no such guard: none of them mean anything to a
- * text field, so they are checked before the target is. */
+ * text field, so they are checked before the target is. `data-tv-typing` marks a box that types
+ * without being a text field — the search page's own keyboard. */
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || !el.tagName) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable || !!el.closest('[data-tv-typing]');
 }
 
 export function isBackKey(e: KeyboardEvent): boolean {

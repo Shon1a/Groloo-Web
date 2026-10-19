@@ -617,6 +617,9 @@ const SEED: Record<string, string> = {
   'addons.resp_agree': 'I understand that installing and using this add-on is my own responsibility.',
   'addons.install_sync_on': 'Installed add-ons sync live to your other signed-in devices.',
   'addons.install_sync_off': 'Sign in to sync your add-ons across your devices.',
+  // TV search page: the on-screen keyboard's two wide keys (read aloud; they show glyphs).
+  'search.key_space': 'Space',
+  'search.key_delete': 'Delete',
   // Explore: results from installed add-ons' searchable catalogs
   'search.from_addons': 'From your add-ons',
   'search.addons_searching': 'Searching your add-ons…',

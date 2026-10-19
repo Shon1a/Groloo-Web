@@ -20,3 +20,23 @@ export function barItemHere(): HTMLElement | null {
   return document.querySelector<HTMLElement>('.tv-nav-item[data-current]')
     || document.querySelector<HTMLElement>('.tv-nav-item.active');
 }
+
+/* ---- AND WHERE IT ARRIVES IN THE PAGE, WHEN THE PAGE SAYS ------------------------------------------
+ *
+ * The other direction. Down out of the bar is normally geometry's: the nearest focusable below the item
+ * the remote is on. The search page is the one screen where that answer is wrong — its keyboard sits at
+ * the far left, the search icon near the middle, so nothing scores as "below" it and Down did nothing.
+ * A page that knows better registers where Down should land (the key or tile the remote last left);
+ * TvSpatialNav asks here first. The returned function un-registers, and only if it is still the one in
+ * place, so a page unmounting late cannot clear its successor's. */
+let entryFn: (() => HTMLElement | null) | null = null;
+
+export function setPageEntry(fn: () => HTMLElement | null): () => void {
+  entryFn = fn;
+  return () => { if (entryFn === fn) entryFn = null; };
+}
+
+export function pageEntry(): HTMLElement | null {
+  const el = entryFn?.() ?? null;
+  return el && el.isConnected ? el : null;
+}
