@@ -4363,11 +4363,11 @@
   .tv-spot-win, .tv-spot-poster, .tv-spot-rail,
   .tv-spot.is-open :is(.tv-spot-win, .tv-spot-poster, .tv-spot-rail) { transition: none; }
   .tv-shell .tv-spot-hero:focus-visible { transform: scale(1); }
-  /* The search bar keeps its WHITE FILL under this query and loses only the growing — the fill is
-     the whole of what says "the remote is in here", and dropping it would leave the one focus stop
-     on the page unmarked. Same trade as the billboard directly above. */
-  .tv-shell #explore .search { transition: none; }
-  .tv-shell #explore .search:focus-within { transform: scale(1); }
+  /* The search page's box, column and grid arrive at once. */
+  .tv-shell #explore .tv-srch-ring.is-armed,
+  .tv-shell #explore .tv-sk-in,
+  .tv-shell #explore .tv-sg-rows,
+  .tv-shell #explore .tv-sg-view { transition: none; }
   .tv-hero-layer { transition: none; }
   .tv-hero-copy { animation: none; }
   /* `.tv-hero-meta` joined this list when it started folding at rest — it now unfolds on focus on
@@ -6325,462 +6325,207 @@
 }
 
 /* ============================================================================================
-   THE FILTER ROW — search · type · genre · year · rating, on one line above the results.
+   THE SEARCH PAGE — keyboard and list on the left, posters on the right (components/TvSearch).
 
-   IT IS A ROW BECAUSE A PANEL WAS A SECOND SURFACE. The ☰ that used to sit in the search bar was
-   a focus stop whose entire job was to reveal more focus stops, and what it revealed covered the
-   grid it was filtering. Every control now sits one press from the field, and the results stay on
-   screen while they change — which is the only way to tell whether a filter did what you meant.
+   Laid out from the reference, Netflix's TV search measured frame by frame at 16:9: square keys
+   about 6% of the screen's height, six across with hairline gaps; a list of lines under them; four
+   portrait posters across, two rows and the top of a third on screen. The page is one screen tall
+   and never scrolls the document — the column and the grid each move their own contents.
 
-   EACH CONTROL WEARS ITS OWN LABEL, in the small caps this build already uses for a field name
-   (the settings rows). On a panel the label could sit in a left-hand
-   column shared by every row; in a line there is nowhere for it to go but above the control, and
-   it has to be there — four unlabelled pills reading "All", "Genre", "any year", "any rating" say
-   nothing about which axis each one moves.
-
-   ONE HEIGHT FOR EVERY CONTROL, and this is a reversal of what stood here before.
-   The row used to align to the bottom and let each control keep its natural height — a 58px search
-   plate beside ~40px chips — on the argument that different controls should look different. On a
-   panel seen from a sofa that argument loses to the simpler one: five boxes of five heights on one
-   line read as a row that failed to line up, not as five kinds of control. The KIND is already said
-   by what is inside each box (a caret, a caret pair, a magnifier) and by the label above it. So the
-   height is a single variable every control on the row is cut to, and the row aligns to the bottom
-   only so the labels sit on a common line above them. */
-.tv-shell #explore {
-  /* The one number the whole row is built from — field height. Everything else (radius, the
-     labels' leading, the horizontal padding) is derived or clamped alongside it, so the row can be
-     retuned for a panel size from here rather than in six places. */
-  --tv-filt-h: clamp(44px, 5.4vh, 60px);
-  --tv-filt-fill: rgba(255, 255, 255, .07);
-}
-/* THIS PAGE IS ONE ROW WITH A HEADER ABOVE IT, which is not quite what `.tv-onerow` assumes: it
-   centres its whole content, and centring a filter row means the controls drift down the screen as
-   the row under them changes height. The filters belong at the top — they are the header — and the
-   results take the space that is left and centre in THAT. So the section stays the full-height flex
-   column `.tv-onerow` makes it, and the centring moves one level in.
-   `min-height: 0` on the body is the usual flex release: without it a flex child refuses to shrink
-   below its content, which is how a page that is supposed to fit the screen ends up scrolling
-   anyway. */
-.tv-shell #explore.tv-onerow { justify-content: flex-start; }
-.tv-shell #explore.tv-onerow .explore-body {
-  flex: 1 1 auto;
-  min-height: 0;
+   Sized by the height first and capped by the width, so a narrow window (the dev browser) shrinks
+   the posters rather than pushing the fourth column off the edge. The whole composition is centred:
+   the reference's keyboard sits right of an icon rail this build does not have. */
+.tv-shell #explore.tv-srch {
+  --sk-key: clamp(30px, min(6.2vh, 3.5vw), 68px);
+  --sk-gap: 2px;
+  --sk-w: calc(var(--sk-key) * 6 + var(--sk-gap) * 5);
+  --srch-gap: clamp(28px, 3.4vw, 72px);
+  --sg-gap: clamp(6px, .55vw, 12px);
+  /* A poster's width: 0.7 of a height that fits two rows and a peek, or a quarter of what is left. */
+  --sg-w: min(calc(39vh * .7), calc((100vw - var(--page-pad) * 2 - var(--sk-w) - var(--srch-gap) - var(--sg-gap) * 3) / 4));
+  --sk-ring: clamp(2px, .32vh, 4px);
+  position: relative;
   display: flex;
-  flex-direction: column;
   justify-content: center;
+  gap: var(--srch-gap);
+  height: calc(100vh - var(--tv-topbar-pad));
+  min-height: 0;
+  padding: clamp(10px, 2.4vh, 30px) var(--page-pad) 0;
+  overflow: hidden;
+  box-sizing: border-box;
 }
-.tv-shell #explore .tv-filterbar {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: clamp(10px, 1.1vw, 20px);
-  /* POSITIONED, BUT NOT STICKY. It was sticky — inherited from the search plate it replaced, so
-     the controls stayed reachable while a long grid of results scrolled under them. The results
-     are one billboard row now and the page is sized to the screen (`.tv-onerow` below), so there
-     is nothing to scroll and nothing to stick to: left sticky, the row simply rode up into the top
-     bar on the last few pixels of overscroll and printed its labels through the nav's.
-     `relative` stays, because the z-index is doing a second job — the chip menus and the genre
-     board drop out of this row and over the billboard beneath it. */
+
+/* ---- THE COLUMN: keys, then the list ------------------------------------------------------- */
+.tv-shell #explore .tv-sk {
   position: relative;
-  z-index: 60;
-  margin: clamp(10px, 2vh, 26px) 0 clamp(18px, 2.6vh, 34px);
+  flex: 0 0 var(--sk-w);
+  width: var(--sk-w);
+  height: 100%;
+  overflow: hidden;
 }
-/* The search field takes the slack; each menu is a fixed box rather than a chip shrink-wrapped to
-   whatever it currently says. A chip that is as wide as its own value RESIZES when the value
-   changes — pick "2019+" after "any year" and the control shrinks and drags the two beside it
-   sideways, which on a row that is meant to sit still is the worst kind of movement: it happens
-   after the press, to something other than what was pressed. A fixed cell also lets the caret park
-   at the right edge, where it means "this opens" rather than trailing the word like punctuation. */
-.tv-shell #explore .tv-filt {
+/* The lines further down fade out, as the reference's do. */
+.tv-shell #explore .tv-sk::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 10vh;
+  background: linear-gradient(rgba(0, 0, 0, 0), #000);
+  pointer-events: none;
+}
+/* The one positioned box between the keys and the column, so every offset TvSearch reads is
+   measured against it; it is also what moves when the list scrolls. */
+.tv-shell #explore .tv-sk-in {
+  position: relative;
+  transition: transform .48s cubic-bezier(.25, .7, .5, 1);
+  will-change: transform;
+}
+.tv-shell #explore .tv-sk-keys {
+  display: grid;
+  grid-template-columns: repeat(6, var(--sk-key));
+  grid-auto-rows: var(--sk-key);
+  gap: var(--sk-gap);
+}
+.tv-shell #explore .tv-sk-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, .08);
+  color: rgba(255, 255, 255, .62);
+  font-size: calc(var(--sk-key) * .42);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+}
+.tv-shell #explore .tv-sk-wide { grid-column: span 3; }
+.tv-shell #explore .tv-sk-key svg { display: block; }
+.tv-shell #explore .tv-sk-space { width: calc(var(--sk-key) * .9); height: calc(var(--sk-key) * .225); }
+.tv-shell #explore .tv-sk-del { width: calc(var(--sk-key) * 1.12); height: calc(var(--sk-key) * .53); }
+.tv-shell #explore .tv-sk-list {
   display: flex;
   flex-direction: column;
-  gap: clamp(5px, .7vh, 9px);
-  flex: 0 0 auto;
-  width: clamp(130px, 10.5vw, 190px);
-  min-width: 0;
-  /* Positioned so the cells paint ABOVE the travelling pill. Left unpositioned they are ordinary
-     flex items, which the browser paints in an earlier phase than ANY positioned element — the
-     pill would cover the very label and value it is meant to be sitting behind. (Same fix, same
-     reason, as `.tv-nav-item` and `.tv-chipmenu-opt`.) */
-  position: relative;
-  z-index: 1;
+  margin-top: calc(var(--sk-key) * .45);
+  /* Room under the last line, so it can scroll up clear of the fade when the remote reaches it. */
+  padding-bottom: calc(var(--sk-key) * 2);
 }
-/* ---- THE TRAVELLING PILL ------------------------------------------------------------------
-   One white shape that slides between the five fields, exactly as the top bar's does — the whole
-   argument is written against `.tv-nav-mark`, and it applies here for the same reason: a per-field
-   fill can only cut, and there is then nothing moving between Genre and Type for the eye to
-   follow. Placed and sized from whichever control has focus (see TvExplore's `place`), in the
-   row's own coordinates — the row is `position: sticky`, which makes it the offsetParent.
-   Transform and size only, on one element nothing else's layout depends on, so a step never
-   reflows the row. */
-.tv-shell #explore .tv-filt-mark {
+.tv-shell #explore .tv-sk-item {
+  display: block;
+  width: 100%;
+  height: calc(var(--sk-key) * .92);
+  margin: 0;
+  padding: 0 calc(var(--sk-key) * .22);
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  text-align: left;
+  font-size: calc(var(--sk-key) * .4);
+  color: rgba(255, 255, 255, .55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+/* The line whose results are on screen. */
+.tv-shell #explore .tv-sk-item.is-on { color: #fff; font-weight: 600; }
+.tv-shell #explore .tv-sk-key:focus,
+.tv-shell #explore .tv-sk-item:focus { color: #fff; }
+.tv-shell #explore .tv-sk-key:focus-visible,
+.tv-shell #explore .tv-sk-item:focus-visible { outline: none; }
+/* THE WHITE BOX — one element for the whole page, gliding from key to key, line to line and poster
+   to poster (TvSearch places it). An outline rather than this build's white fill, because that is the
+   reference's mark here: on a board of thirty-eight keys a filled key reads as a pressed one.
+   It glides on the top bar's pill clock — 480ms on (.25, .7, .5, 1), measured from the reference's
+   pill (see .tv-nav-mark) — and so do the column's and the grid's scrolls, so a move that scrolls
+   lands the box and its target together. */
+.tv-shell #explore .tv-srch-ring {
   position: absolute;
   top: 0;
   left: 0;
+  z-index: 2;
   width: 0;
   height: 0;
+  box-sizing: border-box;
+  border: var(--sk-ring) solid #fff;
+  border-radius: 4px;
   opacity: 0;
-  border-radius: 999px;
-  background: #fff;
   pointer-events: none;
-  z-index: 0;
 }
-/* Armed one frame after the pill is first placed, so arriving on the row is a placement rather
-   than a slide in from the row's left edge. */
-.tv-shell #explore .tv-filterbar.is-armed .tv-filt-mark {
+.tv-shell #explore .tv-srch-ring.is-tile { border-radius: 6px; }
+.tv-shell #explore .tv-srch-ring.is-on { opacity: 1; }
+.tv-shell #explore .tv-srch-ring.is-armed {
   transition:
-    transform .28s cubic-bezier(.2, .7, .2, 1),
-    width .28s cubic-bezier(.2, .7, .2, 1),
-    height .28s cubic-bezier(.2, .7, .2, 1);
-}
-/* Genre and rating carry the longest values ("Sci-Fi & Fantasy · 2", "any rating"), year the
-   shortest — so the two that need it get a wider cell rather than every cell being sized for the
-   worst case and the row losing that width from the search field. */
-.tv-shell #explore .tv-filt-wide { width: clamp(152px, 12.5vw, 225px); }
-/* After the two above, so the flexible cell's own sizing is the last word on it.
-   THE BASIS IS SMALL AND THE GROWTH IS UNCAPPED, and the two halves of that do different jobs. The
-   basis is what the row is measured against for wrapping, and at 34vw it was too much: the four
-   menus wanted ~55vw between them, so rating had nowhere to go and dropped to a second line, taking
-   its label with it and pushing the grid down by a whole control. Growth happens after the line is
-   settled and cannot cause a wrap, so the field can then take every remaining pixel — which is what
-   fills the plate out to meet the filter group instead of leaving a dead lane between them. The
-   menus end up hard against the right edge for free: there is no slack left for them to sit in. */
-.tv-shell #explore .tv-filt-search { flex: 1 1 clamp(260px, 27vw, 480px); width: auto; min-width: 220px; }
-.tv-shell #explore .tv-filt-k {
-  /* SENTENCE CASE, NOT SMALL CAPS. Tracked-out uppercase is this build's voice for a section
-     heading, and these are not headings — they are field names, sitting a few pixels above a
-     control that says the same kind of thing in the same size. At 800/.18em they read as the
-     louder of the two, which is backwards: the label is the quiet half of the pair. */
-  font-size: clamp(12px, 1.45vh, 16px);
-  font-weight: 500;
-  letter-spacing: .01em;
-  color: rgba(255, 255, 255, .55);
-  /* Never the thing the eye lands on: it names a control that is itself the loud object when the
-     remote arrives. Padding-left aligns it with the field's own text rather than its pill edge. */
-  padding-left: clamp(10px, .8vw, 16px);
-  white-space: nowrap;
+    transform .48s cubic-bezier(.25, .7, .5, 1),
+    width .48s cubic-bezier(.25, .7, .5, 1),
+    height .48s cubic-bezier(.25, .7, .5, 1),
+    border-radius .48s cubic-bezier(.25, .7, .5, 1);
 }
 
-/* ---- THE FOCUS INDICATOR IS THE PILL, AND THE FIELDS GET OUT OF ITS WAY --------------------
-   The row used to say "the remote is here" the way the title screen's chips do: fill the control
-   white and swell it 6%. On a title screen that is one control alone in a corner, and it is right.
-   In a row of five it is wrong twice — the swell shoves 20px of white into the gap beside a
-   neighbour that has not moved, and the fill can only CUT from one field to the next, so walking
-   the row read as five things blinking rather than one selection being carried across it.
-   So this row borrows the top bar's answer instead: ONE white pill that slides (see `.tv-filt-mark`
-   below and TvTopNav, which made the same argument for the same reason). Each field then has only
-   to stop drawing its own fill while it is the focused one, and flip its ink to sit on the white.
-   `background: transparent`, NOT the row's tint: the pill is behind the field, so anything opaque
-   in front of it hides the very thing that arrived. */
-.tv-shell #explore .tv-chipmenu .tv-chipmenu-btn:focus-visible,
-.tv-shell #explore .tv-chipmenu.is-open .tv-chipmenu-btn {
-  outline: none;
-  background: transparent;
-  border-color: transparent;
-  color: #0b0b0b;
-  transform: none;
-}
-/* AND THE OPTIONS' INK FLIPS TOO. The travelling white bar is unscoped and slides here already;
-   the rule that turns the text under it dark is `.tv-det`-scoped, so without this the bar would
-   arrive under grey-on-white and the option would read as blank. `:focus` rather than
-   `:focus-visible` for the reason written against the .tv-det copy — the bar is placed from the
-   `focus` event, so both halves of one indicator must key off the same thing. */
-.tv-shell #explore .tv-chipmenu .tv-chipmenu-opt:focus {
-  outline: none;
-  border-radius: 10px;
-  color: #0b0b0b;
-}
-/* The chip grows about its own left edge on this page (the title screen's grows about the right,
-   because it is right-aligned against a column). A control at the head of a row must grow away
-   from the edge it is aligned to, or the zoom reads as a slide. */
-.tv-shell #explore .tv-chipmenu-btn { transform-origin: 0% 50%; }
-
-/* ---- ONE FIELD, FOUR TIMES -----------------------------------------------------------------
-   The two menu components are drawn as the same box as the search plate beside them: same height,
-   same radius, same fill, caret parked at the right edge. Only here — the title screen's chips are
-   a control floating over artwork and keep their outline and their near-black fill, which is what
-   makes them legible over a still. On this page they sit on a flat background in a row of four, so
-   the outline is four traced shapes doing what one shared fill does more quietly.
-   The fill is a tint of white rather than a fixed grey, so it holds its relationship to the page
-   whatever is behind it — the same reasoning as the chip's own background note, reached the other
-   way round because here there is never artwork underneath. */
-.tv-shell #explore .tv-chipmenu-btn,
-.tv-shell #explore .tv-multi-btn {
-  width: 100%;
-  height: var(--tv-filt-h);
-  justify-content: space-between;
-  gap: 10px;
-  padding: 0 clamp(12px, .9vw, 18px);
-  border-color: transparent;
-  background: var(--tv-filt-fill);
-  border-radius: 999px;
-  font-size: clamp(15px, 1.05vw, 20px);
-  /* The value can be longer than the cell ("Sci-Fi & Fantasy"); it clips at the padding rather
-     than widening the control, which is the whole point of a fixed cell. */
-  overflow: hidden;
-}
-.tv-shell #explore .tv-chipmenu-btn:hover { background: rgba(255, 255, 255, .12); }
-
-/* ---- THE GENRE BOARD (TvMultiMenu) --------------------------------------------------------
-   Everything above applies to its chip too — it is deliberately the same object as the three
-   single-select ones beside it, and the only thing that says otherwise is what opens underneath.
-   The behaviour argument for a board rather than a list is in TvMultiMenu.tsx. */
-.tv-shell #explore .tv-multi { position: relative; z-index: 300; flex: 0 0 auto; }
-/* NO FILL, NO BORDER, NO PADDING, NO FONT-SIZE HERE — the shared field block above owns all four,
-   and this block used to restate them. It is a copy of `.tv-chipmenu-btn`'s own declarations (this
-   component was written against that chip), so it sat LATER in the file at the same specificity and
-   silently won: the genre control kept the title screen's near-black fill and hairline outline while
-   the three chips beside it took the row's tint, and the one that looked different was the one that
-   opens a different thing — which reads as meaning something and does not. */
-.tv-shell #explore .tv-multi-btn {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid transparent;
-  color: #e8e8e8;
-  font: inherit;
-  cursor: pointer;
-  white-space: nowrap;
-  transform: scale(1);
-  transform-origin: 0% 50%;
-  transition: background-color .18s ease, color .18s ease,
-              transform .2s cubic-bezier(.2, .7, .2, 1);
-}
-/* A FILTER THAT IS DOING SOMETHING LOOKS DIFFERENT FROM ONE THAT IS NOT, at rest and without
-   being focused. Four chips that read "All / Genre / any year / any rating" and four that are
-   actually filtering must not be the same object, or the only way to find out what the grid is
-   showing is to open each one in turn. A brighter border and full-strength ink is enough — this
-   is a resting state, and a filled chip here would compete with the focused one.
-   IT IS THE FILL THAT LIFTS, NOT A BORDER, since the row's fields no longer draw one — a single
-   outlined box among four filled ones would read as a different kind of control rather than as the
-   same control with something in it. */
-.tv-shell #explore .tv-multi-btn.has-value {
-  background: rgba(255, 255, 255, .14);
-  color: #fff;
-}
-.tv-shell #explore .tv-multi-btn:hover { background: rgba(255, 255, 255, .12); color: #fff; }
-/* Same bargain as the chips beside it: the pill draws the white, this gets out of the way and
-   flips its ink. `transparent` here also has to beat `.has-value`'s tint above, which it does on
-   the pseudo-class — a genre already chosen must not paint over the pill that just arrived. */
-.tv-shell #explore .tv-multi .tv-multi-btn:focus-visible,
-.tv-shell #explore .tv-multi.is-open .tv-multi-btn {
-  outline: none;
-  background: transparent;
-  border-color: transparent;
-  color: #0b0b0b;
-  transform: none;
-}
-/* The chevron, drawn rather than typed — two borders rotated, so it cannot be a missing glyph on
-   a set whose system font is not ours. Flips when the board is open, as the chip menu's does. */
-.tv-shell #explore .tv-multi-chev {
-  width: .42em;
-  height: .42em;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: translateY(-.12em) rotate(45deg);
-  transition: transform .2s ease;
-}
-.tv-shell #explore .tv-multi.is-open .tv-multi-chev { transform: translateY(.08em) rotate(225deg); }
-
-/* THE BOARD ITSELF. Anchored to the chip's left edge and sized by its columns rather than by the
-   chip, because it is a surface in its own right — the reference's genre panel is wider than the
-   control that opens it and that is what makes it readable at a distance.
-   `max-width` against the viewport so a long genre list on a 4:3 panel cannot run off the right;
-   the columns wrap inside it before that happens. */
-.tv-shell #explore .tv-multi-board {
-  position: absolute;
-  top: calc(100% + 10px);
-  left: 0;
-  z-index: 320;
-  padding: clamp(14px, 1.8vh, 22px) clamp(16px, 1.4vw, 26px);
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, .12);
-  background: rgba(10, 10, 10, .97);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, .7);
-  max-width: min(76vw, 900px);
-}
-.tv-shell #explore .tv-multi-cols {
+/* ---- THE GRID ------------------------------------------------------------------------------ */
+.tv-shell #explore .tv-sg {
   display: flex;
-  gap: clamp(18px, 2.2vw, 44px);
-  align-items: flex-start;
-}
-.tv-shell #explore .tv-multi-col { display: flex; flex-direction: column; min-width: clamp(140px, 12vw, 220px); }
-/* THE OPTIONS DRAW NO RING AND NO TRAVELLING BAR. The chip menu's sliding highlight is a vertical
-   idea — one bar, one axis — and on a board the remote also moves sideways, so it would have to
-   jump columns rather than travel, which is the "two things blinking" that bar exists to avoid.
-   A focused option simply inverts, which is this build's other way of saying the same thing and
-   is what the option rows in every other menu already do. */
-.tv-shell #explore .tv-multi-opt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: rgba(255, 255, 255, .74);
-  font: inherit;
-  font-size: clamp(15px, 1.05vw, 20px);
-  text-align: left;
-  padding: clamp(7px, .9vh, 11px) clamp(8px, .6vw, 12px);
-  cursor: pointer;
-  transition: background-color .16s ease, color .16s ease;
-}
-.tv-shell #explore .tv-multi-opt:hover { color: #fff; }
-.tv-shell #explore .tv-multi-opt.on { color: #fff; }
-.tv-shell #explore .tv-multi .tv-multi-opt:focus {
-  outline: none;
-  background: #fff;
-  color: #0b0b0b;
-}
-/* THE TICK HOLDS ITS SPACE WHETHER OR NOT IT IS DRAWN — see the note at the markup. Two borders
-   again rather than a ✓, for the same missing-glyph reason as the chevron. The box is sized in em
-   so it tracks the option's own type across both TV resolutions. */
-.tv-shell #explore .tv-multi-tick {
+  flex-direction: column;
   flex: 0 0 auto;
-  width: .58em;
-  height: .95em;
-  border-right: 2.5px solid currentColor;
-  border-bottom: 2.5px solid currentColor;
-  transform: rotate(45deg) translate(-.06em, -.06em);
-  opacity: 0;
-  transition: opacity .16s ease;
+  width: calc(var(--sg-w) * 4 + var(--sg-gap) * 3);
+  height: 100%;
+  min-width: 0;
 }
-.tv-shell #explore .tv-multi-opt.on .tv-multi-tick { opacity: 1; }
-.tv-shell #explore .tv-multi-clear {
+.tv-shell #explore .tv-sg-head {
+  flex: 0 0 auto;
+  margin: 0 0 clamp(10px, 1.8vh, 22px);
+  font-size: var(--sp-title);
+  font-weight: 600;
+  line-height: 1.2;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tv-shell #explore .tv-sg-note { font-size: .7em; font-weight: 400; color: var(--text-muted); }
+.tv-shell #explore .tv-sg-view {
+  position: relative;
+  /* Basis 0: the rows inside are many screens tall, and an `auto` basis let them squeeze the heading. */
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  transition: opacity .2s linear;
+}
+/* Dimmed while what is on screen is about to change: the remote resting on a line, or new results
+   on their way. */
+.tv-shell #explore .tv-sg.is-dim .tv-sg-view,
+.tv-shell #explore .tv-sg-view.is-stale { opacity: .4; }
+.tv-shell #explore .tv-sg-rows {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, var(--sg-w));
+  gap: var(--sg-gap);
+  transition: transform .48s cubic-bezier(.25, .7, .5, 1);
+  will-change: transform;
+}
+/* Portrait at 0.7, the reference's box art. `padding-bottom` and not `aspect-ratio`, which the set's
+   Chromium 87 does not have. */
+.tv-shell #explore .tv-sg-tile {
+  position: relative;
   display: block;
-  margin: clamp(10px, 1.4vh, 16px) 0 0 auto;
+  width: 100%;
+  height: 0;
+  margin: 0;
+  padding: 0 0 142.86%;
   border: 0;
-  border-radius: 999px;
-  background: none;
-  color: rgba(255, 255, 255, .6);
-  font: inherit;
-  font-size: clamp(13px, .95vw, 17px);
-  padding: clamp(6px, .8vh, 10px) clamp(12px, 1vw, 18px);
+  border-radius: 6px;
+  overflow: hidden;
   cursor: pointer;
 }
-.tv-shell #explore .tv-multi .tv-multi-clear:focus {
-  outline: none;
-  background: #fff;
-  color: #0b0b0b;
+.tv-shell #explore .tv-sg-tile:focus-visible { outline: none; }
+.tv-shell #explore .tv-sg-view > .cat-loader {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
 }
-
-/* ---- SEARCH ---------------------------------------------------------------------------------
-   The field is a focus stop on this page only (see Explore.tsx), which makes a visible focus
-   state load-bearing: `.search input` is borderless by design, so with the remote inside it
-   nothing on screen said so. */
-/* ---- THE BAR IS THE FOCUS INDICATOR, AND THERE IS NO RING ----------------------------------
-   THE WHOLE BAR FILLS IN, exactly as a nav item's pill does: solid white, dark ink, nothing else
-   changed. That is this build's one sentence for "the remote is here", and the search field had
-   been saying it a different way — a 3px outline floating 6px off a borderless input, which is
-   the shape you reach for when a control cannot fill (a poster, a slider row) and which reads as
-   a second box drawn around the first when it can.
-   ON THE BAR, NOT ON THE INPUT. The input is a transparent 1100px strip inside a rounded plate;
-   filling it would paint a white rectangle with dark corners showing through the plate's radius.
-   The plate is the thing with the shape, so the plate is the thing that fills — and `:focus-within`
-   is what lets a container answer for the field inside it.
-   AND A LITTLE ZOOM WITH IT. A colour change alone is static, and this bar is the only stop on the
-   page: the movement is what the eye catches from across a room, the same way the row billboard
-   grows when the remote reaches it. 2% on a 1100px bar is ~22px — a lift rather than a lunge. */
-/* THE PLATE NOW LIVES IN THE ROW, so the three things that made it a standalone bar are undone
-   here rather than in app.css: it was `position: sticky` (the ROW is sticky now — two sticky
-   boxes, one inside the other, is one of them not sticking), `margin: 6px auto 34px` (auto
-   margins centred it in a flex cell that is already exactly its width) and a fixed 680px
-   (the cell is the flexible one on the row and the plate should fill whatever it gets). */
-.tv-shell #explore .tv-filt-search .search {
-  position: static;
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  /* Cut to the row's own field height and shape, so the plate and the four menus beside it are one
-     object repeated rather than five near-misses. */
-  height: var(--tv-filt-h);
-  padding: 0 clamp(12px, .9vw, 18px);
-  border-radius: 999px;
-  border-color: transparent;
-  background: var(--tv-filt-fill);
-  /* THE BLUR AND THE SHADOW GO, and they are why the pill looked like it was doing something
-     different here. Both are left over from the plate being a standalone floating bar. A
-     backdrop-filter paints the pill's white through 18px of blur and a saturate, so the shape that
-     slid in arrived soft-edged and slightly off-colour against the crisp one that had just left a
-     chip; the drop shadow then drew a second, darker outline around it that no chip has. The pill
-     is the same object on all five fields, so all five have to be the same kind of surface.
-     `none` rather than deleting app.css's declaration — that rule also dresses the website's
-     search bar, where a floating plate is exactly right. */
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: none;
-  /* And the same transition the chips run, so the fill under the pill fades out over the same
-     period the pill takes to arrive. It was .22s here against their .18s, with `transform` still in
-     the list for a zoom that no longer happens. */
-  transition: background-color .18s ease, border-color .18s ease, color .18s ease;
-}
-/* THE MAGNIFIER SITS AT THE FAR END, not in front of the placeholder. Leading, it is an icon the
-   eye has to pass to reach the word that actually says what the field is for, and it pushes that
-   word off the left edge the three labels above are aligned to. Trailing, the field starts with
-   its own text like every other control on the row and the icon becomes what it is — a mark on the
-   end of the plate saying which key finishes the job. `order` rather than markup: the same JSX
-   renders the website's bar, where the icon leads and should keep leading. */
-.tv-shell #explore .tv-filt-search .search .search-lead { order: 3; }
-/* NO TRANSFORM LEFT TO REST AT. This used to hold `scale(1)` so the 2% focus swell had an identity
-   to return to without handing back its compositor layer mid-type; the swell is gone (the pill
-   moves instead), and a transform kept for an animation that no longer exists is just a layer this
-   row pays for on every repaint. The transition lives on the `.tv-filt-search` rule above, matched
-   to the chips'. */
-.tv-shell #explore .search {
-  max-width: min(1100px, 92vw);
-}
-/* The ink fades rather than snapping, on the chips' own timing — the pill takes 280ms to arrive and
-   a placeholder that turned black the instant the key was pressed was the other half of why this
-   field read as a different kind of control from the four beside it. */
-.tv-shell #explore .search input,
-.tv-shell #explore .search .search-lead {
-  transition: color .18s ease;
-}
-.tv-shell #explore .search input {
-  font-size: clamp(16px, 2vh, 22px);
-  scroll-margin: calc(var(--tv-topnav-h) + 20px) 44px 0;
-}
-/* THE RING IS GONE. Restated rather than deleted: app.css gives every input `outline:none` but the
-   TV shell puts a ring on anything focusable at the foot of this file, so `:focus-visible` here
-   has to say no explicitly or the generic rule paints one over the white plate. */
-.tv-shell #explore .search input:focus-visible { outline: none; }
-/* `.tv-filt-search` is in the selector to outscore the resting fill set on the plate in the row
-   block above — same id, one more class — and not because the state belongs to the row. Without it
-   the plate would keep its 7% tint with the remote inside it and the field would be the one control
-   on the page that does not say where the remote is.
-   THE WHITE IS THE TRAVELLING PILL NOW, so this clears the plate rather than filling it, and the
-   2% swell goes with it: the pill arrives from the chip beside it and the plate must not also grow
-   under it. The ink rules below are unchanged — they key off the same `:focus-within` and are what
-   makes the placeholder and the magnifier legible once the white is behind them. */
-.tv-shell #explore .tv-filt-search .search:focus-within {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-/* THE INK FLIPS WITH THE FILL, and all of it has to: the placeholder, the magnifier and the filter
-   glyph are all painted in white-with-alpha at rest, which on a white plate is nothing at all.
-   Placeholder at 55% black rather than the same 42% white inverted — grey text on white needs more
-   contrast than grey text on black to read as the same weight from a sofa. */
-.tv-shell #explore .search:focus-within input { color: #0b0b0b; }
-.tv-shell #explore .search:focus-within input::placeholder { color: rgba(0, 0, 0, .55); }
-.tv-shell #explore .search:focus-within .search-lead { color: rgba(0, 0, 0, .62); }
-.tv-shell #explore .search:focus-within .filter-toggle { color: rgba(0, 0, 0, .62); }
-/* THE FILTER GLYPH IS ITSELF A STOP, and it lives INSIDE the bar — so walking onto it keeps the
-   plate white (it is still focus-within) while the shared ring paints white-on-white and vanishes.
-   The ring flips with the ink for the same reason the ink flips with the fill. */
-.tv-shell #explore .search:focus-within .filter-toggle:focus-visible { outline-color: rgba(0, 0, 0, .62); }
-.tv-shell #explore .pill-btn { font-size: clamp(13px, 1.6vh, 17px); padding: clamp(8px, 1.1vh, 12px) clamp(14px, 1.3vw, 20px); }
-.tv-shell #explore .pill-btn:focus-visible { outline: none; background: #fff; border-color: #fff; color: #0b0b0b; }
-
-/* THE SLIDER ROW IS THE FOCUS STOP, NOT THE SLIDER (see Explore.tsx). The ring goes on the row so
-   it reads as "Left and Right change this", and the range inside keeps its own appearance. */
-.tv-shell #explore .fp-slider { border-radius: 10px; padding: 6px 10px; }
-.tv-shell #explore .fp-slider:focus-visible {
-  outline: 3px solid var(--tv-ring);
-  outline-offset: 2px;
-  background: rgba(255, 255, 255, .08);
-}
-.tv-shell #explore .fp-out { font-size: clamp(13px, 1.6vh, 17px); }
+.tv-shell #explore .tv-sg-empty { margin: 0; font-size: var(--sp-meta); color: var(--text-muted); }
 
 @media (max-height: 820px) {
   .tv-shell .auth-card.cfg-wide { padding: 24px 26px 20px; }

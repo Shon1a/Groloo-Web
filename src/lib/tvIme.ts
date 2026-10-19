@@ -41,18 +41,6 @@ type OkKeyEvent = Pick<KeyboardEvent, 'key' | 'keyCode' | 'altKey' | 'ctrlKey' |
 const OPEN_COOLDOWN = 700;
 let lastOpen = -Infinity;
 
-/* Set for the duration of the blur/focus cycle so a focus-tracking parent can tell "the field is
- * being re-entered" from "the remote has left the row". The Explore filter row draws its selection
- * as one travelling pill measured from whichever control has focus, and it clears the pill on a
- * blur that leaves the row — without this the pill would blink off and back on every time someone
- * asked for the keyboard. Synchronous throughout, so a plain flag is enough. */
-let refocusing = false;
-
-/** True while `openTvKeyboard` is re-entering a field, i.e. a blur/focus that is not a real move. */
-export function isImeRefocus(): boolean {
-  return refocusing;
-}
-
 /**
  * Is this the remote's OK button (or a keyboard's Enter)?
  *
@@ -78,15 +66,10 @@ export function openTvKeyboard(el: HTMLInputElement | HTMLTextAreaElement | null
   if (now - lastOpen < OPEN_COOLDOWN) return;
   lastOpen = now;
 
-  refocusing = true;
-  try {
-    if (document.activeElement === el) el.blur();
-    el.focus({ preventScroll: true });
-    /* Caret to the end. `setSelectionRange` throws on input types that have no selection (number,
-     * email on some engines) — the keyboard still comes up, so this must not be able to stop it. */
-    try { const n = el.value.length; el.setSelectionRange(n, n); } catch { /* no selection here */ }
-    el.click();
-  } finally {
-    refocusing = false;
-  }
+  if (document.activeElement === el) el.blur();
+  el.focus({ preventScroll: true });
+  /* Caret to the end. `setSelectionRange` throws on input types that have no selection (number,
+   * email on some engines) — the keyboard still comes up, so this must not be able to stop it. */
+  try { const n = el.value.length; el.setSelectionRange(n, n); } catch { /* no selection here */ }
+  el.click();
 }

@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { pageY, pageMax, setPageY, beginPageMove, endPageMove, usingTransformScroll, flipScroll, flipTo, flipOffset, stopFlip } from '../lib/tvPageScroll';
 import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch, firstRow } from '../lib/tvRowRegistry';
 import { setActiveRowIndex } from '../lib/tvRowWindow';
-import { barItemHere } from '../lib/tvBar';
+import { barItemHere, pageEntry } from '../lib/tvBar';
 import { onBootRevealing } from '../lib/bootGate';
 
 /* REMOTE / D-PAD NAVIGATION — mounted only in the `--mode tv` build. A TV has no pointer, so
@@ -631,7 +631,8 @@ export default function TvSpatialNav() {
     const pageStart = (): HTMLElement | null =>
       document.querySelector<HTMLElement>('.tv-hero-scrim')
       || document.querySelector<HTMLElement>('.tv-spot-hero')
-      || document.querySelector<HTMLElement>('.poster');
+      || document.querySelector<HTMLElement>('.poster')
+      || pageEntry();
     const nothingFocused = () => !document.activeElement || document.activeElement === document.body;
     const trySeed = () => {
       if (!nothingFocused()) return;
@@ -1068,6 +1069,15 @@ export default function TvSpatialNav() {
        * top of a page ever grows. At either end of the bar Left/Right now do nothing, which is
        * what a tab strip does. UP and DOWN are untouched: leaving the bar vertically is a real
        * move, and the page is where it should go. */
+      // Down out of the bar goes where the page asks, when it asks (lib/tvBar.ts `pageEntry`).
+      if (curInNav && dir === 'down') {
+        const entry = pageEntry();
+        if (entry) return land(entry, dir, held);
+      }
+      /* And Up out of the bar goes nowhere: nothing is above it. Geometry thought otherwise on the
+       * search page, whose keyboard rolls up out of sight while the remote is in the list below it —
+       * clipped, but still a box with a rect, and every such key scored as "above" the bar. */
+      if (curInNav && dir === 'up') return true;
       const along = dir === 'left' || dir === 'right';
       const pool = curInNav
         ? (along ? rest.filter((c) => inNav(c.el)) : rest)
