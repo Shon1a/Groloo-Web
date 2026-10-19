@@ -85,3 +85,23 @@ function run(): void {
   }
   if (jobs.size) arm();
 }
+
+/* ---- AND WORK THAT MUST HAPPEN SOON STILL WAITS FOR THE MOVEMENT TO END ---------------------------------
+ * A press's movement now runs on the compositor with the main thread idle beside it (tv.css, WHAT A VERTICAL
+ * PRESS ANIMATES KEEPS ITS LAYER), so anything waiting for an idle moment found one 30-40ms into every slide
+ * and ran there: image requests and their decodes, a query's answer re-rendering a row. `afterMotion` holds
+ * such work until the remote has been still for MOTION_MS — the longest movement a press starts (the copy's
+ * 395ms arrival; the strip is 267, the page glide 280, the row's growth 180) — and runs it at the latest
+ * MOTION_CAP_MS after it was asked for, so a held key, which never stops, still gets it. */
+export const MOTION_MS = 400;
+const MOTION_CAP_MS = 900;
+/** Run `fn` once the remote has been still for `quiet` ms (at once if it already has), or `cap` ms from now,
+ *  whichever comes first. Returns a cancel function. */
+export function afterMotion(fn: () => void, quiet = MOTION_MS, cap = MOTION_CAP_MS): () => void {
+  let done = false;
+  let capId = 0;
+  const go = () => { if (done) return; done = true; window.clearTimeout(capId); stop(); fn(); };
+  const stop = whenQuiet(go, quiet, true);
+  capId = window.setTimeout(go, cap);
+  return () => { done = true; window.clearTimeout(capId); stop(); };
+}

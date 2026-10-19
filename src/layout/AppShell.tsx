@@ -110,7 +110,7 @@ export default function AppShell() {
           measured at over half the JavaScript cost of a vertical press. `registerPageTrack` is a
           no-op in the web build, where <main> is an ordinary element in an ordinary scrolling page.
           See lib/tvPageScroll.ts, including why nothing `position: fixed` may live in here. */}
-      <main ref={mainRef}>
+      <main ref={mainRef} className={IS_TV && !pathname.startsWith('/library') ? 'tv-glide' : undefined}>
         <Outlet />
 
         {showFooter && (
