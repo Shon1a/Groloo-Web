@@ -378,8 +378,112 @@ export function iconMarkup(name: GlanceIconName, prefix?: string): string {
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/* ---- ON THE TV, EACH MOVING PART IS ITS OWN LITTLE PICTURE, SO ITS MOVE RUNS ON THE COMPOSITOR ------------
+ * Chromium composites the transform and opacity of a BOX, never of an element inside an SVG drawing: the
+ * parts' moves (glanceMotion.ts) ran on the main thread, every frame of their 1.1s — a style pass, the
+ * drawing's layout, a paint and a commit per frame, and on the set a frame-rate the icon can be seen to
+ * stutter at, in the second after every stop. So the TV's icons are built as a stack of boxes
+ * instead: the drawing is cut, in paint order, into runs of still shapes (one <svg> each, the whole 24-unit
+ * grid) and the moving parts between them. A moving part becomes a <span> laid exactly over its own
+ * bounding box — the box `transform-box: fill-box` measures in the drawing — carrying its motion class and
+ * delay, with the part's shapes in an <svg> inside it offset back to the full grid. Its percentages and its
+ * transform-origin therefore mean what they meant in the drawing, so the moves, their keyframes and the
+ * origin classes are the same rules, unchanged; only now each is a compositor animation of a box. A part
+ * with moving parts inside it nests the same way. A drawing this cannot cut faithfully (a moving part under
+ * a transformed or attributed still group, a part with no area) keeps the one-<svg> form. */
+const IS_TV = import.meta.env.MODE === 'tv';
+type Lay = { svg: string } | { cls: string; d: string | null; box: [number, number, number, number]; kids: Lay[] };
+const plans = new Map<string, Lay[] | null>();
+const moves = (el: Element) => /\bm-(?!draw\b)[a-z0-9]+/.test(el.getAttribute('class') || '');
+const holdsMoves = (el: Element) => Array.from(el.querySelectorAll('[class]')).some(moves);
+function cut(parent: Element): Lay[] | null {
+  const out: Lay[] = [];
+  let run = '';
+  const flush = () => { if (run) { out.push({ svg: run }); run = ''; } };
+  for (const el of Array.from(parent.children)) {
+    if (!moves(el)) {
+      if (!holdsMoves(el)) { run += el.outerHTML; continue; }
+      if (el.tagName !== 'g' || el.attributes.length) return null;
+      const inner = cut(el);
+      if (!inner) return null;
+      flush();
+      out.push(...inner);
+      continue;
+    }
+    flush();
+    const b = (el as SVGGraphicsElement).getBBox();
+    if (!(b.width > 0.01 && b.height > 0.01)) return null;
+    const bare = el.cloneNode(true) as Element;
+    bare.removeAttribute('class');
+    bare.removeAttribute('data-d');
+    let kids: Lay[] | null = [{ svg: bare.outerHTML }];
+    if (holdsMoves(el)) {
+      if (bare.attributes.length) return null;
+      kids = cut(el);
+      if (!kids) return null;
+    }
+    out.push({ cls: el.getAttribute('class') || '', d: el.getAttribute('data-d'), box: [b.x, b.y, b.width, b.height], kids });
+  }
+  flush();
+  return out;
+}
+/** The cut for one drawing, measured once (one hidden layout of a 24-unit SVG) and kept. */
+function planOf(key: string): Lay[] | null {
+  if (plans.has(key)) return plans.get(key) ?? null;
+  const host = document.createElementNS(SVG_NS, 'svg');
+  host.setAttribute('viewBox', '0 0 24 24');
+  host.setAttribute('width', '24');
+  host.setAttribute('height', '24');
+  host.setAttribute('style', 'position:absolute;left:-100px;top:0;visibility:hidden;pointer-events:none');
+  host.innerHTML = DRAWN[key];
+  document.body.appendChild(host);
+  let plan: Lay[] | null = null;
+  try { plan = cut(host); } catch { plan = null; } finally { host.remove(); }
+  plans.set(key, plan);
+  return plan;
+}
+const pc = (x: number) => `${Math.round(x * 100000) / 1000}%`;
+/** One instance of a cut: `box` is the box the layers are placed in, in grid units. The icon's gradients are
+ *  written once, in its first layer, and every layer paints from them (an id is the document's, not the
+ *  <svg>'s) — a copy per layer was sixteen more elements per layer to style on the frame the icon shows. */
+function layMarkup(lays: Lay[], box: [number, number, number, number], uid: string, n: { i: number }): string {
+  const [bx, by, bw, bh] = box;
+  const whole = bx === 0 && by === 0 && bw === 24 && bh === 24;
+  let html = '';
+  for (const l of lays) {
+    if ('svg' in l) {
+      const at = whole ? '' : ` style="left:${pc(-bx / bw)};top:${pc(-by / bh)};width:${pc(24 / bw)};height:${pc(24 / bh)}"`;
+      html += `<svg viewBox="0 0 24 24" focusable="false"${at}>${n.i++ ? '' : defs(uid)}${l.svg.replace(/@([ABVS])/g, `#${uid}$1`)}</svg>`;
+    } else {
+      const [x, y, w, h] = l.box;
+      html += `<span class="gl-part ${l.cls}"${l.d ? ` data-d="${l.d}"` : ''} style="left:${pc((x - bx) / bw)};top:${pc((y - by) / bh)};width:${pc(w / bw)};height:${pc(h / bh)}">`
+        + `${layMarkup(l.kids, l.box, uid, n)}</span>`;
+    }
+  }
+  return html;
+}
+
+/** The TV's cut form of an icon: the inside of a `.gl-lay` box, or null where the one-<svg> form stays (the
+ *  web, a drawing the cut cannot follow). `prefix` as for `iconMarkup`. */
+export function cutMarkup(name: GlanceIconName, prefix?: string): string | null {
+  if (!IS_TV || typeof document === 'undefined') return null;
+  const plan = planOf(name === 'credits' ? 'rewind' : name);
+  if (!plan) return null;
+  ensureMotionCss(movesUsed);
+  return layMarkup(plan, [0, 0, 24, 24], prefix || `gl${(seq++).toString(36)}`, { i: 0 });
+}
+
 /** The same icon for code that builds DOM by hand (the TV row billboard). */
-export function glanceIconNode(name: GlanceIconName): SVGSVGElement {
+export function glanceIconNode(name: GlanceIconName): SVGSVGElement | HTMLSpanElement {
+  const cutHtml = cutMarkup(name);
+  if (cutHtml != null) {
+    const box = document.createElement('span');
+    box.className = `gl-ic gl-ic-${name} gl-lay`;
+    box.setAttribute('aria-hidden', 'true');
+    box.innerHTML = cutHtml;
+    return box;
+  }
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('class', `gl-ic gl-ic-${name}`);
   svg.setAttribute('viewBox', '0 0 24 24');

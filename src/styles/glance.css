@@ -23,6 +23,10 @@
   .gl-ic [class*="m-"].o-tr{transform-origin:100% 0}
   .gl-ic [class*="m-"].o-l{transform-origin:0 50%}
   .gl-ic [class*="m-"].o-b{transform-origin:50% 100%}
+  /* THE TV'S CUT ICON (glanceSymbols `glanceIconNode`): a stack of boxes in paint order — still runs of the
+     drawing at the full grid, moving parts as boxes laid over their own bounds (offsets written inline). */
+  .gl-lay{position:relative}
+  .gl-lay svg,.gl-lay .gl-part{position:absolute;left:0;top:0;width:100%;height:100%;overflow:visible}
 
   /* THE MOVES ARE WRITTEN BY glanceMotion.ts, on one shared clock — see the note there for why a part's
      delay and duration now live inside its keyframes. Only the stroke-drawn tick stays here: it animates

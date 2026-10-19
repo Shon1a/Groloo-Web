@@ -1,5 +1,5 @@
 import { useId, useMemo } from 'react';
-import { iconMarkup, type GlanceIconName } from './glanceSymbols';
+import { iconMarkup, cutMarkup, type GlanceIconName } from './glanceSymbols';
 import '../../styles/glance.css';
 
 export type { GlanceIconName } from './glanceSymbols';
@@ -14,7 +14,21 @@ export type { GlanceIconName } from './glanceSymbols';
  * memoised, and the gradient ids inside it come from `useId`, stable for the icon's life. */
 export function GlanceIcon({ name, className, title }: { name: GlanceIconName; className?: string; title?: string }) {
   const uid = useId();
-  const inner = useMemo(() => ({ __html: iconMarkup(name, `g${uid.replace(/[^a-zA-Z0-9]/g, '')}`) }), [name, uid]);
+  const pre = `g${uid.replace(/[^a-zA-Z0-9]/g, '')}`;
+  /* On the TV, the cut form whose moves run on the compositor (glanceSymbols `cutMarkup`). */
+  const cut = useMemo(() => { const h = cutMarkup(name, pre); return h == null ? null : { __html: h }; }, [name, pre]);
+  const inner = useMemo(() => ({ __html: iconMarkup(name, pre) }), [name, pre]);
+  if (cut) {
+    return (
+      <span
+        className={`gl-ic gl-ic-${name} gl-lay${className ? ` ${className}` : ''}`}
+        aria-hidden={title ? undefined : true}
+        role={title ? 'img' : undefined}
+        aria-label={title}
+        dangerouslySetInnerHTML={cut}
+      />
+    );
+  }
   return (
     <svg
       className={`gl-ic gl-ic-${name}${className ? ` ${className}` : ''}`}

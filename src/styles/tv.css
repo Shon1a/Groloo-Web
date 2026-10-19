@@ -511,6 +511,11 @@
   transition: opacity .15s linear;
 }
 .tv-hero.is-away { opacity: 0; transition: opacity .3s linear; }
+/* Its own layer for good, like the rows' moving parts (WHAT A VERTICAL PRESS ANIMATES KEEPS ITS LAYER):
+   the fade above built a layer the size of the billboard at the start of every move to or from it and
+   dropped it at the end. Kept: GPU raster jobs per hero/row press 24 -> 18, tile memory +4MB. Its copy
+   and callout fades promoted as well bought ~5 fewer jobs after the move for another +3.6MB — not kept. */
+.tv-hero { will-change: opacity; }
 .tv-hero-stage {
   position: relative;
   height: clamp(400px, 70.7vh, 820px);
@@ -933,6 +938,7 @@
   transform: translateX(calc(-1 * var(--sp-d)));
   opacity: 0.39;
   transition: transform var(--sp-grow, 240ms cubic-bezier(0, 1, 0, 1)), opacity 130ms linear;
+  transition: transform var(--sp-grow, 240ms cubic-bezier(0, 1, 0, 1)), opacity 180ms linear(0, 1 72.22%, 1);
 }
 .tv-spot.is-open .tv-spot-rail {
   transform: none;
@@ -1658,6 +1664,7 @@
   transform: translateX(calc(-1 * var(--sp-d)));
   opacity: 0;
   transition: transform var(--sp-grow), opacity 130ms linear;
+  transition: transform var(--sp-grow), opacity 180ms linear(0, 1 72.22%, 1);   /* ONE END, see below */
 }
 .tv-spot-pane {
   position: absolute; inset: 0;
@@ -1673,6 +1680,7 @@
   /* THE DIM, on the closed card: the strip beside it is at the same 0.39 (`.tv-spot-rail`). */
   opacity: 0.39;
   transition: opacity 80ms linear;
+  transition: opacity 180ms linear(0, 1 44.44%, 1);
 }
 /* The tile's picture over the title's plate (the poster's own background), and its wordmark box
    (`.tv-spot-thumbmark`) — both backgrounds, so filling them is a style write. They wait for the row's
@@ -1711,15 +1719,45 @@
   opacity: 1;
   transition: transform var(--sp-grow), opacity 180ms cubic-bezier(.4, .3, .4, 1);
 }
-.tv-spot.is-open .tv-spot-poster { opacity: 0; transition: opacity 100ms linear; }
+.tv-spot.is-open .tv-spot-poster { opacity: 0; transition: opacity 100ms linear; transition: opacity 180ms linear(0, 1 55.56%, 1); }
 
 /* A ROW ABOVE THE REMOTE'S KEEPS ITS SHAPE (TvSpotlight, A ROW ABOVE THE REMOTE KEEPS ITS BILLBOARD): the
    reference scrolls the row a Down press leaves off the top as it was, billboard and posters where they
    stood, only dimming — `.85, .69` of its brightness at 33/67ms, the same ~130ms fall a closed row takes.
    Every row above the remote's stays that way; only rows below it are posters. */
 .tv-spot.is-above .tv-spot-win,
-.tv-spot.is-above .tv-spot-rail { transform: none; opacity: 0.39; transition: opacity 130ms linear; }
+.tv-spot.is-above .tv-spot-rail { transform: none; opacity: 0.39; transition: opacity 130ms linear; transition: opacity 180ms linear(0, 1 72.22%, 1); }
 .tv-spot.is-above .tv-spot-poster { opacity: 0; transition: none; }
+
+/* ---- EVERY TRANSITION A VERTICAL PRESS STARTS ON A ROW ENDS AT 180ms --------------------------------
+ * The fades above were 80, 100, 120 and 130ms beside the 180ms growth, and each of those ends is a
+ * main-thread frame: the engine delivers the finish, re-styles the element and commits. Five ends where
+ * one would do. Each fade is now written as a 180ms transition whose `linear()` curve reaches its value
+ * at the old moment and then holds (130ms = 72.22%, 120ms = 66.67%, 100ms = 55.56%, 80ms = 44.44%), so
+ * the picture is the same frame for frame and the row's transitions finish together. Style passes per
+ * vertical press, Chromium 120: 21.5 -> 16.9. The plain declaration before each is the fallback for an
+ * engine without `linear()` (before Chromium 113), which drops the second as invalid. */
+
+/* ---- WHAT A VERTICAL PRESS ANIMATES KEEPS ITS LAYER, ON EVERY ROW, ALWAYS ------------------------
+ * The fold/grow above runs ten compositor animations per press on two rows. Each animated element got
+ * a layer when its transition started and lost it when it ended, so every press built and dropped
+ * eight layers in the middle of its own movement — and the page's `<main>` (the flip glide) did the
+ * same at full-screen size. Every one of those is a repaint and a raster: on the set's engine (Chromium
+ * 120 headless, CPU 6x) a vertical press ran 77 GPU raster jobs inside its 450ms, on the GPU thread
+ * that also draws the frames of the movement. Kept promoted: 20 raster jobs, pre-paint 31 -> 10ms,
+ * paint 15 -> 6ms per press, and compositor tile memory 64-66MB -> 67MB (a memory dump at rest; the
+ * layers of rows off screen hold no tiles). Promoting the horizontal pieces on every row as well
+ * (the billboard layers, the copy blocks) bought nothing more for vertical and cost +19MB of tiles,
+ * so those stay on `is-primed`. */
+.tv-spot-win,
+.tv-spot-rail { will-change: transform, opacity; }
+.tv-spot-poster,
+.tv-spot-info { will-change: opacity; }
+/* The page itself, for the same reason: the flip glide (lib/tvPageScroll) animates `<main>`, which
+   took a layer at the start of every vertical press and handed it back at the end (22ms of pre-paint
+   at 12x, and the screen rastered twice). Not on My Space (AppShell leaves `tv-glide` off there): its
+   colour picker is `position: fixed` inside `<main>`, and a transformed ancestor would carry it. */
+.tv-shell main.tv-glide { will-change: transform; }
 
 /* A PAGE THAT IS ONE ROW FOLDS LIKE ANY OTHER. Series / Movies / Anime and Search are a single row, and
    for a while they kept their card open while the remote was up in the bar, on the reasoning that a
@@ -2267,6 +2305,7 @@
      scroll off at all: it sits under the new row with its words dimming away. The arrival is the
      animation on `.is-open` below, which turns this off so the two never run at once. */
   transition: opacity 120ms linear;
+  transition: opacity 180ms linear(0, 1 66.67%, 1);   /* the same 120ms, ending with the rest (EVERY TRANSITION ... ENDS AT 180ms) */
 
   /* ---- ROOM FOR THE SLIDE TO ARRIVE FROM, ON BOTH SIDES ------------------------------------
    * THE DEFECT: press LEFT and the copy arrived with its first letters sliced off — "Action"

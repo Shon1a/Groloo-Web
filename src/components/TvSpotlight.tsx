@@ -26,7 +26,7 @@ import { barItemHere } from '../lib/tvBar';
 import { prefetchArt } from '../lib/artPrefetch';
 import { slowLink } from '../lib/slowLink';
 import { bootDone, onBootRevealing } from '../lib/bootGate';
-import { whenQuiet } from '../lib/tvQuiet';
+import { whenQuiet, afterMotion } from '../lib/tvQuiet';
 import { pageSliding } from '../lib/tvPageSlide';
 import { TvRowStage, SLIDE_MS, PRESS_SETTLED_MS, type StageSlot, type StagePeek } from '../lib/tvRowStage';
 
@@ -2311,20 +2311,27 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   };
   const warmLatest = useRef(warmNow);
   warmLatest.current = warmNow;
-  const warmId = useRef(0);
+  const warmCancel = useRef<(() => void) | null>(null);
+  /* AFTER THE SLIDE, NOT IN IT. The idle callback this was ran in the first idle gap of the press it was
+   * armed by — mid-slide, once the slide stopped needing the main thread: seven image requests and their
+   * decodes inside the movement (Chromium 120 trace, 10ms of requests at 6x in the slide's first 100ms).
+   * A tap now warms once its press has settled (lib/tvQuiet `afterMotion`), and a fast run of taps that
+   * never settles still gets one at the cap, so the warm is postponed, never starved. A HOLD keeps the idle
+   * callback: it never settles, and its steps need pictures six cards ahead. */
   const warmSoon = () => {
-    if (warmId.current) return;
-    const run = () => { warmId.current = 0; warmLatest.current(); };
-    const ric = window.requestIdleCallback;
-    warmId.current = typeof ric === 'function' ? ric(run, { timeout: 600 }) : window.setTimeout(run, 120);
+    if (warmCancel.current) return;
+    const run = () => { warmCancel.current = null; warmLatest.current(); };
+    if (paceHeld.current) {
+      const ric = window.requestIdleCallback;
+      if (typeof ric === 'function') { const id = ric(run, { timeout: 600 }); warmCancel.current = () => window.cancelIdleCallback(id); }
+      else { const id = window.setTimeout(run, 120); warmCancel.current = () => window.clearTimeout(id); }
+      return;
+    }
+    warmCancel.current = afterMotion(run);
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { warmSoon(); }, [artOn, active, stops, artById]);
-  useEffect(() => () => {
-    if (!warmId.current) return;
-    if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(warmId.current);
-    else window.clearTimeout(warmId.current);
-  }, []);
+  useEffect(() => () => { warmCancel.current?.(); }, []);
 
   /* ---- THE ROW GOT SHORTER UNDER THE WALK ------------------------------------------------------
    * The walk can outlive the number of stops it indexes: it is parked on the "+" card at position
@@ -2452,9 +2459,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const sec = sectionRef.current;
     if (!sec) return;
     const read = (t: Element | null) => {
-      if (!t || sec.contains(t)) return;
+      if (!t) return;
       let above: boolean;
-      if (t.closest('main')) above = !!(sec.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING);
+      /* The remote back ON this row (Up from the one below) clears it: a row the remote is on is never
+       * above, and skipping this case left the row it came back to at the dim (2026-10-19). */
+      if (sec.contains(t)) above = false;
+      else if (t.closest('main')) above = !!(sec.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING);
       else if (t.closest('.tv-topnav')) above = false;
       else return;
       if (above === aboveRef.current) return;
