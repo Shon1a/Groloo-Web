@@ -12,7 +12,7 @@ import Row from '../components/Row';
 import Rail from '../components/Rail';
 import PosterCard from '../components/PosterCard';
 import type { MediaItem } from '../lib/types';
-import { API_BASE } from '../lib/api';
+import { API_BASE, apiPost } from '../lib/api';
 
 /* MY SPACE — two rows, the way the home screen is rows: My List, then one screen holding a tab
  * bar (Add-ons · Settings · Account) over the section it has open. That screen carries
@@ -181,7 +181,17 @@ export default function Library() {
   const firstName = user?.name || (user?.email ? user.email.split('@')[0] : '');
   const displayName = user ? (user.name ? `${user.name}${user.surname ? ' ' + user.surname : ''}` : user.email) : t('settings.profile_guest');
   const avatar = (user?.name || user?.email || '?').charAt(0).toUpperCase();
-  const toAdmin = () => { window.location.href = `${API_BASE}/admin`; };
+  /* The dashboard lives on the API origin, where a phone holds none of this site's cookies — so
+     it would open signed out. Hand it a one-time code to trade for its own session (createHandoff
+     in the server's auth.js). If that fails, open it anyway: its gate explains how to sign in. */
+  const toAdmin = async () => {
+    let hash = '';
+    try {
+      const { code } = await apiPost<{ code: string }>('/api/auth/handoff');
+      if (code) hash = `#handoff=${code}`;
+    } catch { /* plain navigation below */ }
+    window.location.href = `${API_BASE}/admin${hash}`;
+  };
 
   const label: Record<Section, string> = {
     addons: t('addons.title'),
