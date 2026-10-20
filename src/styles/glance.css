@@ -60,6 +60,21 @@
   .hero-copy .gl-chips{margin:14px 0 10px;font-size:14px}
   /* web detail sheet: under the facts line */
   .m-hero-inner .gl-chips{margin:10px 0 2px;font-size:13.5px}
+  /* THE FACTS — rating, year, length, genres — in the same tabs (`.gl-facts`), straight under the
+     callouts at the gap two lines of tabs have between them, so the two rows read as one set. No icon,
+     so even padding; no blur, because a row of blurred boxes over a playing trailer costs a re-blur
+     per video frame for a look the .74 fill already gives. */
+  .gl-chips.gl-facts .gl-chip{padding:0 .62em;-webkit-backdrop-filter:none;backdrop-filter:none}
+  .m-hero-inner .gl-facts{margin:0 0 16px}
+  .m-hero-inner .gl-chips:not(.gl-facts){margin:0 0 .45em}
+  .hero-copy .gl-facts{margin:0 0 18px}
+  @media (max-width:640px){
+    .m-hero-inner .gl-chips{font-size:12.5px}
+    .m-hero-inner .gl-facts{margin-bottom:14px}
+    /* the hero drops its synopsis here, so its facts follow the callouts directly */
+    .hero-copy .gl-chips:not(.gl-facts){margin-bottom:.45em}
+    .hero-copy .gl-facts{margin-bottom:14px}
+  }
   /* TV title screen */
   .tv-det-info .gl-chips{margin:0 0 clamp(10px,calc(var(--u)*1.05),24px);font-size:clamp(10px,calc(var(--u)*.84),19px)}
 

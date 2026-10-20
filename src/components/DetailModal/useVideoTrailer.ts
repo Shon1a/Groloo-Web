@@ -218,6 +218,11 @@ export interface VideoTrailerOptions {
   /** How much CSS magnifies the video over its box (the billboard's crop is 1.35). Multiplies
    *  the measured width, because a cropped video is sampled at more than its box's worth. */
   cropScale?: number;
+  /** Fill the box as if the PICTURE were this wide. 2.39 pushes a scope trailer's bands (pixels IMDb
+   *  bakes into its 16:9 file, which no object-fit reaches) out of a box of any shape, by only as much
+   *  as that box needs: a phone's 16:9 band is magnified 1.34x, the wider desktop hero ~1.2x. Laid out
+   *  the same way as `cropScale` (see `place`). */
+  coverAspect?: number;
   /** Hard ceiling, in CSS pixels, on the rendition width this surface will ask for. A preview that
    *  starts sooner beats a preview that is sharper, so the row billboard caps itself at 720p's
    *  1280 rather than pulling a 1080p file it cannot show the benefit of. Unset means no ceiling,
@@ -306,8 +311,9 @@ export function useVideoTrailer(
   const renditionsRef = useRef(opts?.renditions);
   renditionsRef.current = opts?.renditions;
   const cropScale = opts?.cropScale ?? 1;
+  const coverAspect = opts?.coverAspect ?? 0;
   /* A caller that names a crop gets it LAID OUT, not transformed — see `place` in the mount. */
-  const layoutCrop = opts?.cropScale !== undefined;
+  const layoutCrop = opts?.cropScale !== undefined || coverAspect > 0;
   const maxRendition = opts?.maxRenditionPx ?? Infinity;
   const targetRendition = opts?.targetRenditionPx;
   /* Read through a ref inside the mount effect for the same reason as the renditions above: the
@@ -374,7 +380,8 @@ export function useVideoTrailer(
        *
        * So the box is measured in CSS pixels and `maxRenditionPx` lets a caller cap it outright.
        * SAFE_FLOOR still applies underneath, so this can never pick something genuinely soft. */
-      const needed0 = Math.round(Math.min(targetRendition ?? boxPx0 * cropScale, maxRendition));
+      const coverMag = coverAspect && slot.clientWidth ? Math.max(1, (slot.clientHeight * coverAspect) / slot.clientWidth) : 1;
+      const needed0 = Math.round(Math.min(targetRendition ?? boxPx0 * cropScale * coverMag, maxRendition));
       const chosen0 = (boxPx0 > 0 || targetRendition
         ? pickTrailerRendition(renditionsRef.current, needed0, src, maxRendition)
         : src) || src;
@@ -455,7 +462,7 @@ export function useVideoTrailer(
         const bw = slot.clientWidth, bh = slot.clientHeight;
         if (!bw || !bh) return;
         const a = v.videoWidth > 0 && v.videoHeight > 0 ? v.videoWidth / v.videoHeight : 16 / 9;
-        const w = Math.max(bw, bh * a) * cropScale;
+        const w = Math.max(bw, bh * a, bh * coverAspect) * cropScale;
         const h = w / a;
         v.style.width = `${w}px`;
         v.style.height = `${h}px`;

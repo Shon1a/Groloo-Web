@@ -309,6 +309,26 @@ export function installTvKeys(): () => void {
   };
   window.addEventListener('keydown', onKey, true);
 
+  const offGuard = installBackGuard();
+
+  /* The Android shell has no key to send, so give it a function to call. Named rather than
+   * anonymous so `GrolooBack.handle()` reads the same from Kotlin as it does here. */
+  (window as unknown as { GrolooBack?: { handle: () => boolean } }).GrolooBack = { handle: handleBack };
+
+  return () => {
+    window.removeEventListener('keydown', onKey, true);
+    offGuard();
+    delete (window as unknown as { GrolooBack?: unknown }).GrolooBack;
+  };
+}
+
+/**
+ * The browser's Back (button, Alt+Left, a phone's back swipe) closes the topmost layer instead of
+ * leaving the page under it. Returns the cleanup. The TV installs it with its keys; the website on
+ * its own (AppShell), where it is the whole of Back: there, with a title open, a back swipe used to
+ * skip the title and take the page behind it — or leave the site — while the title stayed up.
+ */
+export function installBackGuard(): () => void {
   /* ---- THE BROWSER'S BACK, ROUTED INTO THE SAME CHAIN -------------------------------------
    *
    * BACK IS NOT ALWAYS A KEY WE GET TO SEE. In a packaged app the remote's Back arrives as a
@@ -419,18 +439,12 @@ export function installTvKeys(): () => void {
   ];
   document.addEventListener('fullscreenchange', syncGuard);
 
-  /* The Android shell has no key to send, so give it a function to call. Named rather than
-   * anonymous so `GrolooBack.handle()` reads the same from Kotlin as it does here. */
-  (window as unknown as { GrolooBack?: { handle: () => boolean } }).GrolooBack = { handle: handleBack };
-
   return () => {
-    window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('popstate', onPop);
     document.removeEventListener('fullscreenchange', syncGuard);
     unsubs.forEach((off) => off());
     if (dropTimer) window.clearTimeout(dropTimer);
     // Leaving an absorber on the stack would cost the next page one inert Back press.
     dropGuard();
-    delete (window as unknown as { GrolooBack?: unknown }).GrolooBack;
   };
 }

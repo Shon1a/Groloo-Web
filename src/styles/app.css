@@ -467,13 +467,7 @@
   .hero-logo{display:block;width:auto;height:clamp(60px,8.5vw,108px);max-width:min(82%,560px);
     object-fit:contain;object-position:left center;margin:0 0 15px;
     filter:drop-shadow(0 2px 22px rgba(0,0,0,.55))}
-  /* plain inline "8.5  2019" — no badge boxes */
-  /* "8.5  2019" — rating bold white, year muted gray */
-  .hero-meta{display:flex;align-items:center;gap:14px;font-family:var(--font-mono);
-    font-size:16px;color:#d6d6d6;margin-bottom:18px;flex-wrap:wrap;font-weight:600}
-  .hero-meta span:first-child{color:#fff;font-weight:800}
-  .hero-meta span:empty{display:none}
-  .hero-meta span+span:not(:empty)::before{content:"•";margin-right:14px;opacity:.5}
+  /* .hero-meta (rating, year, genre) is drawn in the callouts' tabs — glance.css `.gl-facts` */
   /* ~2 line synopsis paragraph in muted gray, shown directly beneath the title */
   .hero-plot{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
     font-size:15.5px;line-height:1.6;color:var(--text-muted);margin:0 0 14px;max-width:600px;
@@ -587,7 +581,6 @@
        the rating line and PLAY say what the card needs. The paragraph is still in the DOM (the
        detail sheet has the full text) — it is only not drawn here. */
     .hero-plot{display:none}
-    .hero-meta{margin-bottom:14px;font-size:14px}
     .hero-title{margin-bottom:10px}
     .hero-logo{margin-bottom:10px}
     /* THE COPY SITS LOWER, so more of the artwork is clear above it. The 86px reserve the ≤900px
@@ -1649,7 +1642,6 @@
   .m-hero-inner>*{animation:heroRise .7s cubic-bezier(.2,.7,.2,1) both}
   .m-hero-inner>#mTitle{animation-delay:.10s}
   .m-hero-inner>.m-meta{animation-delay:.16s}
-  .m-hero-inner>.m-genres{animation-delay:.20s}
   .m-hero-inner>.m-hero-actions{animation-delay:.26s}
   .modal .close.m-disc{position:absolute;top:clamp(12px,2vw,18px);right:clamp(12px,2vw,18px);
     z-index:4;width:40px;height:40px;font-size:18px;line-height:1}
@@ -1670,12 +1662,7 @@
     -webkit-background-clip:border-box;background-clip:border-box;filter:none;margin:0 0 12px}
   #mTitle .title-logo{display:block;width:auto;height:clamp(40px,7vw,72px);max-width:min(100%,360px);
     object-fit:contain;object-position:left center;filter:drop-shadow(0 2px 22px rgba(0,0,0,.55))}
-  .m-meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);
-    font-size:14px;letter-spacing:.04em;color:#cdcdcd;margin:0 0 10px}
-  .m-meta .star{color:var(--accent)}
-  .m-genres{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
-  .m-genres .chip{border:1px solid rgba(255,255,255,.22);border-radius:3px;padding:2px 9px;
-    font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;color:#dddddd;white-space:nowrap}
+  /* .m-meta (the facts) is drawn in the callouts' tabs — glance.css `.gl-facts` */
   .m-hero-actions{display:flex;align-items:center;gap:12px}
   .m-hero-actions .hero-play{padding:11px 24px;font-size:15px}
   .m-hero-actions .hero-add{width:44px;height:44px;font-size:20px}
@@ -1897,6 +1884,8 @@
   :root[data-lang="ka"] .m-showall,:root[data-lang="ka"] .m-cast-char{text-transform:none}
   .m-showall-chev{transition:transform .2s}
   .m-showall[aria-expanded="true"] .m-showall-chev{transform:rotate(180deg)}
+  /* the phones' faces (below); the desktop sidebar keeps its list */
+  .m-cast-faces{display:none}
 
   /* RESPONSIVE */
   @media(max-width:760px){
@@ -1904,14 +1893,32 @@
        widest child's min-content (~476px here); the modal then clips it via m-scroll's
        overflow-x:hidden, cutting off the synopsis/streams. 0 lets the track shrink. */
     .m-body{grid-template-columns:minmax(0,1fr)}
-    .m-cast{order:-1;position:static;border-bottom:1px solid var(--border);padding-bottom:22px}
-    .m-cast-list{flex-direction:row;gap:14px;overflow-x:auto;scroll-snap-type:x proximity;padding-bottom:6px;
-      -webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent)}
-    .m-cast-item{flex-direction:column;text-align:center;width:84px;flex:0 0 auto;scroll-snap-align:start}
-    .m-cast-item .m-avatar{width:56px;height:56px}
-    .m-cast-name,.m-cast-char{white-space:normal;line-height:1.25}
-    .m-cast.expanded .m-cast-list{flex-wrap:wrap;overflow:visible;-webkit-mask-image:none;mask-image:none}
-    .m-cast.expanded .m-cast-item{width:auto;min-width:78px}
+    /* THE SYNOPSIS FIRST, THEN THE CAST, then episodes and sources. The cast is not inside .m-main
+       (it is the desktop's sidebar), so .m-main gives up its box here and its children join this one
+       column, where `order` can put the cast between the synopsis and the rest. */
+    .m-main{display:contents}
+    .m-tagline,.m-plot{order:-2}
+    .m-cast{order:-1;position:static}
+    /* THE CAST AS FACES — the TV title screen's row (`.tv-det-faces`): round photos edge to edge, each
+       in a thin light ring painted over the photo so neighbours meet ring to ring, the first name under
+       each. Five to a row; "Show all" adds rows of the same five columns, so an open list is a grid,
+       not names of every length wrapping wherever they fit. The director is one line above them. */
+    .m-cast-list{display:none}
+    .m-cast-faces{display:grid;grid-template-columns:repeat(5,minmax(0,64px));row-gap:14px;margin:0;padding:0;list-style:none}
+    .m-face{min-width:0}
+    .m-face.m-hidden{display:none}
+    .m-face .m-avatar{display:block;width:100%;height:auto;aspect-ratio:1;border:0;background:#262626}
+    .m-face .m-avatar::after{content:"";position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 0 2px rgba(255,255,255,.62)}
+    .m-face .m-avatar img{object-position:50% 20%}
+    .m-face .m-avatar-ph{transform:translateY(10%);color:rgba(255,255,255,.26)}
+    .m-face-name{display:block;margin-top:6px;font-size:12px;font-weight:600;line-height:1.3;color:#ececec;
+      text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .m-face-name.is-long{margin-top:7px;font-size:10.5px;line-height:1.48}
+    .m-cast-director{gap:8px;padding-bottom:0;margin-bottom:12px;border-bottom:0}
+    .m-cast-director .m-avatar{display:none}
+    .m-cast-director .m-cast-body{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px}
+    .m-cast-director .m-cd-name{font-size:13px}
+    .m-cast-director .m-cd-role{margin-top:0;font-size:10px}
     .m-hero-inner{max-width:100%}
   }
   @media(max-width:420px){
@@ -2385,6 +2392,12 @@
      under them. `has-note` turns the HUD into a two-row grid; without it nothing changes. */
   .vp-vhud.has-note{display:grid;grid-template-columns:auto auto;row-gap:8px;justify-items:center}
   .vp-vhud .note{grid-column:1/-1;font-size:12px;color:rgba(255,255,255,.7);white-space:nowrap}
+  /* pinch: zoom to fill (VideoPlayer `fill`) and the word that says which it is now */
+  @media (orientation:landscape){ .vp-overlay.vp-fill #playerVideo{object-fit:cover} }
+  .vp-zoomhud{position:absolute;top:16%;left:50%;transform:translateX(-50%);padding:8px 16px;border-radius:999px;
+    background:rgba(15,15,15,.88);color:#fff;font:600 14px/1.2 var(--font);white-space:nowrap;
+    opacity:0;transition:opacity .18s ease}
+  .vp-zoomhud.show{opacity:1}
 
   /* The episode label (S1 | E3) on the line under the player's title, beside the episode's name.
      Baseline-aligned there, not centred: the two carry different families (mono and display),
@@ -3031,6 +3044,14 @@
     .auth-card{max-height:none;margin:auto}
   }
 
+  /* ---- phones, either way up: no volume / picture-in-picture / fullscreen at the end of the row.
+     The side buttons, the OS's own PiP and the phone itself do those jobs, and the three icons were
+     what squeezed the subtitles' room beside the row (VideoPlayer `cueBox`) under its minimum, so a
+     line jumped up over the whole stack instead of moving a little up and to the right. ---- */
+  @media (pointer:coarse) and (max-width:900px),(pointer:coarse) and (max-height:500px){
+    .vp-overlay.web .vp-tail{display:none}
+  }
+
   /* ---- short screens (a phone on its side): the title stack gives most of its height back, or
      the wordmark, the row and the bar between them cover half the picture ---- */
   @media (max-height:500px){
@@ -3075,11 +3096,14 @@
        there. The .vp-has-webkit-pip class is set at runtime only when that API is real. */
     .vp-overlay.vp-has-webkit-pip #vpPip{display:flex}
     .vp-prompt{--vp-skip-bottom:calc(132px + env(safe-area-inset-bottom,0px));right:calc(16px + env(safe-area-inset-right,0px))}
-    /* footer: stack links left, generous tap rows, clear the home bar */
-    .site-footer{padding:22px 0 calc(34px + env(safe-area-inset-bottom,0px));gap:16px 18px}
+    /* FOOTER: SMALL PRINT, SET SMALL. It took the desktop's 85px side margins (it sits outside
+       .page, which is where the phone's 14px is set), so the notice ran down a narrow column, and
+       each link had a 40px row of its own. Now it is the page's width, the links share one line, and
+       the bottom padding is gone — <main> already clears the dock and the home bar under it. */
+    .site-footer{margin:0 14px;padding:16px 0 4px;gap:6px 16px;font-size:11.5px;line-height:1.5}
     .site-footer .sf-disclaimer{flex:1 1 100%}
-    .site-footer .sf-links{margin-left:0;flex:1 1 100%;gap:6px 22px}
-    .site-footer .sf-links a{padding:8px 0;display:inline-flex;align-items:center;min-height:40px}
+    .site-footer .sf-links{margin-left:0;flex:1 1 100%;gap:0 16px;font-size:11.5px}
+    .site-footer .sf-links a{padding:6px 0;display:inline-flex;align-items:center}
     /* add-on catalog action buttons fill the wrapped row at 44px */
     .addon .acts{justify-content:stretch}
     .addon .acts .minibtn{min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:11px 15px;max-width:none}
@@ -3152,9 +3176,6 @@
       bottom:clamp(26px,6vw,40px);max-width:100%}
     #mTitle{font-size:clamp(20px,6.2vw,30px);line-height:1.12;margin:0 0 9px;letter-spacing:.03em}
     #mTitle .title-logo{height:clamp(34px,11vw,52px);max-width:min(76%,260px)}
-    .m-meta{font-size:11.5px;gap:8px;margin:0 0 8px}
-    .m-genres{gap:6px;margin:0 0 12px}
-    .m-genres .chip{font-size:10px;padding:2px 7px;letter-spacing:.05em}
     .m-hero-actions{gap:10px}
     .m-hero-actions .hero-play{padding:10px 20px;font-size:13.5px}
     /* synopsis: smaller body + a 5-line clamp the JS toggles on overflow */
@@ -3225,6 +3246,12 @@
     .m-hero{min-height:0;max-height:none;height:auto;padding-top:56.25vw}
     .m-hero-inner{position:relative;z-index:3;inset:auto;
       margin-top:-13vw;padding:0 clamp(14px,4vw,22px) 18px}
+    /* THE MUTE DISC SITS AT THE FOOT OF THE TRAILER BAND, under the ✕ and on the same right edge.
+       The hero now hugs its title block, so its bottom-right corner — where the disc is anchored on
+       wider screens — is the end of the button row, and the disc landed on the last button there.
+       A text title keeps clear of it; a wordmark is already held to 76% of the width. */
+    .m-mute{top:calc(56.25vw - 56px);bottom:auto;right:clamp(12px,2vw,18px)}
+    .m-hero.has-trailer #mTitle:not(.has-logo){padding-right:52px}
   }
 
   /* ==========================================================================
@@ -3295,6 +3322,13 @@
     .railbar .rail-item:active{background:rgba(255,255,255,.08);color:#fff}
     .railbar .rail-item.active{color:#fff}
 
+    /* ---- 3b · the top edge belongs to the page (index.html `black-translucent`) ----
+       From the home screen the page runs up under the status bar, so each page's top padding grows
+       by the inset to keep its heading below the clock and the island. The home hero is unaffected:
+       its pull-up is calc(-1 * (--page-top + --topbar-h)), so it still meets the very top and its
+       picture fills the space behind the status bar. 0 in a Safari tab, where the bar is Safari's. */
+    .page{--page-top:calc(24px + env(safe-area-inset-top,0px))}
+
     /* ---- 4 · keep content + the home hero clear of the floating dock ------- */
     main{padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}
     /* the hero's dots + play/title CTA live bottom-centre — exactly where the dock
@@ -3313,6 +3347,23 @@
        the dock floats. Lift it above the dock on mobile; the .app-toast class the
        JS sets lets this !important beat the element's inline `bottom`. */
     .app-toast{bottom:calc(88px + env(safe-area-inset-bottom,0px)) !important}
+  }
+
+  /* THE HOME-SCREEN APP'S BACK SWIPE (lib/edgeSwipeBack.ts): a disc pulled out of the left edge with
+     the finger, white once lifting it would go back; it springs back into the edge when let go. */
+  .edge-back{position:fixed;left:0;top:50%;z-index:5000;width:40px;height:40px;margin-top:-20px;border-radius:50%;
+    background:rgba(18,18,18,.88);box-shadow:0 0 0 1px rgba(255,255,255,.16);pointer-events:none;opacity:0;
+    transform:translateX(-44px);transition:opacity .18s ease,background-color .15s,transform .32s cubic-bezier(.34,1.56,.64,1)}
+  .edge-back::before{content:"";position:absolute;left:16px;top:14px;width:10px;height:10px;
+    border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(45deg);transition:border-color .15s}
+  .edge-back.on{opacity:1;transition:opacity .12s ease,background-color .15s}
+  .edge-back.go{background:#fff;animation:edgeBackPop .32s cubic-bezier(.34,1.56,.64,1)}
+  .edge-back.go::before{border-color:#000}
+  @keyframes edgeBackPop{40%{scale:1.18}}
+
+  /* 3b at phone size: the phone's own 20px top (see `.page` at ≤640) plus the inset */
+  @media (max-width:640px){
+    .page{--page-top:calc(20px + env(safe-area-inset-top,0px))}
   }
 
   /* dock: compress to fit the very narrowest phones (≤360px, e.g. iPhone SE) */

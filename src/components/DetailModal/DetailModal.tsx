@@ -27,6 +27,7 @@ import Glance from '../glance/Glance';
 import { useIntro } from '../glance/useGlance';
 import RateButtons from '../glance/RateButtons';
 import { GlanceIcon } from '../glance/GlanceIcons';
+import { castFaces } from './castFaces';
 
 const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080' : 'q-720');
 
@@ -200,6 +201,7 @@ function Cast({ meta, isTv }: { meta?: MetaDetail; isTv: boolean }) {
   const dirName = meta?.director || meta?.creators?.[0]?.name || '';
   const dirPhoto = meta?.creators?.find((c) => c.name === dirName)?.profile;
   const LIMIT = 5;
+  const faces = castFaces(meta, Infinity);
   if (!cast.length && !dirName) return null;
 
   return (
@@ -225,6 +227,17 @@ function Cast({ meta, isTv }: { meta?: MetaDetail; isTv: boolean }) {
           </div>
         ))}
       </div>
+      {/* PHONES DRAW THE CAST AS FACES (`.m-cast-faces`, app.css): the TV title screen's row — round
+          photos edge to edge, first names under them — five to a row, and "Show all" adds rows of the
+          same. The list above is the desktop sidebar's and is hidden there. */}
+      <ul className="m-cast-faces">
+        {faces.map((f, i) => (
+          <li className={`m-face${i >= LIMIT && !expanded ? ' m-hidden' : ''}`} key={f.name} title={f.name}>
+            <Avatar name={f.name} profile={f.url} />
+            <span className={f.long ? 'm-face-name is-long' : 'm-face-name'} aria-hidden="true">{f.label}</span>
+          </li>
+        ))}
+      </ul>
       {cast.length > LIMIT && (
         <button className="m-showall" type="button" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
           <span className="m-showall-txt">{t(expanded ? 'modal.show_less' : 'modal.show_all')}</span>
@@ -396,6 +409,7 @@ export default function DetailModal() {
   const imdbSettled = !trailerImdb || videoTrailerFailed || imdbTrailer.isError
     || (imdbTrailer.isSuccess && !videoUrl);
   const ytKey = !playerOpen && !videoUrl && imdbSettled ? (meta?.trailerKey || undefined) : undefined;
+  const trailerAnimated = (meta?.genre ?? (target?.genre ? [target.genre] : [])).some((g) => /animation|anime/i.test(g));
 
   const videoTrailer = useVideoTrailer(slotRef, heroRef, videoUrl, trailerTitle, {
     /* Past the distributor logos and the certification card, which is what essentially every
@@ -408,6 +422,11 @@ export default function DetailModal() {
      * pulls 480p, and neither is a decision this file has to make. No `maxRenditionPx` — unlike
      * the TV shelf, here the video IS the content and there is nothing to cap it for. */
     renditions: imdbTrailer.data?.urls,
+    /* ZOOMED PAST THE LETTERBOX. Most live-action trailers are scope pictures inside IMDb's 16:9 file,
+     * so they arrived with black bands top and bottom — on a phone's 16:9 band, the whole of them.
+     * Animation is usually 16:9 already and is left alone: the same genre rule as the TV rows
+     * (TvSpotlight `isAnimated`), for the same reason — the file's pixels cannot be read here. */
+    coverAspect: trailerAnimated ? undefined : 2.39,
     /* A dead link costs a beat, not the trailer: an expired signature, a decode error or a
      * refused autoplay drops to the embed for this title. Cleared with the title below, so the
      * next visit asks again rather than inheriting a verdict about one stale URL. */
@@ -945,18 +964,19 @@ export default function DetailModal() {
               <h2 id="mTitle" className={titleLogo ? 'has-logo' : ''}>
                 {titleLogo ? <img className="title-logo" src={titleLogo} alt={title} /> : title}
               </h2>
-              <div className="meta m-meta" id="mMeta">
-                {rating ? <><span className="star">★</span> {rating}</> : null}
-                {year ? <span>{year}</span> : null}
-                {meta?.runtime ? <span>{meta.runtime}</span> : null}
-                {isTv && meta?.seasons ? (
-                  <span>{[meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }), epTotal ? t('modal.episodes_count', { n: epTotal }) : ''].filter(Boolean).join(' · ')}</span>
-                ) : null}
-              </div>
               {/* Info at a glance: why this title — a new season, a top-ten place, an award. */}
               <Glance item={{ id: target.id, type: target.type, year, rating, genre: target.genre }} meta={meta} awards waitForMeta />
-              <div className="m-genres" id="mGenres">
-                {genreChips.map((g) => <span className="chip" key={g}>{genre(g)}</span>)}
+              {/* THE FACTS ARE THE CALLOUTS' OWN TABS — rating, year, length, seasons, genres — so the
+                  block under the title is one set of the same dark tabs rather than a mono line, the
+                  tabs and a row of outlined boxes, each in a different size. */}
+              <div className="gl-chips gl-facts m-meta" id="mMeta">
+                {rating ? <span className="gl-chip">★ {rating}</span> : null}
+                {year ? <span className="gl-chip">{year}</span> : null}
+                {meta?.runtime ? <span className="gl-chip">{meta.runtime}</span> : null}
+                {isTv && meta?.seasons ? (
+                  <span className="gl-chip">{[meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }), epTotal ? t('modal.episodes_count', { n: epTotal }) : ''].filter(Boolean).join(' · ')}</span>
+                ) : null}
+                {genreChips.map((g) => <span className="gl-chip" key={g}>{genre(g)}</span>)}
               </div>
               <div className={`m-hero-actions${intro ? ' gl-run' : ''}`}>
                 <button className={`hero-btn hero-play${resume ? ' has-resume' : ''}`} id="mWatch" type="button" onClick={onWatch}>
