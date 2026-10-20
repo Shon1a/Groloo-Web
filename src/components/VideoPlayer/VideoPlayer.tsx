@@ -457,7 +457,6 @@ export default function VideoPlayer() {
   const [railMounted, setRailMounted] = useState(false);
   const [railShown, setRailShown] = useState(false);
   const [segments, setSegments] = useState<Segments | null>(null);
-  const [segDone, setSegDone] = useState(false);   // the markers answer is in (or there was none to ask)
   const [silent, setSilent] = useState(false); // playing video, decoding no audio at all
   const [audioOpen, setAudioOpen] = useState(false); // the audio-track popup
   /* WHICH DOOR OPENED THE SETTINGS SHEET. Two buttons in the row lead to it: Subtitles, which opens
@@ -536,6 +535,14 @@ export default function VideoPlayer() {
   const menuClosedAt = useRef(0);
   const gestRef = useRef({ active: false, x0: 0, y0: 0, t0: 0, w: 1, h: 1, mode: '' as '' | 'seek' | 'vol' | 'bright', startVol: 1, startBright: 1, startTime: 0 });
   const lastTapRef = useRef({ t: 0, x: 0, side: '' as '' | 'left' | 'center' | 'right' });
+  /* ZOOM TO FILL, the phone apps' pinch: spread two fingers and the picture fills the screen, cropping
+   * its edges (object-fit: cover); pinch them together and the whole picture comes back. Kept for the
+   * rest of the session, like the apps do. `d0` is the fingers' distance when the pinch began, 0 when
+   * there is none. */
+  const [fill, setFill] = useState(false);
+  const [zoomHud, setZoomHud] = useState<string | null>(null);
+  const zoomHudTimer = useRef<number | undefined>(undefined);
+  const pinchRef = useRef({ d0: 0, ratio: 1 });
   const seekAccumRef = useRef<{ side: '' | 'left' | 'right'; secs: number }>({ side: '', secs: 0 });
   const singleTapTimer = useRef<number | undefined>(undefined);
   const seekHudTimer = useRef<number | undefined>(undefined);
@@ -1011,7 +1018,7 @@ export default function VideoPlayer() {
   const segSource = useRef<typeof source | null>(null);
   useEffect(() => { segSource.current = source; }, [source]);
   useEffect(() => {
-    if (segAsked.current !== source) { setSegments(null); setSegDone(false); }
+    if (segAsked.current !== source) setSegments(null);
     if (!source || !dur || segAsked.current === source) return;
     segAsked.current = source;
     const m = source.media, s = source.series;
@@ -1028,8 +1035,8 @@ export default function VideoPlayer() {
       q.set('type', 'movie');
       if (tmdbOf(m.id)) q.set('tmdb', tmdbOf(m.id));
       if (m.imdb) q.set('imdb', m.imdb);
-    } else { setSegDone(true); return; }
-    if (!q.get('tmdb') && !q.get('imdb')) { setSegDone(true); return; }
+    } else return;
+    if (!q.get('tmdb') && !q.get('imdb')) return;
     q.set('dur', String(Math.round(dur)));
     /* The answer's VERSION. The service worker keeps these a day and serves the kept copy first, so
        when the server's sources change (SkipDB added Oct 16 = v3; SkipDB made the main source = v4)
@@ -1054,8 +1061,7 @@ export default function VideoPlayer() {
         return null;
       })
       .then(take)
-      .catch(() => {})
-      .finally(() => { if (segSource.current === asked) setSegDone(true); });
+      .catch(() => {});
   }, [source, dur]);
 
 
@@ -1637,7 +1643,7 @@ export default function VideoPlayer() {
     return () => cancelAnimationFrame(raf);
   }, [playing]);
 
-  // --- touch gesture handlers (single tap toggles chrome; double-tap the left/right
+  // --- touch gesture handlers (single tap shows the chrome, or pauses while it shows; double-tap the left/right
   // third seeks ±10s and accumulates; a vertical drag adjusts volume on the right half
   // and brightness on the left; a horizontal drag scrubs) ---
   const showVHud = (kind: 'vol' | 'bright', val: number, note?: string) => { window.clearTimeout(vHudTimer.current); setVHud({ kind, val, note }); };
@@ -1656,9 +1662,16 @@ export default function VideoPlayer() {
     seekHudTimer.current = window.setTimeout(() => { setSeekHud(null); seekAccumRef.current = { side: '', secs: 0 }; }, 700);
   };
 
+  const fingerGap = (ts: React.TouchList) => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
   const onGestureStart = (e: React.TouchEvent) => {
     const g = gestRef.current;
-    if (e.touches.length !== 1) { g.active = false; return; }   // ignore pinch/multi-touch
+    if (e.touches.length === 2) {                                // a pinch: the one-finger gesture is off
+      g.active = false;
+      window.clearTimeout(singleTapTimer.current);
+      pinchRef.current = { d0: fingerGap(e.touches), ratio: 1 };
+      return;
+    }
+    if (e.touches.length !== 1) { g.active = false; return; }   // ignore other multi-touch
     const el = overlayRef.current, v = videoRef.current; if (!el) return;
     const r = el.getBoundingClientRect(), tch = e.touches[0];
     g.active = true; g.mode = ''; g.t0 = performance.now();
@@ -1669,6 +1682,8 @@ export default function VideoPlayer() {
   };
   const onGestureMove = (e: React.TouchEvent) => {
     const g = gestRef.current;
+    const p = pinchRef.current;
+    if (p.d0 && e.touches.length === 2) { p.ratio = fingerGap(e.touches) / p.d0; return; }
     if (!g.active || e.touches.length !== 1) return;
     const el = overlayRef.current, v = videoRef.current; if (!el) return;
     const r = el.getBoundingClientRect();
@@ -1709,6 +1724,19 @@ export default function VideoPlayer() {
   };
   const onGestureEnd = () => {
     const g = gestRef.current;
+    const p = pinchRef.current;
+    if (p.d0) {                                                 // the pinch ends with its first finger up
+      const to = p.ratio > 1.15 ? true : p.ratio < 0.87 ? false : null;
+      pinchRef.current = { d0: 0, ratio: 1 };
+      // Landscape only, like the apps: held upright, filling the screen would crop most of the film.
+      if (to === false || (to && window.innerWidth > window.innerHeight)) {
+        setFill(to);
+        setZoomHud(t(to ? 'player.zoom_fill' : 'player.zoom_original'));
+        window.clearTimeout(zoomHudTimer.current);
+        zoomHudTimer.current = window.setTimeout(() => setZoomHud(null), 1100);
+      }
+      return;
+    }
     if (!g.active) return;
     g.active = false;
     if (g.mode) {                                               // a drag — settle HUDs
@@ -1729,13 +1757,15 @@ export default function VideoPlayer() {
       window.clearTimeout(singleTapTimer.current);
       singleTapTimer.current = window.setTimeout(() => {       // defer so a 2nd tap can upgrade
         if (performance.now() - menuClosedAt.current < 600) { bump(); return; } // this tap closed a sheet
-        if (hideUiRef.current) bump(); else { setHideUi(true); window.clearTimeout(hideTimer.current); }
+        // The first tap brings the controls up; a tap while they are up pauses (or plays) — the
+        // controls then fade on their own timer.
+        if (hideUiRef.current) bump(); else { togglePlay(); bump(); }
       }, 280);
     }
   };
 
   // clear gesture timers on unmount
-  useEffect(() => () => { window.clearTimeout(singleTapTimer.current); window.clearTimeout(seekHudTimer.current); window.clearTimeout(vHudTimer.current); }, []);
+  useEffect(() => () => { window.clearTimeout(singleTapTimer.current); window.clearTimeout(seekHudTimer.current); window.clearTimeout(vHudTimer.current); window.clearTimeout(zoomHudTimer.current); }, []);
 
   // detect iPad/iOS per-video PiP once the media element exists
   useEffect(() => {
@@ -2073,8 +2103,8 @@ export default function VideoPlayer() {
 
   /* The two layers the Back chain cannot see from outside: both are local state, not a store.
    * Registered while the player is open so a remote's Back closes the menu, then the episode
-   * panel, then playback — one press each. Inert on the website, where nothing installs the
-   * resolver that calls these. */
+   * panel, then playback — one press each. On the website a browser Back (or a phone's back swipe)
+   * reaches them the same way (tvKeys `installBackGuard`). */
   useEffect(() => {
     if (!source) return;
     return registerBackHandler(() => {
@@ -2224,30 +2254,21 @@ export default function VideoPlayer() {
   useEffect(() => { setPromptGone(false); setPromptSel('main'); setPromptRun((n) => n + 1); }, [skipMode]);
   useEffect(() => { setCreditsDismissed(false); }, [source]);
   const promptShown = (skipMode === 'next' ? !creditsDismissed : !!skipMode && (!promptGone || !hideUi)) && switching == null;
-  /* THE BOTTOM STACK ARRIVES IN ONE PIECE: the wordmark, the episode line, the icons and the bar WITH
-   * its chapter gaps, together. It used to come in three steps — the bar first as one plain line at
-   * 0:00 / 0:00, its gaps a second or two later when the markers answered, and after Next Episode
-   * the wordmark and the coming episode's line on their own, with no bar under them. Now it is held
-   * (`held`) until the file's length is known and the markers have answered, and the same after Next
-   * Episode until the new one plays; then all of it pops in at once. The markers get 5 s once the
-   * length is known (a first, uncached answer can take a second round on the server) — a slow answer then adds its gaps late rather than holding the controls back —
-   * and nothing holds for more than 8 s, so a stalled file still leaves the viewer the controls
-   * (Audio → another source). An error shows them at once. The ✕ and the picture are never held. */
-  const [segWaited, setSegWaited] = useState(false);
-  const hasDur = dur > 0;
-  useEffect(() => {
-    setSegWaited(false);
-    if (!hasDur) return;
-    const id = window.setTimeout(() => setSegWaited(true), 5000);
-    return () => window.clearTimeout(id);
-  }, [source, hasDur]);
+  /* THE BOTTOM STACK IS UP FROM THE FIRST FRAME: the wordmark, the episode line, the icons and the
+   * bar, the moment the player opens. It used to be held until the file's length was known and the
+   * chapter markers had answered (up to 8 s), so the stack arrived in one piece — and a film opened
+   * on a black screen with only the ✕ for as long as the source took to start, which was the worse
+   * wait. The bar's chapter gaps now open when the markers answer.
+   *
+   * AFTER NEXT EPISODE it is still held, black, until the new episode plays (`switching`): there the
+   * old episode's bar would be the one on screen. An error, or 8 s, lets it go. */
   const [holdOver, setHoldOver] = useState(false);
   useEffect(() => {
     setHoldOver(false);
     const id = window.setTimeout(() => setHoldOver(true), 8000);
     return () => window.clearTimeout(id);
   }, [source, switching]);
-  const held = !errKind && !holdOver && (switching != null || !(hasDur && (segDone || segWaited)));
+  const held = !errKind && !holdOver && switching != null;
   // When it lands, the controls are shown afresh (and fade on the usual timer), as on any wake.
   const wasHeld = useRef(true);
   useEffect(() => {
@@ -2263,14 +2284,24 @@ export default function VideoPlayer() {
       if (!v || !root) return null;
       const vr = v.getBoundingClientRect(), or = root.getBoundingClientRect();
       if (!vr.width || !or.width) return null;
+      /* On a phone held upright, the PICTURE: the <video> fills the screen and the film is a band
+       * across its middle (object-fit: contain), so 5% of the element was a line twice the size, under
+       * the film. A wide screen keeps the element — a scope film's line sits low in the bar there, as
+       * on the television. */
+      const k = vr.height > vr.width && v.videoWidth && v.videoHeight ? Math.min(vr.width / v.videoWidth, vr.height / v.videoHeight) : 0;
+      const pw = k ? v.videoWidth * k : vr.width, ph = k ? v.videoHeight * k : vr.height;
+      const pb = vr.top + (vr.height + ph) / 2;
       // At rest: centred on the picture, a little up from its bottom edge, 88% of its width.
-      return { vr, or, rest: { x: Math.round(vr.left + vr.width / 2 - (or.left + or.width / 2)), y: Math.round(or.bottom - vr.bottom + vr.height * 0.05), w: Math.round(vr.width * 0.88), vh: Math.round(vr.height) } };
+      return { vr, or, rest: { x: Math.round(vr.left + vr.width / 2 - (or.left + or.width / 2)), y: Math.round(or.bottom - pb + ph * 0.05), w: Math.round(pw * 0.88), vh: Math.round(ph) } };
     };
+    // The picture's size is known from `loadedmetadata` on, and changes with a quality switch.
+    const v = videoRef.current;
     const rest = () => { const a = at(); if (a) setCueBox(a.rest); };
     if (!source || hideUi || held || ppOpen) {
       rest();
       window.addEventListener('resize', rest);
-      return () => window.removeEventListener('resize', rest);
+      v?.addEventListener('resize', rest);
+      return () => { window.removeEventListener('resize', rest); v?.removeEventListener('resize', rest); };
     }
     if (shownBox.current) setCueBox(shownBox.current); else rest();
     const measure = () => {
@@ -2288,26 +2319,32 @@ export default function VideoPlayer() {
         ...Array.from(root.querySelectorAll('.vp-meta .vp-title, .vp-epline > span')).map(inked),
         ...Array.from(root.querySelectorAll('.vp-bottom > .vp-controls > :not(.vp-tail)')).map((el) => el.getBoundingClientRect().right),
       ].filter((n) => n > 0);
-      const tail = root.querySelector<HTMLElement>('.vp-bottom .vp-tail');
+      // Hidden on phones (app.css), where its box would measure as the screen's left edge.
+      const tail = Array.from(root.querySelectorAll<HTMLElement>('.vp-bottom .vp-tail')).find((el) => el.getBoundingClientRect().width > 0);
       const L = (lefts.length ? Math.max(...lefts) : vr.left) + gap * 2;
       // A Skip / Next Episode prompt sits at the right end, over the bar: the space ends where it starts.
       const prompt = root.querySelector<HTMLElement>('.vp-prompt.show');
       const R = Math.min(tail ? tail.getBoundingClientRect().left : br.right, prompt ? prompt.getBoundingClientRect().left : Infinity) - gap;
       const mid = or.left + or.width / 2;
+      const tops = Array.from(root.querySelectorAll<HTMLElement>('.vp-bottom > .vp-meta, .vp-bottom > .vp-controls'))
+        .map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0).map((r) => r.top);
+      const top = Math.min(br.top, ...tops);
       let next;
-      if (R - L >= vr.width * 0.3) {
-        next = { x: Math.round((L + R) / 2 - mid), y: Math.round(or.bottom - br.top + gap), w: Math.round(R - L), vh: Math.round(vr.height) };
+      if (or.bottom - a.rest.y <= top - gap) {
+        // The stack is below the picture (a phone held upright): nothing covers the line, it stays.
+        next = a.rest;
+      } else if (R - L >= vr.width * 0.3) {
+        next = { x: Math.round((L + R) / 2 - mid), y: Math.round(or.bottom - br.top + gap), w: Math.round(R - L), vh: a.rest.vh };
       } else {
-        const tops = Array.from(root.querySelectorAll<HTMLElement>('.vp-bottom > .vp-meta, .vp-bottom > .vp-controls'))
-          .map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0).map((r) => r.top);
-        next = { ...a.rest, y: Math.round(or.bottom - Math.min(br.top, ...tops) + gap) };
+        next = { ...a.rest, y: Math.round(or.bottom - top + gap) };
       }
       shownBox.current = next;
       setCueBox(next);
     };
     const t = window.setTimeout(measure, 450);
     window.addEventListener('resize', measure);
-    return () => { window.clearTimeout(t); window.removeEventListener('resize', measure); };
+    v?.addEventListener('resize', measure);
+    return () => { window.clearTimeout(t); window.removeEventListener('resize', measure); v?.removeEventListener('resize', measure); };
   }, [source, hideUi, held, ppOpen, railShown, logoReady, promptShown]);
   /* A pressed prompt takes the remote with it when it goes: focus would otherwise fall to <body> as
    * the button unmounts, and the next arrow would restart from wherever spatial navigation likes. */
@@ -2518,9 +2555,10 @@ export default function VideoPlayer() {
    * browser cannot do without: NEITHER fullscreen nor picture-in-picture means anything on a set
    * that is already the whole screen, and volume is on the remote. On a page they are the only
    * way to those three things, so they sit at the far right end of the row, away from the
-   * viewing controls. Phones drop volume and PiP again in CSS — hardware buttons and
-   * the OS's own PiP gesture do both — and on iOS the slider is dropped by the markup, because
-   * `video.volume` cannot be set there at all (see VOL_LOCKED). */
+   * viewing controls. Phones drop all three in CSS — the side buttons, the OS's own PiP and the
+   * phone itself do those jobs, and the tail squeezed the subtitles' room beside the row — and on
+   * iOS the slider is dropped by the markup, because `video.volume` cannot be set there at all
+   * (see VOL_LOCKED). */
   const tailRow = !IS_TV && (
     <div className="vp-controls vp-tail">
       <div className="vp-vol">
@@ -2833,7 +2871,7 @@ export default function VideoPlayer() {
          absent means the arrows are transport and it must stand down. `tv` / `web` are the
          styling hooks for the two builds' own stylesheets; `tv-rail` lifts the bar clear of the
          episode shelf on both. */
-      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${held ? ' vp-held' : ''}${jumping ? ' vp-jumping' : ''}`}
+      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${held ? ' vp-held' : ''}${jumping ? ' vp-jumping' : ''}${fill ? ' vp-fill' : ''}`}
       id="playerOverlay"
       ref={overlayRef}
       /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
@@ -2994,6 +3032,7 @@ export default function VideoPlayer() {
             <span className="bar"><i style={{ width: `${Math.round((vHud?.val ?? 0) * 100)}%` }} /></span>
             {vHud?.note && <span className="note">{vHud.note}</span>}
           </div>
+          <div className={`vp-zoomhud${zoomHud ? ' show' : ''}`} role="status">{zoomHud}</div>
         </div>
       )}
 
@@ -3122,7 +3161,7 @@ export default function VideoPlayer() {
           <div className="vp-times">
             <span className="vp-t vp-t-cur" id="vpCur">{fmt(shownTime)}</span>
             {chapter && <span className="vp-chapter">{chapter}</span>}
-            <span className="vp-t vp-t-dur" id="vpDur">{fmt(dur)}</span>
+            <span className="vp-t vp-t-dur" id="vpDur">{dur > 0 ? fmt(dur) : ''}</span>
           </div>
         </div>
       </div>

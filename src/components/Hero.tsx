@@ -71,10 +71,11 @@ function HeroInner({ item, onPlay, onAdd, intro }: { item: MediaItem; onPlay?: (
         <div className="hero-desc">
           <div className="hero-desc-in">
             <p className="hero-plot">{plot}</p>
-            <div className="hero-meta">
-              <span>{item.year}</span>
-              <span>{item.rating ? `★ ${item.rating}` : ''}</span>
-              <span>{genre(item.genre || '')}</span>
+            {/* The callouts' own tabs, as on the detail sheet (`.gl-facts`). */}
+            <div className="gl-chips gl-facts hero-meta">
+              {item.rating ? <span className="gl-chip">★ {item.rating}</span> : null}
+              {item.year ? <span className="gl-chip">{item.year}</span> : null}
+              {item.genre ? <span className="gl-chip">{genre(item.genre)}</span> : null}
             </div>
           </div>
         </div>

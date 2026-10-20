@@ -10,6 +10,8 @@ import RailBar from '@/layout/RailBar';
 import TvTopNav from '../components/TvTopNav';
 import TvSpatialNav from '../components/TvSpatialNav';
 import TvBackKey from '../components/TvBackKey';
+import { installBackGuard } from '../lib/tvKeys';
+import { installEdgeSwipeBack } from '../lib/edgeSwipeBack';
 
 const GATED = ['/addons', '/settings', '/library'];
 
@@ -44,6 +46,17 @@ export default function AppShell() {
     registerPageTrack(mainRef.current);
     registerPageSlide(mainRef.current);
     return () => { registerPageSlide(null); registerPageTrack(null); };
+  }, []);
+
+  /* BACK CLOSES WHAT IS OPEN — the title, the player, a sheet — on the website too (tvKeys
+   * `installBackGuard`; the TV installs it with its keys, in TvBackKey). A layout effect for
+   * TvBackKey's reason: it has to hear `popstate` before HashRouter does. The home-screen iPhone app,
+   * which has no back swipe of its own, gets one (lib/edgeSwipeBack.ts). */
+  useLayoutEffect(() => {
+    if (IS_TV) return;
+    const offGuard = installBackGuard();
+    const offSwipe = installEdgeSwipeBack();
+    return () => { offSwipe(); offGuard(); };
   }, []);
 
   /* The TV's card geometry, rounded to whole pixels before the first paint — see lib/tvPixelGrid.ts

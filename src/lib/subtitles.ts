@@ -4,8 +4,24 @@
  * CORS on the track). A subtitle host without permissive CORS simply can't be read
  * and is skipped. */
 
+/* LINES THAT ARE NOT THE FILM. Subtitle files carry their sources' notices as ordinary cues: the
+ * OpenSubtitles add-on opens every file with its own name and the file's (">>OpenSubtitles v3+
+ * v0.0.4<< =>Hope.2026.1080p….srt"), and the site and its uploaders add "Advertise your product or
+ * brand here", "Support us and become VIP member…", "Subtitles by …", "Downloaded from YTS". A cue
+ * whose text matches any of these is dropped whole. Web addresses are on the list because dialogue
+ * almost never spells one out and these notices almost always do. */
+const AD_CUE = /opensubtitles|osdb\.link|addic7ed|subscene|podnapisi|\byts\b|\byify\b|www\.[a-z0-9-]+\.[a-z]{2,}|https?:\/\/|\b[\w-]+(\.[\w-]+)+\.(srt|ass|ssa|vtt|sub)\b|^\s*>>.*<<\s*$|\b(subtitles?|subs|sync(ed)?|synchroni[sz]ed|corrections?|encoded|ripped|downloaded|captioned)\s+(by|from)\b|advertise your product|become vip member/im;
+
+function dropAdCues(body: string): string {
+  return body.split(/\n{2,}/).filter((block) => {
+    const lines = block.split('\n');
+    const at = lines.findIndex((l) => l.includes('-->'));
+    return at < 0 || !AD_CUE.test(lines.slice(at + 1).join('\n'));
+  }).join('\n\n');
+}
+
 function srtToVtt(srt: string): string {
-  const body = String(srt).replace(/\r+/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+  const body = dropAdCues(String(srt).replace(/\r+/g, '').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2'));
   return /^\s*WEBVTT/.test(body) ? body : 'WEBVTT\n\n' + body;
 }
 

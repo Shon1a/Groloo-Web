@@ -256,6 +256,9 @@ const SEED: Record<string, string> = {
   // Under the volume HUD on iOS, where a page cannot set the volume at all — the swipe there
   // only mutes and unmutes, and this says where the level itself went.
   'player.vol_ios': 'Volume: use the side buttons',
+  // Pinch on a phone: the picture fills the screen, or shows whole again.
+  'player.zoom_fill': 'Zoomed to fill',
+  'player.zoom_original': 'Original',
 
   // discover / search / grid
   'search.ph': 'Search titles, people, genres…',

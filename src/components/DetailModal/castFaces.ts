@@ -46,7 +46,8 @@ function setWidth(s: string): number {
   return w;
 }
 
-export function castFaces(meta: Pick<MetaDetail, 'cast'> | null | undefined): CastFace[] {
+/** `limit`: the web sheet's "Show all" asks for every face, not the TV's five. */
+export function castFaces(meta: Pick<MetaDetail, 'cast'> | null | undefined, limit = CAST_FACES): CastFace[] {
   const picked: { name: string; words: string[]; url: string }[] = [];
   const seen = new Set<string>();
   for (const c of meta?.cast ?? []) {
@@ -55,7 +56,7 @@ export function castFaces(meta: Pick<MetaDetail, 'cast'> | null | undefined): Ca
     if (!name || seen.has(name)) continue;
     seen.add(name);
     picked.push({ name, words: name.split(/\s+/), url: c.profile || '' });
-    if (picked.length === CAST_FACES) break;
+    if (picked.length === limit) break;
   }
   const count = new Map<string, number>();
   for (const p of picked) count.set(p.words[0], (count.get(p.words[0]) ?? 0) + 1);
