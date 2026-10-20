@@ -3360,6 +3360,8 @@
   .edge-back.go{background:#fff;animation:edgeBackPop .32s cubic-bezier(.34,1.56,.64,1)}
   .edge-back.go::before{border-color:#000}
   @keyframes edgeBackPop{40%{scale:1.18}}
+  /* …and there the swipe closes the title sheet, so its ✕ goes */
+  .ios-app .modal .close.m-disc{display:none}
 
   /* 3b at phone size: the phone's own 20px top (see `.page` at ≤640) plus the inset */
   @media (max-width:640px){
