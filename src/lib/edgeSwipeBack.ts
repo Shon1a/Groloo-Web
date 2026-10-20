@@ -7,7 +7,10 @@
  * edge, the disc turns white past the mark, and lifting it there is a Back. Nowhere else — where the
  * platform has the gesture, a second one would spend one swipe on two Backs.
  *
- * Not inside the player, where a sideways drag already scrubs the film. */
+ * Not inside the player, where a sideways drag already scrubs the film.
+ *
+ * With the swipe there, the title sheet's ✕ goes (`ios-app` on <html>, app.css): under the status
+ * bar's inset it hung half way down the trailer, and the swipe does its job. */
 const EDGE = 24;   // px from the left edge a swipe has to start within
 const GO = 72;     // px of travel that makes it a Back
 
@@ -18,6 +21,7 @@ export function installEdgeSwipeBack(): () => void {
   disc.className = 'edge-back';
   disc.setAttribute('aria-hidden', 'true');
   document.body.appendChild(disc);
+  document.documentElement.classList.add('ios-app');
 
   let on = false, claimed = false, x0 = 0, y0 = 0, dx = 0;
 
@@ -64,5 +68,6 @@ export function installEdgeSwipeBack(): () => void {
     document.removeEventListener('touchend', end);
     document.removeEventListener('touchcancel', cancel);
     disc.remove();
+    document.documentElement.classList.remove('ios-app');
   };
 }
