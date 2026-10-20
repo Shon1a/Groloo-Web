@@ -155,7 +155,8 @@ export function handleBack(): boolean {
   }
 
   // 3. Store-backed overlays, topmost first (z 3000 → 2500 → 200).
-  if (usePlayer.getState().source) { usePlayer.getState().close(); return true; }
+  // A parked film is behind the title screen, not over it: Back is the screen's (closing it ends the film).
+  if (usePlayer.getState().source && !usePlayer.getState().parked) { usePlayer.getState().close(); return true; }
   if (useAuth.getState().authOpen) { useAuth.getState().closeAuth(); return true; }
   if (useReport.getState().target) { useReport.getState().close(); return true; }
   if (useModal.getState().target) { useModal.getState().close(); return true; }

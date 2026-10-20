@@ -65,33 +65,3 @@ export function castFaces(meta: Pick<MetaDetail, 'cast'> | null | undefined, lim
     return { name, label, long: setWidth(label) > LONG_AT, url };
   });
 }
-
-/* ---- THE FACES ARE ALREADY THERE WHEN THE SCREEN OPENS ---------------------------------------------
- * Resting on a title warms its screen (lib/queries `useWarmDetail`): the detail, the backdrop, the
- * wordmark — and these, so the row is dealt with its photos rather than circles that light up one by one
- * a beat after everything else. Kept in a cache of their own, like the episode stills (deckGeometry
- * `warmStill`): five headshots per title would otherwise push the row's backdrops out of the shared one
- * (lib/useImageReady). Asked for at low priority — a ~10KB face for a title that may never be opened
- * must not queue in front of the posters the walk is about to show. */
-const FACE_KEEP = 24;
-const faceCache = new Map<string, HTMLImageElement>();
-export function warmFace(url: string): void {
-  const hit = faceCache.get(url);
-  if (hit) { faceCache.delete(url); faceCache.set(url, hit); return; }
-  const im = new Image();
-  im.decoding = 'async';
-  im.fetchPriority = 'low';
-  im.src = url;
-  if (typeof im.decode === 'function') im.decode().catch(() => { /* the circle stays dark */ });
-  faceCache.set(url, im);
-  while (faceCache.size > FACE_KEEP) {
-    const oldest = faceCache.keys().next().value;
-    if (oldest === undefined) break;
-    faceCache.delete(oldest);
-  }
-}
-/** Whether a face is held here and loaded — so a photo mounting with it in hand needs no fade. */
-export function faceReady(url: string): boolean {
-  const hit = faceCache.get(url);
-  return !!hit && hit.complete && hit.naturalWidth > 0;
-}

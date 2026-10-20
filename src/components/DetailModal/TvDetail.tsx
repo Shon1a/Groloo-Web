@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useT, useGenre } from '../../i18n/i18n';
 import { imgW, rasterLogo } from '../../lib/img';
 import { retainedReady } from '../../lib/useImageReady';
@@ -6,102 +6,59 @@ import { epLabel } from '../../lib/utils';
 import { langName, sourceNote, type AddonStream } from '../../lib/addonClient';
 import { pickWatchServices } from '../../lib/watchProviders';
 import { registerBackHandler } from '../../lib/tvKeys';
-import TvChipMenu from './TvChipMenu';
-import TvEpisodeDeck, { hasEpisodeDeck } from './TvEpisodeDeck';
-import type { MediaItem, MetaDetail } from '../../lib/types';
-import type { ImdbTrailer } from '../../lib/queries';
+import type { Episode, MetaDetail } from '../../lib/types';
+import { useImdbVideos, useSeason, type ImdbTrailer } from '../../lib/queries';
 import { currentEp } from '../../lib/episodeNumbering';
 import { useModal, type ModalTarget } from '../../stores/modal';
 import { useHistory, type Progress } from '../../stores/history';
-import Glance from '../glance/Glance';
-import { useIntro } from '../glance/useGlance';
-import RateButtons from '../glance/RateButtons';
-import { GlanceIcon } from '../glance/GlanceIcons';
-import { castFaces, faceReady, type CastFace } from './castFaces';
-import { WATCHED, dur, firstSeasonOf, seasonsOf } from './deckGeometry';
+import { usePlayer } from '../../stores/player';
+import { useRatings, type Thumb } from '../../stores/ratings';
+import { useGlanceReady, useSettledGlance } from '../glance/useGlance';
+import { WATCHED, deckOpensOn, dur, firstSeasonOf, seasonsOf } from './deckGeometry';
 import TvTrailerBox from './TvTrailerBox';
+import TvTitlePage, { EpisodeCell, MoreCell, type PageSection } from './TvTitlePage';
+import { ARROWS, HELD_STEP_MS, hideMark, moveMark, offsetIn } from './tvGlide';
 
 /* ============================================================================
- * THE TITLE SCREEN ON A TV — a different SHAPE, not a stripped copy of the web modal.
- *
- * WHY IT EXISTS. The web modal is a tall scrolling card: hero picture, then synopsis, then
- * episodes, then sources, then a cast column, then twenty recommendation tiles. Stretched to
- * fill a 1080p panel that is a web page on a television — the one control the viewer actually
- * came for (a source to press play on) sits below the fold, reached by holding DOWN past a
- * dropdown, a column of headshots and a grid of thumbnails. Roughly thirty images and thirty
- * D-pad stops to start a film.
- *
- * WHAT THIS IS INSTEAD. One screen, two columns, no page scroll:
+ * THE TITLE SCREEN ON A TV — Netflix's TV title page, from the user's references (Oct 20).
  *
  *     ┌───────────────────────────────────────────────────────────┐
- *     │  backdrop, scrimmed                                       │
- *     │   LOGO                                    ┌─────────────┐ │
- *     │   ★ 8.9 · 2026 · 1h 42m                   │  EPISODES   │ │
- *     │   Adventure · Animation · Family          │  or         │ │
- *     │   three lines of synopsis…                │  SOURCES    │ │
- *     │   With Michael B. Jordan, Juno Temple     │  (scrolls)  │ │
- *     │   [▶ WATCH] [+] [⚑]                       └─────────────┘ │
+ *     │  LOGO                      ┌──────────────────────────────│
+ *     │  74% Match  2018  [TV-14]  │  the artwork, top right,      │
+ *     │  New Episode Thursday      │  its left and bottom edges    │
+ *     │  Episode name / tagline    │  fading into the black        │
+ *     │  three lines of synopsis…  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │
+ *     │  Cast: …  Creator: …  genres                               │
+ *     │  👎  👍  👍👍                                               │
+ *     │  [▶ Resume  S1:E2          ]  ← one white box, gliding     │
+ *     │   ⧉ Episodes & More                                       │
+ *     │   + My List                                                │
+ *     │   ≋ Sources                                                │
+ *     │   ▦ More like this                                         │
  *     └───────────────────────────────────────────────────────────┘
  *
- * LEFT IS WHAT IT IS, RIGHT IS WHAT YOU DO. The left column never scrolls and never changes
- * height, so the picture behind it is never pushed around; the right panel is the only thing
- * that moves, and it is the only place the remote has to travel. TvSpatialNav finds it on its
- * own — `scrollParent()` walks up to the nearest overflowing ancestor — so no wiring is needed
- * here beyond giving the panel its own overflow.
+ * WHAT IT IS on top, WHAT YOU DO under it, and nothing on the right but the picture. Every list the
+ * screen used to hold beside the copy — the episode deck, the sources — is a page of its own now
+ * (TvTitlePage), opened from the menu and left with Back:
  *
- * WHAT WAS DROPPED, AND WHY EACH IS SAFE TO DROP ON A TV:
- *   · The recommendations grid. ~20 thumbnails and ~20 D-pad stops, for browsing — which is
- *     what the home rows are already for, one Back press away.
- *   · The second, blurred copy of the poster behind the backdrop (pure ambience).
- *   · The two dropdowns (source / language). A menu that opens over itself is a mouse control;
- *     both are now pills that are simply THERE, so Left/Right walks them.
- *   · The trailer embed. It never ran here anyway (the low-power gate in useTrailer reads a TV
- *     as low-power), and the row billboards already preview.
+ *   · Episodes & More → the seasons, Trailers & More and More Like This on the left, the season's
+ *     episodes on the right. OK on an episode PLAYS it (the best source, as Play does).
+ *   · Trailers & More (a film's menu) and More like this open the same page at that section. The
+ *     trailers are every one IMDb has (/api/imdb-videos), in a grid like More Like This.
+ *   · Sources → Streaming Services and the add-ons' languages on the left, their sources on the right
+ *     — the way to choose a source by hand, and where Play and an episode go when nothing can start.
  *
- * EPISODE STILLS ARE THE ONE THING THAT CAME BACK. They were dropped with the rest, on the
- * grounds that a season is two dozen more pictures — true of a LIST, which shows all of them at
- * once. The panel is a card deck now (TvEpisodeDeck), and a deck only ever has eight cards on it
- * however long the season is, so the picture is affordable again and it is doing real work: it
- * is what makes "where you are in this show" readable from a sofa. The count, not the still, was
- * the problem.
- *
- * SO DID THE CAST'S FACES, on the same argument. They went as "a dozen avatars at 38px, unreadable
- * from a sofa" — a complaint about the size. Five at ninety pixels are recognised before a name is
- * read (castFaces.ts), and they are warmed with the rest of the screen so they arrive with it.
- *
- * That is ~17 images on open where the web modal loads ~30, and 6-ish stops to a playing film.
+ * THE BOX. One white mark under the menu travels from item to item (and morphs into the circle
+ * behind a thumb), on the top bar's pill's 480ms clock; the item's label turns black under it because
+ * the mark carries a black copy of the menu, held still while the mark moves (`ink`, tv.css).
  * Styling lives in the "TV TITLE SCREEN" section of src/styles/tv.css.
  * ==========================================================================*/
 
 const BACKDROP_RENDITION = 'w1280';
 /** Longest the loading veil waits on the backdrop's decode before opening without it. */
 const ART_WAIT_MAX = 2500;
-
-/* NO TRAILER PLAYS ON THIS SCREEN, and the note at the head of this file — "the trailer embed…
- * never ran here anyway" — is load-bearing rather than historical.
- *
- * IT WAS BUILT AND REMOVED, so here is what it was and why it went. Pressing OK on a row billboard
- * that was previewing handed the SAME playing <video> to this screen (a module-level baton, since
- * the row and this overlay are siblings with nothing to thread a prop through), which re-parented
- * it and grew it out of the billboard's box to fill the screen — no cut to black, the picture you
- * pressed OK on simply became the background.
- *
- * It worked, and it cost more than it was worth. A full-screen video repaints under the scrim and
- * the whole right-hand panel at its own frame rate, and unlike the ROW — which only ever previews
- * after a dwell, so video and navigation are mutually exclusive by construction — this screen has
- * no such guarantee: the video plays exactly while the remote is walking the deck, opening the
- * season menu and switching sources. On real hardware that was a UI that visibly answered late.
- *
- * Everything cheap was tried first and none of it was enough: dropping the 1.35 crop, removing
- * every transform and clip while it played, a rendition upgrade (removed — bigger decode, slower
- * remote), holding the screen's own render until the zoom landed (removed — 440ms of nothing after
- * a keypress reads as the app being slow), a six-second cap, ending on the first keypress, and
- * finally restricting it to films, where there is no deck to navigate.
- *
- * Films were the last thing standing and they went too, on the plain ground that a screen does not
- * get to be built twice: one title screen, one behaviour, no class of title that opens differently
- * from another. What is left in its place is the arrival animation on `.tv-det` in tv.css, which
- * gives the screen a way in that costs nothing to run. */
+/** Longest the callouts (and so the copy, which arrives with them) wait on their sources. */
+const GLANCE_WAIT_MS = 1600;
 
 export interface TvDetailProps {
   target: ModalTarget;
@@ -116,8 +73,6 @@ export interface TvDetailProps {
   year?: string | number;
   genreChips: string[];
   plot: string;
-  epTotal: number;
-  close: () => void;
   /** Start the best source for this film (`null`) or this episode, the way the player's Next
    *  Episode does. Resolves false when there was nothing it could start — the caller then shows
    *  the sources instead. */
@@ -126,7 +81,6 @@ export interface TvDetailProps {
   trailer?: ImdbTrailer;
   added: boolean;
   onAdd: () => void;
-  onReport: () => void;
   srcTab: 'services' | 'addons';
   setSrcTab: (s: 'services' | 'addons') => void;
   signedIn: boolean;
@@ -146,10 +100,10 @@ const qualClass = (q: string) => (q === '4K' ? 'q-4k' : q === '1080p' ? 'q-1080'
 
 /* ---- WHAT PLAY PLAYS ON A SERIES -----------------------------------------------------------------
  * The episode this viewer touched last — or, if they finished it, the one after it (the next season's
- * first when that was a finale). Nothing watched: the episode the deck would open on (a pick, or what
- * Continue Watching named), else the first real season's first. The deck asks the same question per
- * season (`deckOpensOn`); this asks it across the whole show, because the button is not in a season. */
-interface UpNext { season: number; ep: number; pct: number; leftSec: number }
+ * first when that was a finale). Nothing watched: the episode Continue Watching named, else the first
+ * real season's first. `known` is false only for that last guess — the screen then talks about the
+ * show rather than about an episode nobody chose. */
+interface UpNext { season: number; ep: number; pct: number; leftSec: number; known: boolean }
 function seriesUpNext(
   meta: MetaDetail | undefined,
   titleId: string | number,
@@ -166,97 +120,82 @@ function seriesUpNext(
   }
   if (last) {
     const pct = Math.min(100, (last.p.pos / last.p.dur) * 100);
-    if (pct < WATCHED * 100) return { season: last.season, ep: last.ep, pct, leftSec: Math.max(0, last.p.dur - last.p.pos) };
+    if (pct < WATCHED * 100) return { season: last.season, ep: last.ep, pct, leftSec: Math.max(0, last.p.dur - last.p.pos), known: true };
     const seasons = seasonsOf(meta).filter((s) => s.season >= 1);
     const here = seasons.find((s) => s.season === last!.season);
-    if (here && here.episodes > last.ep) return { season: last.season, ep: last.ep + 1, pct: 0, leftSec: 0 };
+    if (here && here.episodes > last.ep) return { season: last.season, ep: last.ep + 1, pct: 0, leftSec: 0, known: true };
     const after = seasons.find((s) => s.season > last!.season);
-    if (after) return { season: after.season, ep: 1, pct: 0, leftSec: 0 };
+    if (after) return { season: after.season, ep: 1, pct: 0, leftSec: 0, known: true };
     // The finale, finished: Play starts it again rather than offering nothing.
-    return { season: last.season, ep: last.ep, pct: 0, leftSec: 0 };
+    return { season: last.season, ep: last.ep, pct: 0, leftSec: 0, known: true };
   }
-  if (fallback) return { ...fallback, pct: 0, leftSec: 0 };
+  if (fallback) return { ...fallback, pct: 0, leftSec: 0, known: true };
   const first = firstSeasonOf(meta);
-  return first === undefined ? null : { season: first, ep: 1, pct: 0, leftSec: 0 };
+  return first === undefined ? null : { season: first, ep: 1, pct: 0, leftSec: 0, known: false };
 }
 
-/* ---- MORE LIKE THIS: one card ------------------------------------------------------------------
- * A 16:9 picture with its name on it, like a row card. The picture fades in on load, and `complete`
- * is read in the ref for the cached case — the same pattern as the cast faces above it. */
-function MoreCard({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
-  const [shown, setShown] = useState(false);
-  const pic = item.backdrop || item.poster;
-  const sub = [item.year, item.rating ? `★ ${item.rating}` : ''].filter(Boolean).join('  ·  ');
+/** A season's episodes: TMDB's, or the add-on's own `videos[]` for a title TMDB cannot name. */
+function episodesOf(meta: MetaDetail | undefined, season: number | undefined, fetched?: Episode[]): Episode[] {
+  if (!meta || season == null) return [];
+  if (meta.addonEpisodes) {
+    return meta.addonEpisodes.filter((e) => e.season === season).map((e) => ({
+      episode: e.episode, name: e.name, overview: e.overview, still: e.still, air_date: e.air_date,
+    }));
+  }
+  return fetched ?? [];
+}
+
+/* ---- THE ICONS: plain white line glyphs, as Netflix draws them — they go black under the box with
+ * the label, so they are drawn in `currentColor` rather than taken from the coloured set. */
+type MenuGlyph = 'play' | 'episodes' | 'add' | 'added' | 'sources' | 'trailers' | 'more';
+function MenuIcon({ name }: { name: MenuGlyph }) {
+  const d: Record<MenuGlyph, ReactNode> = {
+    play: <path d="M6.5 4.6v14.8c0 .7.8 1.1 1.4.7l11.6-7.4a.8.8 0 0 0 0-1.4L7.9 3.9c-.6-.4-1.4 0-1.4.7z" fill="currentColor" stroke="none" />,
+    episodes: <><rect x="3" y="7.5" width="13.5" height="13.5" rx="1.3" /><path d="M7.5 3.5h11.8c.7 0 1.2.5 1.2 1.2v11.8" /></>,
+    add: <path d="M12 3.5v17M3.5 12h17" />,
+    added: <path d="M4 12.5l5.2 5.2L20 6.8" />,
+    sources: <path d="M12 3.5l8.5 4.6-8.5 4.6-8.5-4.6zM3.5 12.2l8.5 4.6 8.5-4.6M3.5 16.3l8.5 4.6 8.5-4.6" />,
+    trailers: <><rect x="3" y="4.5" width="18" height="15" rx="1.6" /><path d="M10 9.2v5.6l4.6-2.8z" /></>,
+    more: <><rect x="3.5" y="3.5" width="7" height="7" rx="1.2" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.2" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.2" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.2" /></>,
+  };
   return (
-    <button className="tv-det-more-card" type="button" aria-label={item.title} onClick={onOpen}>
-      <span className="tv-det-more-pic" aria-hidden="true">
-        {pic && (
-          <img
-            className={shown ? 'rdy' : undefined}
-            src={pic}
-            alt=""
-            decoding="async"
-            ref={(el) => { if (el?.complete && el.naturalWidth > 0 && !shown) setShown(true); }}
-            onLoad={() => setShown(true)}
-          />
-        )}
-      </span>
-      <span className="tv-det-more-cap" aria-hidden="true">
-        <b>{item.title}</b>
-        {sub && <span>{sub}</span>}
-      </span>
-    </button>
+    <svg className="tv-dm-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {d[name]}
+    </svg>
   );
 }
 
-/* ---- THE DISC ICONS: the Groloo 3D set ------------------------------------------------------
- * The discs wear the same lit objects as the callouts (components/glance): an azure plus, a tick,
- * a cobalt flag on a chrome pole, an ice-glass cross. They were drawn strokes, and before that typed
- * characters that never matched each other; the set is one family by construction — one studio,
- * one palette — so a disc row reads as a row. Sized in em off the disc's own font-size clamp. */
-function PlusIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="add" /></span>; }
-function CheckIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="added" /></span>; }
-function FlagIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="flag" /></span>; }
-function CloseIcon() { return <span className="ic3" aria-hidden="true"><GlanceIcon name="close" /></span>; }
-
-/* ONE FACE OF THE CAST ROW. The photo fades in on load unless the title's warm-up already holds it
- * (castFaces `warmFace`), in which case it is on the circle from the first frame. `complete` is read in
- * the ref as well as `load` for the reason the episode cards give: a picture already decoded can finish
- * before the handler is attached, and its `load` never comes. No photo, or one that fails, leaves the
- * silhouette the web modal uses — the person still has a place in the row. */
-function CastFaceItem({ face }: { face: CastFace }) {
-  const [shown, setShown] = useState(() => !!face.url && faceReady(face.url));
-  const [broken, setBroken] = useState(false);
+/* Netflix's three ratings, in outline: a thumb down, a thumb up, two thumbs up. The pair's front thumb
+ * is cut out of the back one by a band of the background's colour (`--knock`, tv.css), and a rating
+ * given fills its thumb. */
+const THUMB_D = 'M7 20.5H4.6c-.6 0-1.1-.5-1.1-1.1v-7.3c0-.6.5-1.1 1.1-1.1H7m0 9.5h9.6c1 0 1.9-.7 2.1-1.7l1.5-6.2c.3-1.3-.7-2.5-2-2.5h-4.6l.8-3.8c.2-1-.4-2-1.4-2.3l-.3-.1c-.4-.1-.8.1-1 .4L7 11z';
+function ThumbIcon({ kind }: { kind: Thumb }) {
   return (
-    <li className="tv-det-face" aria-label={face.name}>
-      <span className="tv-det-face-pic" aria-hidden="true">
-        {face.url && !broken
-          ? (
-            <img
-              className={shown ? 'rdy' : undefined}
-              src={face.url}
-              alt=""
-              decoding="async"
-              ref={(el) => { if (el?.complete && el.naturalWidth > 0 && !shown) setShown(true); }}
-              onLoad={() => setShown(true)}
-              onError={() => setBroken(true)}
-            />
-          )
-          : <svg viewBox="0 0 24 24"><path d="M12 12.6a4.6 4.6 0 1 0 0-9.2 4.6 4.6 0 0 0 0 9.2ZM12 14.4c-5.2 0-9 3.1-9 7.4V24h18v-2.2c0-4.3-3.8-7.4-9-7.4Z" /></svg>}
-      </span>
-      {/* A name too wide for its circle ("Christopher", "Yoshitsugu", most Georgian names past six
-          letters) sets a step smaller rather than losing its end to an ellipsis — castFaces `long`. */}
-      <span className={face.long ? 'tv-det-face-name is-long' : 'tv-det-face-name'} aria-hidden="true">{face.label}</span>
-    </li>
+    <svg className="tv-dm-thumb" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+      {kind === 'up' && <path className="tv-thumb" d={THUMB_D} />}
+      {kind === 'down' && <path className="tv-thumb" d={THUMB_D} transform="rotate(180 12 12)" />}
+      {kind === 'love' && (
+        <>
+          <path className="tv-thumb" d={THUMB_D} strokeWidth="2.2" transform="translate(.6 .4) scale(.8)" />
+          <path className="tv-thumb-gap" d={THUMB_D} strokeWidth="5" transform="translate(5 4.4) scale(.8)" />
+          <path className="tv-thumb" d={THUMB_D} strokeWidth="2.2" transform="translate(5 4.4) scale(.8)" />
+        </>
+      )}
+    </svg>
   );
 }
+
+const THUMBS: Thumb[] = ['down', 'up', 'love'];
+
+type View = 'main' | 'browse' | 'sources';
+interface MenuItem { key: string; glyph: MenuGlyph; label: string; sub?: string; bar?: number; run: () => void }
 
 export default function TvDetail(p: TvDetailProps) {
   const t = useT();
   const genre = useGenre();
   const {
-    target, meta, ready, isSeries, title, titleLogo, rating, year, genreChips, plot, epTotal,
-    close, onPlayNow, trailer, added, onAdd, onReport,
+    target, meta, ready, isSeries, title, titleLogo, rating, year, genreChips, plot,
+    onPlayNow, trailer, added, onAdd,
     srcTab, setSrcTab, signedIn, openAuth, streamsLoading, shownStreams, availableLangs,
     lang, setLang, playStream, streamTitle, pickedEp, setPickedEp,
   } = p;
@@ -314,653 +253,549 @@ export default function TvDetail(p: TvDetailProps) {
   const shown = ready && (artReady || !backdropUrl);
 
   const [logoShown, setLogoShown] = useState(() => !!titleLogo && retainedReady(rasterLogo(titleLogo, 'original')));
+  const logo = (big: boolean) => (
+    <h2 id={big ? 'mTitle' : undefined} className={`tv-det-title${titleLogo ? ' has-logo' : ''}${big ? '' : ' is-small'}`}>
+      {/* The wordmark fades in like every other picture here; `complete` is checked for the cached
+          case, where `load` can fire before the handler is attached. */}
+      {titleLogo
+        ? (
+          <img
+            className={logoShown ? 'title-logo rdy' : 'title-logo'}
+            src={rasterLogo(titleLogo, 'original')}
+            alt={title}
+            decoding="async"
+            ref={(el) => { if (el?.complete && !logoShown) setLogoShown(true); }}
+            onLoad={() => setLogoShown(true)}
+          />
+        )
+        : title}
+    </h2>
+  );
 
-  /* The credits: the cast as a row of faces (castFaces.ts). */
-  const faces = castFaces(meta);
-
-  /* ---- THE FACTS: UP TO THREE SHORT LINES -----------------------------------------------------
-   *   ★ 6.8 │ 2020 │ 12+ │ 1h 55min
-   *   2 Seasons · 24 Episodes
-   *   Adventure · Fantasy · Action
-   *
-   * It was ONE wrapping flex row of cells, each after the first carrying a drawn rule. A row like
-   * that cannot know where it will break, so the seasons and the genres fell onto the next lines
-   * with their rule still in front of them — "│ 2 Seasons", "│ Animation · …" — a divider at the
-   * start of a line, dividing nothing. Each kind of fact owns its line now, so a line can only ever
-   * break inside the genres, and the rules only ever sit between the short facts of the first line.
-   *
-   * THE RULES ARE FOR THE FIRST LINE ONLY, which is built from nodes rather than a string because
-   * the certificate is a CHIP and a chip cannot survive `.join()`. The seasons and the genres are
-   * sets, dot-joined — one rule between "Adventure" and "Fantasy" would say they rank alongside the
-   * year and the runtime. */
-  const metaBits: ReactNode[] = [
-    rating ? `★ ${rating}` : '',
-    year ? String(year) : '',
-    /* The board's own string, printed as issued — no "+" appended and nothing normalised. "12"
-     * is a German certificate and "PG-13" an American one; rewriting either into the other's
-     * shape would be this app inventing a rating no board gave. Absent for an unrated title, and
-     * the cell simply does not appear. */
-    meta?.certification
-      ? <span key="cert" className="tv-det-age">{meta.certification}</span>
-      : '',
-    meta?.runtime || '',
-  ].filter(Boolean);
-  const seasonsLine = isSeries && meta?.seasons
-    ? [meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }),
-       epTotal ? t('modal.episodes_count', { n: epTotal }) : ''].filter(Boolean).join(' · ')
+  /* ---- THE FACTS: ONE LINE, AS NETFLIX SETS IT ----------------------------------------------------
+   *   84% Match   2020   [12]   2 Seasons        (a film: its runtime where the seasons are)
+   * Spaced, not ruled. The match is the public score as a percentage, in Netflix's green: the user's
+   * call (Oct 20), there being no personal match to show. The certificate is a CHIP — the board's own
+   * string, printed as issued ("12" is German, "PG-13" American; rewriting either into the other's
+   * shape would invent a rating) — which is why the line is nodes rather than a joined string. */
+  const seasonsText = isSeries && meta?.seasons
+    ? (meta.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: meta.seasons }))
     : '';
-  /* Three genres at most: the line has to stay ONE line, and a fourth and fifth ("· Kids · Family")
-   * only ever wrapped into a second line that began with a dot. */
-  const genresLine = genreChips.length > 0 ? genreChips.slice(0, 3).map(genre).join(' · ') : '';
-
-  const services = srcTab === 'services' ? pickWatchServices(meta?.providers, title) : [];
-  /* A series shows its episodes until one is chosen. `hasEpisodeDeck` is the same guard the deck
-   * applies to itself — asked here too, so a series with no season data falls through to the
-   * sources panel rather than leaving an empty, chrome-less column. */
-  const deck = isSeries && !pickedEp && hasEpisodeDeck(meta);
-
-  /* WHICH EPISODE THE DECK OPENS ON, in order of how much each answer knows:
-   *
-   *   1. `pickedEp`      — null whenever the deck is showing (a picked episode is what turns the
-   *                        deck off); in the expression only for completeness.
-   *   2. `lastPicked`    — the episode this viewer opened a moment ago and then backed out of.
-   *   3. `target.resumeEp` — what Continue Watching was showing, or what a deep link named.
-   *   4. nothing         — the deck infers "up next" from the progress map.
-   *
-   * (2) IS WHAT MAKES BACK RETURN TO WHERE YOU WERE. Picking an episode unmounts the deck, and
-   * Back mounts a fresh one — which had no memory of the choice, so it fell through to (4) and
-   * re-opened on episode 1. Choosing episode 8, glancing at its sources and pressing Back put the
-   * remote seven cards from where it started, every time.
-   *
-   * It is keyed by title id and checked rather than cleared in an effect: TvDetail is not
-   * remounted when the modal moves to a different title, so a bare ref would hand one show's
-   * episode to the next one — and an effect that resets it runs AFTER the render that would
-   * already have used it. */
-  const lastPicked = useRef<{ id: string; season: number; ep: number } | null>(null);
-  const remembered = lastPicked.current?.id === String(target.id)
-    ? { season: lastPicked.current!.season, ep: lastPicked.current!.ep }
-    : null;
-  const resumeEp = currentEp(meta, target.resumeEp);
-  const deckPicked = pickedEp
-    ?? remembered
-    ?? (resumeEp ? { season: resumeEp.season, ep: resumeEp.episode } : null);
-
-  const choose = (season: number, ep: number) => {
-    lastPicked.current = { id: String(target.id), season, ep };
-    setPickedEp({ season, ep });
-  };
-
-  /* CHOOSING AN EPISODE HANDS THE REMOTE TO THE SOURCE CHIP.
-   *
-   * The deck unmounts on that press, so the element focus was on ceases to exist and the browser
-   * gives focus back to <body>. TvSpatialNav notices and re-seeds — with `#mWatch`, because that
-   * is the one seed it knows. That is the wrong end of the screen: the viewer has just committed
-   * to an episode and is looking at the panel that appeared, not at the button on the far left.
-   *
-   * Seeded here rather than by teaching TvSpatialNav a second rule, because this is the only
-   * place that knows the transition happened. `prevDeck` is what distinguishes "an episode was
-   * just chosen" from "this screen opened straight onto sources", which is every film and any
-   * series deep-linked to an episode — neither should have focus yanked into the panel. */
-  const panelRef = useRef<HTMLDivElement>(null);
-  const prevDeck = useRef(deck);
-  const panelSeeded = useRef(false);
-  /* THE CHIP TAKEN ONLY BECAUSE THERE WAS NO LIST YET, held so it can be handed back.
-   *
-   * The panel almost never arrives with its sources already in it — /api/meta lands, the panel
-   * renders its "loading" note, and the addon streams turn up a beat later. So the seed below
-   * runs first against a panel whose only control is the chip, parks there, sets `panelSeeded`,
-   * and the run that fires when the rows finally exist bails on that flag. The remote would have
-   * sat on the dropdown for exactly the reason the seed was changed to avoid.
-   *
-   * Recording WHAT was seeded is what separates "we parked here for want of anything better" from
-   * "the viewer chose this". A provisional chip is still parked focus; a chip the viewer walked
-   * back up to is not, and the check below can tell them apart because in the second case focus
-   * has moved at least once in between. */
-  const provisional = useRef<HTMLElement | null>(null);
+  const match = typeof rating === 'number' && rating > 0 ? Math.round(Math.min(10, rating) * 10) : 0;
+  const facts: ReactNode[] = [
+    match ? <span key="match" className="tv-dm-match">{t('tv.match', { n: match })}</span> : '',
+    year ? String(year) : '',
+    meta?.certification ? <span key="cert" className="tv-det-age">{meta.certification}</span> : '',
+    seasonsText,
+    !isSeries ? meta?.runtime || '' : '',
+  ].filter(Boolean);
+  const factsLine = (list: ReactNode[]) => (list.length > 0 && (
+    <div className="tv-dm-facts">{list.map((b, i) => <span key={i}>{b}</span>)}</div>
+  ));
+  /* Info at a glance — a new season, a top-ten place, an award — as Netflix prints it under the facts:
+   * a line of bold text ("Season 2 Coming March 8"), no chip and no icon. */
+  const glance = { item: { id: target.id, type: target.type, year, rating, genre: target.genre }, meta, awards: true };
+  const callouts = useSettledGlance(glance, `${target.type}:${target.id}`, { waitForMeta: true, maxWaitMs: GLANCE_WAIT_MS }).slice(0, 2);
+  /* THE COPY ARRIVES ONCE, WITH ITS CALLOUTS. The column comes in a line at a time (tv.css `.tv-dm.is-in`),
+   * and a callout settling after that would be a line pushed in under the cascade, shoving everything
+   * below it down. So the column waits for the callouts' sources (awards — usually already asked for by
+   * the row's dwell), or for the same wait the callouts themselves give up at; the picture does not. */
+  const glanceReady = useGlanceReady(glance, true);
+  const [glanceLate, setGlanceLate] = useState(false);
   useEffect(() => {
-    const cameFromDeck = prevDeck.current && !deck;
-    prevDeck.current = deck;
-    if (deck) return;   // the deck seeds itself
-
-    /* SOMETHING HAS TO CLAIM THE REMOTE NOW THAT WATCH IS GONE. TvSpatialNav's seed was
-     * `#mWatch`, and the TV build no longer renders it — so on a film, or on a series once an
-     * episode is chosen, nothing took focus and it sat on the ✕ in the corner. The panel is the
-     * only thing on this screen there is to do, so the panel claims it.
-     *
-     * Two triggers, one guard. `cameFromDeck` is the press that swapped the deck out; the
-     * `panelSeeded` path covers a film, where there was never a deck and the panel simply
-     * arrives. Either way it only ever takes focus that nobody chose — the ✕ or nothing at
-     * all — so a viewer who has already moved is left alone. */
-    const ae = document.activeElement as HTMLElement | null;
-    // Focus on the chip we parked on ourselves counts as nobody having chosen anything yet.
-    const onProvisional = !!provisional.current && ae === provisional.current;
-    const parked = !ae || ae === document.body || ae.id === 'closeModal' || onProvisional;
-    if (!cameFromDeck && !parked) { panelSeeded.current = true; provisional.current = null; return; }
-    if (!cameFromDeck && panelSeeded.current && !onProvisional) return;
-
-    /* THE FIRST SOURCE, NOT THE DROPDOWN ABOVE IT — this is the difference between one press and
-     * three. The panel arrives with its head row on top (the chip, +, flag, ✕), then the language
-     * pills, then the list, so seeding the chip put the remote two Downs away from the only thing
-     * anybody opened this screen to do. Playing the first source cost Down, Down, OK; it now costs
-     * OK. The chip is a control for the rare case where the list is the wrong list, and a control
-     * that is used occasionally should not sit in front of the one used every time.
-     *
-     * ORDERED LOOKUPS, NOT ONE COMMA-SELECTOR, and here that is load-bearing rather than
-     * pedantry: `querySelector` returns the first match in DOCUMENT order, and the chip is first
-     * in the markup — so a comma list would go on picking the chip and this change would look
-     * applied while doing nothing. (The same trap is called out on TvSpatialNav's recovery list.)
-     *
-     * The fallbacks are the cases where there is no row to take: a list still loading, an empty
-     * one where the chip is genuinely all there is, and the signed-out addons panel, whose SIGN
-     * IN is a pill. The first of those is the common one, which is what `provisional` is for. */
-    const row = panelRef.current?.querySelector<HTMLElement>('.tv-det-row');
-    const first = row
-      || panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn')
-      || panelRef.current?.querySelector<HTMLElement>('.tv-det-pill');
-    if (!first) return;
-    // Re-focusing what already has focus would be a no-op that still fires a focus event; skip it.
-    if (first !== ae) first.focus({ preventScroll: true });
-    panelSeeded.current = true;
-    provisional.current = row ? null : first;
-    /* `shown`, NOT `ready` — the panel does not exist until the veil lifts. The two used to be the
-     * same instant; now the veil also waits for the backdrop to decode, so a seed keyed to `ready`
-     * would run against an empty overlay, find nothing, and never re-run (the deps would not have
-     * changed by the time the panel actually mounted). The remote would land on a title screen with
-     * no selection on it. */
-  }, [deck, shown, srcTab, shownStreams.length, services.length]);
-
-  /* THE MOMENT THE REMOTE MOVES, THE CHIP IS NO LONGER PROVISIONAL — and this listener is what
-   * stops the upgrade above from becoming a yank.
-   *
-   * Without it the flag is positional rather than historical: a viewer who walks Down to a
-   * language pill and back Up to the chip is sitting on the same element the seed parked on, so
-   * `onProvisional` reads true and the next arriving list would pull focus off a control they
-   * deliberately returned to. Clearing on the first focus change anywhere makes the flag mean
-   * what it is supposed to mean — "focus has not moved since we parked it" — rather than "focus
-   * happens to be here now".
-   *
-   * `focusin` rather than `blur` because it bubbles, so one document-level listener covers every
-   * control in the panel without any of them knowing about this. */
-  useEffect(() => {
-    const onFocusIn = () => {
-      if (provisional.current && document.activeElement !== provisional.current) provisional.current = null;
-    };
-    document.addEventListener('focusin', onFocusIn);
-    return () => document.removeEventListener('focusin', onFocusIn);
+    const id = window.setTimeout(() => setGlanceLate(true), GLANCE_WAIT_MS);
+    return () => window.clearTimeout(id);
   }, []);
+  const copyIn = shown && (glanceReady || glanceLate);
 
-  /* BACK IS THE WAY BACK TO THE EPISODES — there is no button for it any more.
-   *
-   * There was one ("‹ EPISODES", top-left of the panel) and it was the wrong shape of answer: a
-   * TV remote has a dedicated Back key, so an on-screen back control is a second way to do the
-   * same thing that costs a D-pad stop and a corner of the panel. Registering here instead puts
-   * it on the app's existing chain, which means the remote's Back, webOS's, Tizen's, Android's
-   * bridge call and the desktop keyboard all reach it without this component knowing which.
-   *
-   * ORDER MATTERS AND FALLS OUT FOR FREE. `registerBackHandler` runs most-recently-registered
-   * first, so an open chip menu (registered later, while it is open) closes before this does, and
-   * this runs before the modal's own close in `handleBack`. One press, one layer, every time. */
-  useEffect(() => {
-    if (!isSeries || !pickedEp) return;
-    return registerBackHandler(() => { setPickedEp(null); return true; });
-  }, [isSeries, pickedEp, setPickedEp]);
-
-  /* ONE close button, and it lives in the chip row — so it does not exist at all until /api/meta
-   * lands, because the row does not.
-   *
-   * IT USED TO ALSO RENDER IN THE TOP-RIGHT CORNER OF THE LOADING VEIL, on the argument that a
-   * title you cannot visually back out of is not acceptable just because Back happens to work.
-   * That was wrong on this build for two reasons.
-   *
-   * It is the only rendered control on the veil, which means it is the only CANDIDATE on the
-   * layer — so TvSpatialNav's recovery, having nothing real to offer the remote, parked focus on
-   * it and drew a ring around it. The first thing a viewer saw after pressing OK on a title was a
-   * spinner and a highlighted ✕: an interface whose one visible, one selected affordance is
-   * "undo that". The veil is a few hundred milliseconds of nothing; it should look like nothing.
-   *
-   * And the affordance was never the only way out. Back closes the modal from step 3 of
-   * `handleBack` — a store-backed overlay, closed by reading `useModal`, with no dependence on
-   * anything being rendered — so the remote's Back, webOS's, Tizen's, Android's bridge call and
-   * the desktop Escape all worked during the veil and still do. Nothing about the way out changed
-   * here; what changed is that the veil no longer renders a control to say so.
-   *
-   * The id is what TvSpatialNav looks for when deciding whether focus is merely parked. */
-  /* The icons play once as the title screen opens (useIntro) — this row is rendered in two places
-   * and rebuilt when the sources menu opens, and it must not replay on every one of those. */
-  const intro = useIntro(target.id);
-  const closeBtn = (
-    <button className={`tv-det-disc tv-det-close${intro ? ' gl-run' : ''}`} id="closeModal" type="button"
-            aria-label={t('modal.close_aria')} onClick={close}>
-      <CloseIcon />
-    </button>
-  );
-
-  /* ADD AND REPORT LIVE IN THE CHIP ROW, and they are defined once here because that row is
-   * rendered in two places — TvEpisodeDeck's head for a series, the sources head below for
-   * everything else. Passing the same nodes into both is what keeps them one control rather than
-   * two copies that drift the first time one is changed.
-   *
-   * They were an action row under the credits, beside WATCH. With WATCH gone that left two small
-   * circles adrift at the bottom of the left column, furthest from anything they act on and last
-   * in the remote's path. Beside the dropdown they sit with the other controls, in the column the
-   * remote is already in. */
-  const actions = (
-    <>
-      <div className={`tv-det-actions${intro ? ' gl-run' : ''}`}>
-        <button className={`tv-det-disc${added ? ' on' : ''}`} id="mAdd" type="button"
-                aria-pressed={added} aria-label={t(added ? 'mylist.remove' : 'mylist.add')} onClick={onAdd}>
-          {added ? <CheckIcon /> : <PlusIcon />}
-        </button>
-        {/* The three thumbs, beside Add: what "picked for you" learns from. */}
-        <RateButtons id={target.id} type={target.type} title={title} genres={meta?.genre} className="tv-det-disc" />
-        <button className="tv-det-disc" id="mReport" type="button"
-                aria-label={t('report.cta')} title={t('report.cta')} onClick={onReport}>
-          <FlagIcon />
-        </button>
-      </div>
-      {/* CLOSE JOINS THE ROW, pushed to its far end (`margin-left: auto` in tv.css).
-          It was pinned to the top-left corner of the overlay — the one control that was nowhere
-          near any other, on the opposite side of a 1920px screen from everything the remote
-          visits. Here it is the last stop on a row the remote is already walking, and it looks
-          like what it is: another disc. */}
-      {closeBtn}
-    </>
-  );
-
-  /* LEFT LEAVES THE LIST, because otherwise it is a key that does nothing and the way out is
-   * twenty presses of Up.
-   *
-   * The source rows are the full width of a single-column panel, so there is never a neighbour
-   * beside one: TvSpatialNav's `pick` finds no candidate to the left or the right of a row, and
-   * both keys are inert for as long as the remote is in the list. Meanwhile the only route back
-   * to the head row — change the language, switch to Streaming, close the title — is Up, once per
-   * row, and a well-seeded addon can be thirty of them. Sitting on row 24 with two dead keys and
-   * a two-dozen-press exit is the discomfort; this is one press.
-   *
-   * LEFT RATHER THAN RIGHT, because the panel is the right-hand column of the screen and left is
-   * where the rest of it is — the direction a viewer already presses to get out of a list on
-   * every other TV app. Right stays dead, deliberately: one escape is a gesture, two is a
-   * coin toss about which one you meant.
-   *
-   * IT AIMS AT THE CHIP, not at the language pills that may sit between. The pills are a filter
-   * on the list you are leaving, so landing there means the escape hatch dropped you inside the
-   * same region at a different altitude; the chip is the head of the panel and the row the other
-   * three controls live on. From there Down re-enters the list — and `unreachable` in
-   * TvSpatialNav means it re-enters on a row that is actually on screen, so leaving and coming
-   * back keeps your place rather than snapping to the top. */
-  /* UP OFF THE TOP ROW GOES TO THE CHIP FOR THE SAME REASON LEFT DOES.
-   *
-   * From the first source, Up has nothing above it inside the list, so TvSpatialNav scored the
-   * whole head row and picked by geometry — which is the ✕ in the far corner, because it is the
-   * nearest candidate in that direction from a full-width row. Two presses later the viewer is
-   * closing the title they were trying to pick a source for.
-   *
-   * The chip is the answer here for the reason it is the answer for Left: it is the head of the
-   * panel, the control that says what the list underneath IS, and the row the other three live
-   * on — so from there every one of them is one press sideways. Geometry has no way to know that;
-   * the ✕ really is closer.
-   *
-   * ONLY FROM THE TOP ROW. Anywhere else Up means "the row above", which is what spatial
-   * navigation already does correctly, and taking the key there would break walking the list. */
-  const leaveList = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowUp') return;
-    if (e.key === 'ArrowUp') {
-      const stops = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('a, button, [tabindex]'))
-        .filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
-      if (stops[0] !== document.activeElement) return;   // mid-list: Up is "the row above"
-    }
-    const chip = panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn');
-    if (!chip) return;   // no head to go back to; leave the key alone rather than swallow it
-    e.preventDefault();
-    /* Stopped here so it never reaches TvSpatialNav's window listener. `move('left')` would find
-     * nothing and return false, so this is belt-and-braces rather than a fix — but it keeps the
-     * press from being scored against every candidate in the layer for an answer we have already
-     * given. */
-    e.stopPropagation();
-    chip.focus({ preventScroll: true });
-  };
+  /* ---- THE CREDITS: Netflix's three small lines — the cast, who made it, what kind of thing it is. */
+  const castLine = (meta?.cast ?? []).slice(0, 3).map((c) => c.name).filter(Boolean).join(', ');
+  const makers = isSeries ? (meta?.creators ?? []).slice(0, 2).map((c) => c.name).filter(Boolean) : [];
+  const makerLine = isSeries ? makers.join(', ') : (meta?.director || '');
+  const makerLabel = isSeries ? (makers.length > 1 ? t('tv.creators') : t('modal.creator')) : t('modal.director');
+  const genresLine = genreChips.slice(0, 3).map(genre).join(', ');
 
   /* ---- PLAY: ONE PRESS TO A PLAYING TITLE ---------------------------------------------------------
-   *
-   * THE WATCH BUTTON WENT, AND THIS IS WHAT IT TOOK WITH IT. DetailModal's note on `onWatchTv`
-   * records the loss: a quick resume. The deck still is how a viewer CHOOSES an episode; this is for
-   * the viewer who has already chosen — by watching — and wants to carry on. It plays what
-   * `seriesUpNext` names (or, once an episode is picked, that episode), or the film, from the best
-   * source, the way the player's Next Episode does (`playEpisode` in DetailModal, via `onPlayNow`).
-   *
-   * WHEN IT CANNOT, IT SHOWS WHERE THE SOURCES ARE rather than doing nothing: signed out (add-on
-   * sources need an account), or no source that can start here. A series opens that episode's
-   * sources, exactly as picking its card would; a film hands the remote to the first row of the
-   * panel beside it.
-   *
-   * The id is deliberately NOT `mWatch`: TvSpatialNav's recovery prefers that id to the deck's card,
-   * and Back out of the sources would then land here instead of on the episode it came from. */
+   * Up next on a series (`seriesUpNext`), or the film, from the best source, the way the player's Next
+   * Episode does (`playEpisode` in DetailModal, via `onPlayNow`). WHEN IT CANNOT — signed out (add-on
+   * sources need an account), or no source that can start here — it opens the sources for it. */
   const progress = useHistory((s) => s.progress);
-  const pickedP = pickedEp ? progress[`${target.id}:S${pickedEp.season}E${pickedEp.ep}`] : undefined;
-  const upNext: UpNext | null = !isSeries ? null
-    : pickedEp
-      ? {
-        ...pickedEp,
-        pct: pickedP && pickedP.dur > 0 && pickedP.pos / pickedP.dur < WATCHED ? (pickedP.pos / pickedP.dur) * 100 : 0,
-        leftSec: pickedP ? Math.max(0, pickedP.dur - pickedP.pos) : 0,
-      }
-      : deck ? seriesUpNext(meta, target.id, progress, deckPicked) : null;
+  const resumeEp = currentEp(meta, target.resumeEp);
+  const named = resumeEp ? { season: resumeEp.season, ep: resumeEp.episode } : null;
+  const upNext: UpNext | null = isSeries ? seriesUpNext(meta, target.id, progress, named) : null;
   const filmP = !isSeries ? progress[String(target.id)] : undefined;
   const filmPct = filmP && filmP.dur > 0 ? (filmP.pos / filmP.dur) * 100 : 0;
   const filmResume = filmPct >= 1 && filmPct < WATCHED * 100;
   const resuming = isSeries ? !!upNext && upNext.pct >= 1 : filmResume;
-  const playPct = isSeries ? (upNext?.pct ?? 0) : filmPct;
-  const playSub = isSeries
-    ? (upNext ? `S${upNext.season}:E${upNext.ep}` : '')
-    : (filmResume && filmP ? t('modal.ep_left', { time: dur(filmP.dur - filmP.pos) }) : '');
   const canPlay = !isSeries || !!upNext;
+
+  /* The up-next episode's own name and synopsis take the show's place, as Netflix does once you have
+   * started — but only if its season is already in hand when the screen opens (the rest warm-up reads
+   * it). Decided once: a season arriving a beat later must not rewrite the copy under the viewer. */
+  const upSeason = useSeason(meta?.id, isSeries && upNext?.known && !meta?.addonEpisodes ? upNext.season : undefined, meta?.imdb);
+  const upEps = episodesOf(meta, upNext?.known ? upNext.season : undefined, upSeason.data?.episodes);
+  const upEpisode = upNext ? upEps.find((e) => e.episode === upNext.ep) : undefined;
+  const epMode = useRef<boolean | null>(null);
+  if (shown && epMode.current === null) epMode.current = !!upEpisode;
+  const showEp = !!epMode.current && !!upEpisode;
+  const headline = showEp
+    ? `${epLabel(upNext!.season, upNext!.ep)} · ${upEpisode!.name || t('modal.episode_n', { n: upNext!.ep })}`
+    : (meta?.tagline?.trim() || '');
+  const synopsis = showEp && upEpisode!.overview ? upEpisode!.overview : plot;
+
   const [playBusy, setPlayBusy] = useState(false);
-  const toSources = () => {
-    // Choosing the episode swaps in its sources, and the panel's own seed takes the remote there.
-    if (isSeries && upNext && !pickedEp) { choose(upNext.season, upNext.ep); return; }
-    const first = panelRef.current?.querySelector<HTMLElement>('.tv-det-row')
-      || panelRef.current?.querySelector<HTMLElement>('.tv-chipmenu-btn');
-    first?.focus({ preventScroll: true });
+  const [busyEp, setBusyEp] = useState<string | null>(null);
+
+  /* ---- THE PAGES: a stack, so Back walks out the way the remote walked in ----------------------- */
+  const [stack, setStack] = useState<View[]>(['main']);
+  const view = stack[stack.length - 1];
+  const [browseSec, setBrowseSec] = useState('');
+  /** The menu item a page was opened from — where the remote lands when Back returns to the menu. */
+  const returnTo = useRef('play');
+  /** The episode last chosen on the page — where the remote returns to on it. */
+  const lastEp = useRef<{ season: number; ep: number } | null>(null);
+  const push = (v: View) => setStack((s) => [...s, v]);
+  useEffect(() => {
+    if (stack.length < 2) return;
+    return registerBackHandler(() => {
+      // The sources were for one episode; leaving them lets Play go back to naming up next.
+      if (view === 'sources' && isSeries) setPickedEp(null);
+      setStack((s) => s.slice(0, -1));
+      return true;
+    });
+  }, [stack, view, isSeries, setPickedEp]);
+
+  const openSources = (ep: { season: number; ep: number } | null) => {
+    if (isSeries && ep) setPickedEp(ep);
+    push('sources');
   };
+  /* ---- THE PARKED FILM (stores/player `parked`) ------------------------------------------------
+   * Back from the film it started leaves this screen over it, Netflix's way: the film paused, its frame
+   * left where it stopped, under this screen (tv.css `.tv-det[data-parked]`), the column arriving again
+   * with the remote on Resume.
+   * Play — or that episode chosen on the page — picks the film up on the same frame; anything else
+   * started replaces it, and this screen closing ends it (VideoPlayer). */
+  const parkedKey = usePlayer((s) => (s.parked ? s.source?.media?.key ?? '' : ''));
+  const parked = !!parkedKey;
+  const isParked = (ep: { season: number; ep: number } | null) =>
+    parked && parkedKey === (ep ? `${target.id}:S${ep.season}E${ep.ep}` : String(target.id));
+  const [parkRun, setParkRun] = useState(0);
+  useEffect(() => {
+    if (!parked) return;
+    returnTo.current = 'play';
+    setStack(['main']);
+    setParkRun((n) => n + 1);
+  }, [parked]);
+
   const play = async () => {
     if (playBusy || !canPlay) return;
-    if (!signedIn) { toSources(); return; }
+    const ep = upNext ? { season: upNext.season, ep: upNext.ep } : null;
+    if (isParked(ep)) { usePlayer.getState().resume(); return; }
+    if (!signedIn) { returnTo.current = 'play'; openSources(ep); return; }
     setPlayBusy(true);
     let started = false;
-    try { started = await onPlayNow(upNext ? { season: upNext.season, ep: upNext.ep } : null); }
-    catch { started = false; }
-    finally { setPlayBusy(false); }
-    if (!started) toSources();
+    try { started = await onPlayNow(ep); } catch { started = false; } finally { setPlayBusy(false); }
+    if (!started) { returnTo.current = 'play'; openSources(ep); }
+  };
+  const playEp = async (season: number, ep: number) => {
+    lastEp.current = { season, ep };
+    if (busyEp) return;
+    if (isParked({ season, ep })) { usePlayer.getState().resume(); return; }
+    if (!signedIn) { openSources({ season, ep }); return; }
+    setBusyEp(`${season}:${ep}`);
+    let started = false;
+    try { started = await onPlayNow({ season, ep }); } catch { started = false; } finally { setBusyEp(null); }
+    if (!started) openSources({ season, ep });
   };
 
-  /* ---- MORE LIKE THIS -------------------------------------------------------------------------
-   * Four of the recommendations /api/meta already carries — the web modal shows twenty as a grid;
-   * here a row the remote can walk, at the foot of the column, that opens the title in place. */
   const openTitle = useModal((s) => s.open);
-  const recs = (meta?.recommendations ?? []).filter((r) => r && (r.backdrop || r.poster)).slice(0, 4);
+  const recs = (meta?.recommendations ?? []).filter((r) => r && (r.backdrop || r.poster)).slice(0, 12);
+  /* Every trailer IMDb has; until that answers (or when it has none), the one the screen already has —
+   * IMDb's latest file, or a YouTube key alone, which gets the box full screen only. */
+  const videos = useImdbVideos(shown ? meta?.imdb : undefined).data?.videos ?? [];
+  const showTrailer = videos.length > 0 || !!trailer?.url || !!meta?.trailerKey;
+  const videoCount = videos.length || 1;
+  const seasons = isSeries && meta ? seasonsOf(meta) : [];
 
-  const tagline = meta?.tagline?.trim() || '';
-  // IMDb's file plays in the box; a YouTube key alone still gets the box, full screen only.
-  const showTrailer = !!trailer?.url || !!meta?.trailerKey;
+  const browseSections: PageSection[] = [
+    ...seasons.map((s) => ({
+      key: `s${s.season}`,
+      label: s.name || t('modal.season', { n: s.season }),
+      count: s.episodes ? t('modal.episodes_count', { n: s.episodes }) : undefined,
+    })),
+    ...(showTrailer ? [{ key: 'trailers', label: t('tv.trailers_more'), count: videoCount === 1 ? t('tv.video_one') : t('tv.videos_count', { n: videoCount }) }] : []),
+    ...(recs.length ? [{ key: 'more', label: t('tv.more_like_this'), count: t('tv.titles_count', { n: recs.length }) }] : []),
+  ];
+  const openBrowse = (sec: string, from: string) => {
+    returnTo.current = from;
+    setBrowseSec(sec);
+    push('browse');
+  };
 
-  /* THE PANEL IS ONE THING AT A TIME. A series shows its episodes until one is chosen, then the
-   * sources FOR that episode — with a way back. Showing both at once is what makes the web
-   * version a scroll: two stacked lists, neither of which fits. */
-  /* WRAPPED, so the swap can be animated. The panel element itself survives the change from
-   * episodes to sources — same node, different children — so a CSS animation on it would never
-   * re-run. This div is mounted fresh by that change and its animation plays once, which is what
-   * turns a hard cut into the panel arriving. It has to carry the panel's own column layout
-   * (`.tv-src`, in tv.css) because it now sits between the panel and the list that stretches. */
-  const sources = (
-    <div className="tv-src">
-      {/* THE ROW ABOVE THE SLAB IS THE SAME ROW THE EPISODE DECK HAS: the chip that picks what the
-          panel is showing, right-aligned, floating on the artwork. The source tabs used to be two
-          flat pills INSIDE the panel, which meant the one control that changes what you are
-          looking at sat in a different place, and in a different shape, depending on whether you
-          were looking at episodes or at sources. Getting back to the episodes is the Back key's
-          job now — see the handler above. */}
-      <div className="tv-ep-head tv-src-head">
-        <TvChipMenu
-          ariaLabel={t('modal.streams')}
-          value={srcTab}
-          onSelect={(k) => setSrcTab(k as 'services' | 'addons')}
-          options={[
-            { key: 'services', label: t('modal.tab_streaming') },
-            { key: 'addons', label: t('modal.tab_addons') },
-          ]}
-        />
-        {/* ---- THE LANGUAGE PICKER -------------------------------------------------------------
-            A CHIP MENU RATHER THAN A ROW OF PILLS, which is what tv.css's "no dropdowns on a TV"
-            rule asks for — one press per choice instead of open-walk-choose. TvChipMenu states
-            the condition that rule depends on: it holds for a set that is small and FIXED. This
-            set is neither. The languages are whatever the add-ons return for this title, so it
-            was two pills for one film and six for the next, and at six they wrapped to a second
-            row — pushing the source list down the screen by a different amount per title, the
-            exact failure the season picker became a chip menu to escape. The cost the rule warns
-            about is paid back the way it is there: the menu opens on the language you are already
-            using, so a neighbour is Down-OK — two presses, the same as walking a pill row.
+  const rated = useRatings((s) => s.ratings[String(target.id)]?.r ?? null);
+  const rate = useRatings((s) => s.rate);
 
-            BESIDE THE SOURCE CHIP, not inside the panel below it. The two controls pick what the
-            list underneath IS, so they belong in the row that is for picking, next to each other
-            and in the same shape — rather than one chip up here and a second control inches below
-            doing the same job.
+  const menu: MenuItem[] = [
+    ...(canPlay ? [{
+      key: 'play',
+      glyph: 'play' as const,
+      label: t(resuming ? 'tv.resume' : 'tv.play'),
+      sub: isSeries
+        ? (upNext ? `S${upNext.season}:E${upNext.ep}` : '')
+        : (filmResume && filmP ? t('modal.ep_left', { time: dur(filmP.dur - filmP.pos) }) : ''),
+      bar: resuming ? (isSeries ? upNext!.pct : filmPct) : undefined,
+      run: () => { void play(); },
+    }] : []),
+    ...(isSeries && seasons.length ? [{
+      key: 'episodes', glyph: 'episodes' as const, label: t('tv.episodes_more'),
+      run: () => openBrowse(`s${upNext?.season ?? seasons[0].season}`, 'episodes'),
+    }] : []),
+    ...(!isSeries && showTrailer ? [{
+      key: 'trailers', glyph: 'trailers' as const, label: t('tv.trailers_more'),
+      run: () => openBrowse('trailers', 'trailers'),
+    }] : []),
+    { key: 'list', glyph: added ? 'added' as const : 'add' as const, label: t(added ? 'mylist.remove' : 'mylist.add'), run: onAdd },
+    {
+      key: 'sources', glyph: 'sources' as const, label: t('tv.sources'),
+      run: () => { returnTo.current = 'sources'; openSources(upNext ? { season: upNext.season, ep: upNext.ep } : null); },
+    },
+    ...(recs.length ? [{
+      key: 'more', glyph: 'more' as const, label: t('tv.more_like_this'),
+      run: () => openBrowse('more', 'more'),
+    }] : []),
+  ];
 
-            AND FLAG-ONLY, which the move is what makes possible: the flag already says which
-            language, and this row has the panel's fixed width to fit two chips and two discs
-            into, where "Українська" alone cost more of it than the whole rest of the group.
+  /* ---- THE BOX ON THE MENU ----------------------------------------------------------------------
+   * `.tv-dm-acts` is the box's frame of reference. The mark moves to the focused item (or the circle
+   * behind a focused thumb); the ink inside it — a black copy of the menu — moves the other way by the
+   * same amount on the same clock, so it never moves on screen at all, and wherever the mark is, the
+   * label under it reads black. */
+  const actsRef = useRef<HTMLDivElement>(null);
+  const markRef = useRef<HTMLSpanElement>(null);
+  const inkRef = useRef<HTMLSpanElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const iconsRef = useRef<HTMLDivElement>(null);
+  const lastIcon = useRef(0);
+  const lastStep = useRef(0);
+  const placeMain = (el: HTMLElement) => {
+    const scope = actsRef.current;
+    const mark = markRef.current;
+    const ink = inkRef.current;
+    const list = menuRef.current;
+    if (!scope || !mark || !ink || !list) return;
+    const { x, y } = offsetIn(el, scope);
+    mark.classList.toggle('is-round', el.classList.contains('tv-dm-icon'));
+    ink.style.transform = `translate3d(${list.offsetLeft - x}px, ${list.offsetTop - y}px, 0)`;
+    moveMark(mark, x, y, el.offsetWidth, el.offsetHeight);
+  };
+  const onMainFocus = (e: ReactFocusEvent<HTMLDivElement>) => {
+    const el = e.target as HTMLElement;
+    if (!el.matches('.tv-dm-item, .tv-dm-icon')) return;
+    if (el.classList.contains('tv-dm-icon')) {
+      lastIcon.current = Array.from(iconsRef.current?.querySelectorAll('.tv-dm-icon') ?? []).indexOf(el);
+    }
+    placeMain(el);
+  };
+  const onMainBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) hideMark(markRef.current);
+  };
+  /* The menu walks Up and Down, the thumbs Left and Right; Up off the menu's top is the thumb you were
+   * last on, Down off the thumbs is the menu's first item. Answered here and stopped, like the pages. */
+  const onMainKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!ARROWS.has(e.key) || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.stopPropagation();
+    const now = performance.now();
+    if (e.repeat && now - lastStep.current < HELD_STEP_MS) { e.preventDefault(); return; }
+    const icons = Array.from(iconsRef.current?.querySelectorAll<HTMLElement>('.tv-dm-icon') ?? []);
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('.tv-dm-item') ?? []);
+    const ae = document.activeElement as HTMLElement | null;
+    const ii = ae ? items.indexOf(ae) : -1;
+    const ci = ae ? icons.indexOf(ae) : -1;
+    let to: HTMLElement | undefined;
+    if (ii >= 0) {
+      if (e.key === 'ArrowDown') to = items[ii + 1];
+      else if (e.key === 'ArrowUp') to = ii > 0 ? items[ii - 1] : icons[Math.min(lastIcon.current, icons.length - 1)];
+    } else if (ci >= 0) {
+      if (e.key === 'ArrowLeft') to = icons[ci - 1];
+      else if (e.key === 'ArrowRight') to = icons[ci + 1];
+      else if (e.key === 'ArrowDown') to = items[0];
+    } else to = items[0];
+    if (!to) return;
+    e.preventDefault();
+    lastStep.current = now;
+    to.focus({ preventScroll: true });
+  };
+  /* THE MENU TAKES THE REMOTE when it appears: Play on opening, the item a page was opened from on the
+   * way back. Only off nothing — focus already in the menu is the viewer's. */
+  useEffect(() => {
+    if (!shown || view !== 'main') return;
+    const root = actsRef.current;
+    const ae = document.activeElement;
+    if (!root || (ae && root.contains(ae))) return;
+    (root.querySelector<HTMLElement>(`[data-act="${returnTo.current}"]`)
+      ?? root.querySelector<HTMLElement>('.tv-dm-item'))?.focus({ preventScroll: true });
+  }, [shown, view, parkRun]);
 
-            THE NAME IS NOT DELETED, IT IS UNPAINTED. `.sr-only` keeps it as the button's
-            accessible name, so a reader still says "Українська" instead of meeting an unlabelled
-            control. It is `position:absolute`, so it adds no width and no flex gap to the chip. */}
-        {srcTab === 'addons' && availableLangs.length > 1 && (
-          <div className="tv-src-langchip">
-            <TvChipMenu
-              ariaLabel={t('menu.audio_lang')}
-              value={availableLangs.includes(lang) ? lang : availableLangs[0]}
-              onSelect={setLang}
-              options={availableLangs.map((l) => ({
-                key: l,
-                label: <><i className={`flag flag-${l}`} /><span className="sr-only">{langName(l)}</span></>,
-              }))}
-            />
+  // TvSpatialNav's recovery (`[data-tv-recover]`) lands where this effect would.
+  const recoverKey = menu.some((m) => m.key === returnTo.current) ? returnTo.current : menu[0]?.key;
+  const menuRow = (it: MenuItem, ink: boolean) => {
+    const inner = (
+      <>
+        <MenuIcon name={it.glyph} />
+        <span className="tv-dm-label">{it.label}</span>
+        {it.sub && <span className="tv-dm-sub">{it.sub}</span>}
+        {it.bar !== undefined && <span className="tv-dm-bar"><i style={{ width: `${it.bar}%` }} /></span>}
+      </>
+    );
+    const cls = `tv-dm-item${it.key === 'play' && playBusy ? ' is-busy' : ''}`;
+    if (ink) return <span key={it.key} className={cls}>{inner}</span>;
+    return (
+      <button
+        key={it.key}
+        type="button"
+        className={cls}
+        data-act={it.key}
+        data-tv-recover={it.key === recoverKey ? '' : undefined}
+        aria-busy={it.key === 'play' ? playBusy : undefined}
+        aria-pressed={it.key === 'list' ? added : undefined}
+        onClick={it.run}
+      >
+        {inner}
+      </button>
+    );
+  };
+
+  const mainView = (
+    <div key={parkRun} className={`tv-det-grid tv-dm${copyIn ? ' is-in' : ''}`}>
+      <div className="tv-dm-col">
+        {logo(true)}
+        {factsLine(facts)}
+        {callouts.length > 0 && <div className="tv-dm-callouts">{callouts.map((c) => <p key={c.kind}>{c.text}</p>)}</div>}
+        {headline && <p className="tv-dm-headline">{headline}</p>}
+        {synopsis && <p className="tv-dm-plot">{synopsis}</p>}
+        {(castLine || makerLine || genresLine) && (
+          <div className="tv-dm-credits">
+            {castLine && <p><span>{t('tv.cast')}:</span> {castLine}</p>}
+            {makerLine && <p><span>{makerLabel}:</span> {makerLine}</p>}
+            {genresLine && <p>{genresLine}</p>}
           </div>
         )}
-        {actions}
-      </div>
-
-      <div className="tv-src-card">
-      {/* Present, not drawn — the same call as the deck's "EPISODES". On screen it labelled a list
-          of sources with the word "sources", directly under a chip already saying which kind; off
-          screen it is the only thing naming this region, so a reader would otherwise meet an
-          unlabelled group of buttons. The S1 E1 stays in it for that reason too. */}
-      <h3 className="tv-det-panel-title sr-only">
-        {t('modal.streams')}
-        {pickedEp && <span className="tv-det-panel-sub"> {epLabel(pickedEp.season, pickedEp.ep)}</span>}
-      </h3>
-
-      {/* The language picker used to sit here, between this heading and the list. It is up in the
-          head row beside the source chip now — see the note there. */}
-
-      <div className="tv-det-list" onKeyDown={leaveList}>
-        {srcTab === 'services' ? (
-          services.length ? services.map((s) => (
-            <a className="tv-det-row" key={s.key} href={s.link} target="_blank" rel="noopener noreferrer"
-               aria-label={t('modal.watch_on', { name: s.name })}>
-              <span className="tv-det-logo" aria-hidden="true">{s.logo && <img src={s.logo} alt="" decoding="async" />}</span>
-              <span className="tv-det-rowtitle">{s.name}</span>
-              <span className="tv-det-chev" aria-hidden="true">›</span>
-            </a>
-          )) : <div className="tv-det-note">{t('modal.no_providers')}</div>
-        ) : !signedIn ? (
-          <div className="tv-det-note">
-            {/* The button was an inline child of this paragraph, which put a pill in the middle of
-                a sentence and let the two overlap once the text wrapped. It is its own block now
-                — and the remote needs it to be, since an inline control at the end of a wrapped
-                line is the hardest kind of thing for spatial navigation to land on cleanly. */}
-            <span>{t('modal.signin_addon')}</span>
-            <button type="button" className="tv-det-pill tv-det-signin" onClick={() => openAuth()}>{t('auth.signin')}</button>
+        <div className="tv-dm-acts" ref={actsRef} onKeyDown={onMainKey} onFocus={onMainFocus} onBlur={onMainBlur}>
+          <span className="tv-dm-mark" ref={markRef} aria-hidden="true">
+            <span className="tv-dm-ink" ref={inkRef}>
+              <span className="tv-dm-menu">{menu.map((it) => menuRow(it, true))}</span>
+            </span>
+          </span>
+          <div className="tv-dm-icons" ref={iconsRef} role="group" aria-label={t('rate.cta')}>
+            {THUMBS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                className={`tv-dm-icon${rated === r ? ' on' : ''}`}
+                aria-pressed={rated === r}
+                aria-label={t(`rate.${r}`)}
+                onClick={() => rate(target.id, rated === r ? null : r, { type: target.type, title, genres: meta?.genre })}
+              >
+                <ThumbIcon kind={r} />
+                <span className="tv-dm-tip" aria-hidden="true">{t(`rate.${r}`)}</span>
+              </button>
+            ))}
           </div>
-        ) : shownStreams.length ? (
-          /* Rows outrank the still-loading note — see the same reordering in DetailModal.
-           * It is worth more here than on the web: the panel beside the synopsis IS the
-           * screen a TV viewer came for, and a remote has nothing to do while it says
-           * "loading". The note follows the rows so the focus ring lands on something
-           * pressable the moment the first add-on answers. */
-          <>
-          {shownStreams.map((s, i) => (
-            <button className="tv-det-row" type="button" key={i} aria-label={streamTitle} onClick={() => playStream(s)}>
-              <span className={`quality-badge ${qualClass(s.quality)}`}>{s.quality || 'SD'}</span>
-              <span className="tv-det-rowtitle">
-                {s.label || streamTitle}
-                <span className="tv-det-rowsub">{[s.size, s.source, sourceNote(s) && t(`modal.source_${sourceNote(s)}`)].filter(Boolean).join(' · ')}</span>
-              </span>
-              <span className="tv-det-chev" aria-hidden="true">›</span>
-            </button>
-          ))}
-          {streamsLoading && <div className="tv-det-note" role="status">{t('modal.more_sources')}</div>}
-          </>
-        ) : streamsLoading ? (
-          <div className="tv-det-note" role="status">{t('modal.searching_sources')}</div>
-        ) : <div className="tv-det-note">{t('modal.no_streams')}</div>}
-      </div>
+          <div className="tv-dm-menu" ref={menuRef}>{menu.map((it) => menuRow(it, false))}</div>
+        </div>
       </div>
     </div>
   );
 
+  /* ---- EPISODES & MORE ------------------------------------------------------------------------- */
+  const sec = browseSections.find((s) => s.key === browseSec) ?? browseSections[0];
+  const browseSeason = view === 'browse' && sec && /^s\d+$/.test(sec.key) ? Number(sec.key.slice(1)) : undefined;
+  // The season on screen: the one the page shows, or the one the sources are for (its episode's name).
+  const pageSeason = browseSeason ?? (view === 'sources' ? pickedEp?.season : undefined);
+  const seasonQ = useSeason(meta?.id, meta?.addonEpisodes ? undefined : pageSeason, meta?.imdb);
+  const browseEps = episodesOf(meta, browseSeason, seasonQ.data?.episodes);
+  const resumeOf = (season: number, ep: number) => {
+    const pr = progress[`${target.id}:S${season}E${ep}`];
+    return pr && pr.dur > 0 ? { pct: Math.min(100, (pr.pos / pr.dur) * 100), at: pr.at || 0 } : { pct: 0, at: 0 };
+  };
+  const pageHead = (sub?: string) => (
+    <>
+      {logo(false)}
+      {factsLine([year ? String(year) : '', seasonsText, !isSeries ? meta?.runtime || '' : ''].filter(Boolean))}
+      {sub && <p className="tv-tp-headsub">{sub}</p>}
+    </>
+  );
+
+  let browsePage: ReactNode = null;
+  if (view === 'browse') {
+    let heading: ReactNode = sec?.label;
+    let cells: ReactNode = null;
+    let cols = 1;
+    let entry = 0;
+    if (browseSeason !== undefined) {
+      // "Season 2 · [16]": the certificate in Netflix's outlined box.
+      heading = <>{sec?.label}{meta?.certification && <><span className="tv-tp-dot">·</span><span className="tv-tp-age">{meta.certification}</span></>}</>;
+      const aim = lastEp.current?.season === browseSeason ? lastEp.current
+        : upNext?.season === browseSeason ? { season: upNext.season, ep: upNext.ep } : null;
+      entry = deckOpensOn(browseEps, browseSeason, aim, (ep) => resumeOf(browseSeason, ep));
+      cells = seasonQ.isLoading && !browseEps.length
+        ? <div className="tv-tp-note">{t('modal.loading_synopsis')}</div>
+        : browseEps.length
+          ? browseEps.map((e) => (
+            <EpisodeCell
+              key={e.episode}
+              ep={e}
+              pct={resumeOf(browseSeason, e.episode).pct}
+              busy={busyEp === `${browseSeason}:${e.episode}`}
+              onPick={() => { void playEp(browseSeason, e.episode); }}
+            />
+          ))
+          : <div className="tv-tp-note">{t('modal.episodes_unavailable')}</div>;
+    } else if (sec?.key === 'trailers') {
+      cols = 3;
+      const wordmark = titleLogo ? rasterLogo(titleLogo, 'original') : undefined;
+      cells = videos.length
+        ? videos.map((v) => (
+          <TvTrailerBox key={v.id} video={v} thumb={v.thumb || undefined} name={v.name} title={title} logo={wordmark} />
+        ))
+        : (
+          <TvTrailerBox
+            video={trailer}
+            ytKey={meta?.trailerKey}
+            still={meta?.backdrop ? imgW(meta.backdrop, 'w780') : undefined}
+            title={title}
+            logo={wordmark}
+          />
+        );
+    } else if (sec?.key === 'more') {
+      cols = 3;
+      cells = recs.map((r) => (
+        <MoreCell
+          key={`${r.type}:${r.id}`}
+          item={r}
+          onOpen={() => openTitle({ id: r.id, type: r.type, title: r.title, year: r.year, rating: r.rating, poster: r.poster, seed: 0 })}
+        />
+      ));
+    }
+    browsePage = (
+      <TvTitlePage
+        head={pageHead()}
+        sections={browseSections}
+        current={sec?.key ?? ''}
+        onSection={setBrowseSec}
+        heading={heading}
+        cols={cols}
+        entry={entry}
+        start="right"
+      >
+        {cells}
+      </TvTitlePage>
+    );
+  }
+
+  /* ---- SOURCES -----------------------------------------------------------------------------------
+   * Streaming Services, then the add-ons — one row per language when they offer more than one, under
+   * a caption, so choosing a language is resting on it rather than opening a menu. */
+  const services = srcTab === 'services' ? pickWatchServices(meta?.providers, title) : [];
+  let sourcesPage: ReactNode = null;
+  if (view === 'sources') {
+    const langs = signedIn && availableLangs.length > 1 ? availableLangs : [];
+    const sections: PageSection[] = [
+      { key: 'services', label: t('modal.tab_streaming') },
+      ...(langs.length
+        ? langs.map((l, i) => ({
+          key: `lang:${l}`,
+          label: <><i className={`flag flag-${l}`} />{langName(l)}</>,
+          caption: i === 0 ? t('modal.tab_addons') : undefined,
+          sub: true,
+        }))
+        : [{ key: 'addons', label: t('modal.tab_addons') }]),
+    ];
+    const current = srcTab === 'services' ? 'services' : langs.length ? `lang:${langs.includes(lang) ? lang : langs[0]}` : 'addons';
+    const onSection = (key: string) => {
+      if (key === 'services') { setSrcTab('services'); return; }
+      setSrcTab('addons');
+      if (key.startsWith('lang:')) setLang(key.slice(5));
+    };
+    let cells: ReactNode;
+    if (srcTab === 'services') {
+      cells = services.length ? services.map((s) => (
+        <a className="tv-tp-src" key={s.key} href={s.link} target="_blank" rel="noopener noreferrer" data-cell=""
+           aria-label={t('modal.watch_on', { name: s.name })}>
+          <span className="tv-tp-src-logo" aria-hidden="true">{s.logo && <img src={s.logo} alt="" decoding="async" />}</span>
+          <span className="tv-tp-src-title">{s.name}</span>
+          <span className="tv-tp-src-chev" aria-hidden="true">›</span>
+        </a>
+      )) : <div className="tv-tp-note">{t('modal.no_providers')}</div>;
+    } else if (!signedIn) {
+      cells = (
+        <div className="tv-tp-note">
+          <span>{t('modal.signin_addon')}</span>
+          <button type="button" className="tv-tp-signin" data-cell="" data-ring="pill" onClick={() => openAuth()}>{t('auth.signin')}</button>
+        </div>
+      );
+    } else if (shownStreams.length) {
+      /* Rows outrank the still-loading note: the remote has something to press the moment the first
+       * add-on answers, and the note follows them while the rest are still coming. */
+      cells = (
+        <>
+          {shownStreams.map((s, i) => (
+            <button className="tv-tp-src" type="button" key={i} data-cell="" aria-label={streamTitle} onClick={() => playStream(s)}>
+              <span className={`quality-badge ${qualClass(s.quality)}`}>{s.quality || 'SD'}</span>
+              <span className="tv-tp-src-title">
+                {s.label || streamTitle}
+                <span className="tv-tp-src-sub">{[s.size, s.source, sourceNote(s) && t(`modal.source_${sourceNote(s)}`)].filter(Boolean).join(' · ')}</span>
+              </span>
+              <span className="tv-tp-src-chev" aria-hidden="true">›</span>
+            </button>
+          ))}
+          {streamsLoading && <div className="tv-tp-note" role="status">{t('modal.more_sources')}</div>}
+        </>
+      );
+    } else {
+      cells = <div className="tv-tp-note" role={streamsLoading ? 'status' : undefined}>{t(streamsLoading ? 'modal.searching_sources' : 'modal.no_streams')}</div>;
+    }
+    const epName = pickedEp ? episodesOf(meta, pickedEp.season, seasonQ.data?.episodes).find((e) => e.episode === pickedEp.ep)?.name : undefined;
+    const currentLabel = sections.find((s) => s.key === current)?.label;
+    sourcesPage = (
+      <TvTitlePage
+        head={pageHead(pickedEp ? [epLabel(pickedEp.season, pickedEp.ep), epName].filter(Boolean).join(' · ') : undefined)}
+        sections={sections}
+        current={current}
+        onSection={onSection}
+        heading={current.startsWith('lang:') ? <>{t('modal.tab_addons')} · {currentLabel}</> : currentLabel}
+        start="right"
+      >
+        {cells}
+      </TvTitlePage>
+    );
+  }
+
   return (
     <div
       className="overlay open tv-det"
+      data-parked={parked ? '' : undefined}
       id="overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="mTitle"
       aria-hidden="false"
     >
-      <div className="tv-det-art" aria-hidden="true">
-        {/* Mounted invisible behind the veil and revealed with it, so its arrival is the screen's
-            arrival rather than an event of its own. `rdy` is a class change on an element that
-            already exists — set it in the same commit that creates the <img> and the browser has
-            no previous value to transition from, and it would simply appear. */}
-        {backdropUrl && (
-          <img className={artReady ? 'rdy' : undefined} src={backdropUrl} alt="" decoding="async" />
-        )}
+      {/* Mounted invisible behind the veil and revealed with it, so its arrival is the screen's
+          arrival rather than an event of its own. The box carries the picture's edge fade too (tv.css). */}
+      <div className={`tv-det-art${artReady ? ' rdy' : ''}`} aria-hidden="true">
+        {backdropUrl && <img src={backdropUrl} alt="" decoding="async" />}
       </div>
-      <div className="tv-det-scrim" aria-hidden="true" />
+      <div className={`tv-det-scrim${view === 'main' ? '' : ' is-page'}`} aria-hidden="true" />
 
-      {/* RENDERED IMMEDIATELY. This was briefly gated on the flight being over — the argument
-          being that React mounting the grid, the episode deck and a dozen stills during the same
-          380ms the transform was animating is real work landing on the frames that could least
-          afford it, which is true.
-          It was reverted because it bought smoothness with the one thing a remote is least
-          forgiving about: 440ms in which pressing OK produced a picture and no screen. That reads
-          as the app being slow, and it was reported as exactly that. A few dropped frames in an
-          animation nobody is interacting with is the cheaper of the two — the flight is decoration
-          and the response to a keypress is not. */}
+      {/* The spinner and nothing else while /api/meta and the backdrop are on their way. Back gets out
+          (DetailModal's `handleBack`), so the veil needs no control of its own — a lone ✕ would be the
+          only candidate on the layer, and TvSpatialNav would ring it. */}
       {!shown ? (
-        // The spinner and nothing else — no ✕ in the corner. Back gets out; see the note on
-        // `closeBtn`.
         <div className="m-load-veil" role="status" aria-busy="true" aria-label={t('modal.loading_synopsis')}>
           <span className="cat-loader" aria-hidden="true" />
         </div>
-      ) : (
-        <div className="tv-det-grid">
-          <div className="tv-det-info">
-            <h2 id="mTitle" className={titleLogo ? 'tv-det-title has-logo' : 'tv-det-title'}>
-              {/* The wordmark arrives with /api/meta and used to appear in the frame it decoded,
-                  which on this screen is the same frame the backdrop was swapping in — two pops
-                  at once. It fades like every other picture here now; `complete` is checked for
-                  the cached case, see the same pattern on the episode stills. */}
-              {titleLogo
-                ? (
-                  <img
-                    className={logoShown ? 'title-logo rdy' : 'title-logo'}
-                    src={rasterLogo(titleLogo, 'original')}
-                    alt={title}
-                    decoding="async"
-                    ref={(el) => { if (el?.complete && !logoShown) setLogoShown(true); }}
-                    onLoad={() => setLogoShown(true)}
-                  />
-                )
-                : title}
-            </h2>
-
-            {(metaBits.length > 0 || seasonsLine || genresLine) && (
-              <div className="tv-det-meta">
-                {metaBits.length > 0 && (
-                  <div className="tv-det-facts">
-                    {metaBits.map((b, i) => <span key={i} className="tv-det-metabit">{b}</span>)}
-                  </div>
-                )}
-                {seasonsLine && <div className="tv-det-metaline">{seasonsLine}</div>}
-                {genresLine && <div className="tv-det-metaline tv-det-genres">{genresLine}</div>}
-              </div>
-            )}
-            {/* Info at a glance — the one line that says why: a new season, a top-ten place,
-                an award, a release date, or that it fits what this viewer loves. */}
-            <Glance item={{ id: target.id, type: target.type, year, rating, genre: target.genre }} meta={meta} awards waitForMeta />
-
-            <p className="tv-det-plot">{plot}</p>
-
-            {canPlay && (
-              <div className={`tv-det-cta${intro ? ' gl-run' : ''}`}>
-                <button
-                  className={`tv-det-play${resuming ? ' is-resume' : ''}${playBusy ? ' is-busy' : ''}`}
-                  id="tvPlay"
-                  type="button"
-                  aria-busy={playBusy}
-                  onClick={() => { void play(); }}
-                >
-                  <span className="ic3" aria-hidden="true"><GlanceIcon name="play" /></span>
-                  <span className="tv-det-play-label">{t(resuming ? 'tv.resume' : 'tv.play')}</span>
-                  {playSub && <span className="tv-det-play-sub">{playSub}</span>}
-                  {resuming && <span className="tv-det-play-bar" aria-hidden="true"><i style={{ width: `${playPct}%` }} /></span>}
-                </button>
-              </div>
-            )}
-
-            {/* THE FOOT OF THE COLUMN: the trailer and the cast, then more like this. Pushed to the
-                bottom edge (`margin-top: auto`), so the copy above keeps the top line it shares with
-                the chip row and the row below keeps the bottom one, and a title's longer or shorter
-                copy is paid for in the space between rather than by moving either end. */}
-            <div className="tv-det-foot">
-              {(showTrailer || tagline || faces.length > 0) && (
-                <div className="tv-det-extra">
-                  {showTrailer && (
-                    <TvTrailerBox
-                      video={trailer}
-                      ytKey={meta?.trailerKey}
-                      still={meta?.backdrop ? imgW(meta.backdrop, 'w780') : undefined}
-                      title={title}
-                      logo={titleLogo ? rasterLogo(titleLogo, 'original') : undefined}
-                    />
-                  )}
-                  {(tagline || faces.length > 0) && (
-                    <div className="tv-det-extra-side">
-                      {tagline && <p className="tv-det-tagline">{tagline}</p>}
-                      {/* THE CREDITS ARE THE CAST'S FACES, AND NOTHING ELSE. They were a small table:
-                          a director line, and a "Casts & Credits" label in a column of its own beside
-                          the names (then beside the faces). Both went; the row needs no caption to read
-                          as the cast. The label survives only as the list's name, for assistive tech. */}
-                      {faces.length > 0 && (
-                        <ul className="tv-det-faces" aria-label={t('modal.cast_credits')}>
-                          {faces.map((f) => <CastFaceItem key={f.name} face={f} />)}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {recs.length > 0 && (
-                <section className="tv-det-more" aria-label={t('tv.more_like_this')}>
-                  <h3 className="tv-det-more-title">{t('tv.more_like_this')}</h3>
-                  <div className="tv-det-more-row">
-                    {recs.map((r) => (
-                      <MoreCard
-                        key={`${r.type}:${r.id}`}
-                        item={r}
-                        onOpen={() => openTitle({ id: r.id, type: r.type, title: r.title, year: r.year, rating: r.rating, poster: r.poster, seed: 0 })}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-            </div>
-          </div>
-
-          {/* THE PANEL GIVES UP ITS CHROME FOR THE DECK. The dark slab exists to buy a LIST its
-              contrast against a full-bleed photograph; a deck's cards are opaque surfaces that
-              carry their own, so a box around them is a second frame around the first. Sources
-              are still a list, and still get the slab. */}
-          <div className={`tv-det-panel${deck ? ' is-deck' : ''}`} ref={panelRef}>
-            {deck
-              ? <TvEpisodeDeck meta={meta!} titleId={target.id} picked={deckPicked} actions={actions}
-                               onPick={choose} />
-              : sources}
-          </div>
-        </div>
-      )}
+      ) : view === 'main' ? mainView : view === 'browse' ? browsePage : sourcesPage}
     </div>
   );
 }

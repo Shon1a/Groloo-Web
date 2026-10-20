@@ -76,7 +76,6 @@
     .hero-copy .gl-facts{margin-bottom:14px}
   }
   /* TV title screen */
-  .tv-det-info .gl-chips{margin:0 0 clamp(10px,calc(var(--u)*1.05),24px);font-size:clamp(10px,calc(var(--u)*.84),19px)}
 
   /* ON THE BILLBOARD: the bottom-right corner, side by side, the reference's place for them — the
      wordmark holds the bottom-left. One row, and never a squeezed one: when the pair does not fit
@@ -136,9 +135,4 @@
   .ic3{display:inline-flex;align-items:center;justify-content:center;line-height:0}
   .ic3 .gl-ic{width:1.3em;height:1.3em}
   .m-disc .ic3 .gl-ic{width:1.3em;height:1.3em}
-  .tv-det-disc .ic3 .gl-ic{width:1.25em;height:1.25em}
   .hero-btn .ic3 .gl-ic{width:1.4em;height:1.4em;margin:-.2em 0}
-  /* White is "the remote is here" on a television (tv.css): on a focused white disc the silver goes
-     dark, the colour stays. */
-  .tv-det .tv-det-disc:focus .gl-ic,.tv-det .tv-det-disc:focus-visible .gl-ic,
-  .tv-det-disc.rate-disc:focus .gl-ic{--gl-b0:#62626c;--gl-b1:#393941;--gl-b2:#1d1d23;--gl-d:#f4f4f7}

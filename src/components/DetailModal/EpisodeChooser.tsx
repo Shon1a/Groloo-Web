@@ -19,8 +19,7 @@ import type { Episode, MetaDetail } from '../../lib/types';
  * read to find it, then scroll past the rest to reach the sources. The deck (see the picture in
  * deckGeometry.ts) puts that episode forward at full size, with its still, how much of it is
  * left and a progress bar, tucks the earlier ones into a stack behind it and fans the coming
- * ones out below. Same object as the TV's TvEpisodeDeck, same numbers — deckGeometry is shared —
- * so a title looks the same on the sofa and at the desk.
+ * ones out below. The numbers are in deckGeometry.
  *
  * WHAT IS DIFFERENT FROM THE TV IS ONLY THE INPUT, and each input gets the gesture it already
  * knows rather than a control invented for the deck:
@@ -214,7 +213,9 @@ function EpisodeCard({ ep, idx, offset, parked, on, lifted, picked, pct, leftSec
   const imgRef = useRef<HTMLImageElement>(null);
   useLayoutEffect(() => { if (imgRef.current?.complete && imgRef.current.naturalWidth > 0) setShown(true); }, []);
   const onShown = () => { if (sources) shownStills.add(sources.src); setShown(true); };
-  /* The deal's stagger, frozen at mount — see TvEpisodeDeck for why it must not follow `offset`. */
+  /* The deal's stagger, frozen at mount: `offset` changes on every press, and an `animation-delay` that
+   * GROWS after its animation has finished can drop the card back inside the delay window, where
+   * `backwards` fill snaps it to opacity 0 — cards would blink as they were walked past. */
   const introStep = useRef(Math.min(Math.abs(Math.round(offset)), INTRO_STEP_CAP));
   const name = ep.name || t('modal.episode_n', { n: ep.episode });
   const { transform, opacity, zIndex } = place(offset, lifted);
@@ -373,7 +374,8 @@ export default function EpisodeChooser({ meta, titleId, initial, onEpisode }: Ep
   }, []);
   const [intro, setIntro] = useState<IntroPhase>(reduceMotion ? null : 'pre');
   useEffect(() => { setIntro(reduceMotion ? null : 'pre'); }, [season, reduceMotion]);
-  // Two frames between placing and moving — see TvEpisodeDeck for why one is not enough.
+  /* Two frames between placing and moving: a flip inside the frame the offset state is painted in can
+   * be coalesced into one style recalculation, and then nothing transitions at all. */
   useEffect(() => {
     if (intro !== 'pre' || !episodes.length) return;
     let inner = 0;

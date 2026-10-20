@@ -908,15 +908,14 @@ export default function DetailModal() {
     return (
       <TvDetail
         /* A FRESH SCREEN PER TITLE: More Like This opens another title in place, and everything
-           the screen holds (the backdrop's ready flag, the deck, the trailer box) belongs to one. */
+           the screen holds (the backdrop's ready flag, the page it is on, the trailer box) belongs to one. */
         key={`${target.type}:${target.id}`}
         target={target} meta={meta} ready={ready} isSeries={isTv}
         title={title} titleLogo={titleLogo} rating={rating} year={year}
-        genreChips={genreChips} plot={plot} epTotal={epTotal}
-        close={close} onPlayNow={playNowTv}
+        genreChips={genreChips} plot={plot}
+        onPlayNow={playNowTv}
         trailer={imdbTrailer.data?.url && !videoTrailerFailed ? imdbTrailer.data : undefined}
         added={added} onAdd={onAdd}
-        onReport={() => openReport({ kind: 'title', targetKey: String(target.id), targetName: meta?.title || target.title || '' })}
         srcTab={srcTab} setSrcTab={setSrcTab}
         signedIn={signedIn} openAuth={openAuth}
         streamsLoading={streamsLoading} shownStreams={rowStreams}

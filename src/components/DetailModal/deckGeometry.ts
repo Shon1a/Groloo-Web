@@ -1,10 +1,9 @@
 import type { Episode, MetaDetail, SeasonInfo } from '../../lib/types';
 
 /* ============================================================================
- * THE EPISODE DECK'S GEOMETRY — shared by the TV deck (TvEpisodeDeck) and the web one
- * (EpisodeChooser), so the two are the SAME object at different sizes rather than two things
- * that happened to be tuned alike once. Every number below was measured on a panel; the
- * reasoning is kept with the number it justifies. Change one here and both decks follow.
+ * THE EPISODE DECK'S GEOMETRY — the web deck's (EpisodeChooser), plus the episode helpers the
+ * TV's Episodes page (TvDetail, TvTitlePage) shares with it. Every number below was measured on a
+ * panel; the reasoning is kept with the number it justifies.
  *
  *     ┌──────────────┐        · the cards BEHIND collapse into a tight stack, dim and
  *     │ ┌──────────┐ │          receded to the right — enough to say "there are earlier
@@ -182,8 +181,8 @@ export function firstSeasonOf(meta: MetaDetail): number | undefined {
 
 /* ---- WHERE A DECK OPENS, ANSWERABLE BEFORE IT DOES ------------------------------------------------
  * UP NEXT, not episode 1: the episode a link or Continue Watching named; else the most recently
- * touched episode of the season — the one after it if that one is finished; else the first. The deck
- * aims itself with this (TvEpisodeDeck), and the warm-up that runs while the remote rests on a series
+ * touched episode of the season — the one after it if that one is finished; else the first. The TV's
+ * Episodes page aims itself with this (TvDetail), and the warm-up that runs while the remote rests on a series
  * (lib/queries `useWarmDetail`) asks the same question to know which stills to decode — one function,
  * so the two can never disagree about which cards are on screen first. */
 export function deckOpensOn(
@@ -213,8 +212,8 @@ export function deckOpensOn(
  * on top, which waits for layout to say the picture is near the viewport before asking at all — so
  * walking the deck, each new card arrived as a dark panel and its picture faded in after it. The
  * cards a press can bring on next are known: the ones just past either end of the window. They are
- * fetched AND decoded ahead of the walk (TvEpisodeDeck), and the first screen's stills before the deck
- * even exists (lib/queries `useWarmDetail`), into a small cache of the deck's own (stills are not the
+ * fetched AND decoded ahead of time — the first screen's stills before the TV's Episodes page even
+ * exists (lib/queries `useWarmDetail`) — into a small cache of the deck's own (stills are not the
  * row artwork the shared one is sized for), so a card has its picture from its first frame. */
 const STILL_KEEP = 12;
 const stillCache = new Map<string, HTMLImageElement>();
