@@ -11,7 +11,6 @@ import { retainImage } from './useImageReady';
 import { currentEp } from './episodeNumbering';
 import { useHistory } from '../stores/history';
 import { STILL_RENDITION, deckOpensOn, firstSeasonOf, seasonsOf, warmStill } from '../components/DetailModal/deckGeometry';
-import { castFaces, warmFace } from '../components/DetailModal/castFaces';
 import { whenQuiet } from './tvQuiet';
 
 /* Query hooks — one per backend read. The `lang` query param is threaded from
@@ -341,23 +340,21 @@ export function usePrefetchMeta() {
  * is what precedes nearly every OK: the rows and the hero call this after a short dwell, it reads the
  * detail under the same key the title screen reads (so that read is a cache hit), and it fetches AND
  * decodes the exact backdrop and wordmark the screen will paint (TvDetail's renditions), keeping them
- * in the shared picture cache, and the cast row's faces in a small cache of their own (castFaces). The
- * screen then opens on pictures that are already there.
+ * in the shared picture cache. The screen then opens on pictures that are already there.
  *
- * A SERIES OPENS ON ITS EPISODE DECK, so for a series this goes one step further: the season the deck
- * will open on (TvDetail's choice — the episode Continue Watching names, else the first season) is
- * read under the deck's own key, and the stills of the cards it will show first are decoded into the
- * deck's cache (deckGeometry `deckOpensOn`, `warmStill`). The deck is then dealt with its episodes and
- * their pictures from the first frame, instead of after a season request and eight separate fades.
+ * FOR A SERIES this goes one step further: the season up next is in (the episode Continue Watching
+ * names, else the first season) is read under the season query's own key — the title screen names that
+ * episode when it opens — and the stills Episodes & More will show first are decoded into the stills'
+ * cache (deckGeometry `deckOpensOn`, `warmStill`), so that page opens with its pictures on it.
  *
  * One request per title someone actually stopped on (two for a series), cached like any other read; a
  * failure is silent, because the screen will simply make the request itself. */
 const DETAIL_BACKDROP = 'w1280';
-/** Cards the TV deck shows around the one it opens on (TvEpisodeDeck DECK_ABOVE / DECK_BELOW). */
-const DECK_FIRST_SCREEN = { above: 2, below: 3 };
+/** Episodes on screen around the one Episodes & More opens on (TvTitlePage parks it under the one above). */
+const DECK_FIRST_SCREEN = { above: 1, below: 3 };
 /* ---- THE PICTURES ONLY FOR A TITLE THE VIEWER IS STILL ON, AND NOT INSIDE A PRESS -------------------
  * The detail answers a few hundred milliseconds after it is asked for, and what follows it is the heavy
- * half — a 1280px backdrop and a full-size wordmark decoded, five faces, a season's payload and its
+ * half — a 1280px backdrop and a full-size wordmark decoded, a season's payload and its
  * stills. A viewer who has moved on by then would have that land in the frames of the press that moved
  * them, for a title they have left (and it would push the pictures they are walking towards out of the
  * decoded-picture cache). So the caller can say whether the title is still wanted (`wanted`), and the
@@ -384,9 +381,7 @@ export function useWarmDetail() {
         // Decoded whether or not the bytes were already here: `complete` says loaded, not decoded.
         if (typeof img.decode === 'function') img.decode().catch(() => { /* the screen copes */ });
       }
-      // The cast row's faces (castFaces), after the two pictures above and at low priority.
-      for (const f of castFaces(m)) if (f.url) warmFace(f.url);
-      // The deck (TvEpisodeDeck): a TMDB-described series only — an add-on's episodes come with its meta.
+      // Episodes & More (TvTitlePage): a TMDB-described series only — an add-on's episodes come with its meta.
       if (!m.imdb || m.addonEpisodes || !seasonsOf(m).length) return;
       const named = currentEp(m, resumeEp);
       const picked = named ? { season: named.season, ep: named.episode } : null;
@@ -450,6 +445,29 @@ export function useImdbTrailer(imdb: string | undefined) {
     enabled: !!imdb,
     // Nothing here reacts to the UI language, and a preview must never be re-fetched (and so
     // restarted) because the window was clicked away from and back.
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** One of a title's trailers on IMDb (/api/imdb-videos/:imdb): the file as useImdbTrailer has it,
+ *  with its name and still. */
+export interface ImdbVideo extends ImdbTrailer {
+  id: string;
+  name: string;
+  thumb: string | null;
+}
+
+/** EVERY trailer IMDb has for a title, for the TV's Trailers & More page. Signed URLs, so the same
+ *  lifetimes as useImdbTrailer. An empty list is a miss, not a fact — the page falls back to the
+ *  one trailer it already has. */
+export function useImdbVideos(imdb: string | undefined) {
+  return useQuery({
+    queryKey: ['imdb-videos', imdb] as const,
+    queryFn: () => api<{ videos: ImdbVideo[] }>(`/api/imdb-videos/${imdb}`),
+    enabled: !!imdb,
+    staleTime: 15 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    retry: false,
     refetchOnWindowFocus: false,
   });
 }

@@ -192,6 +192,18 @@ const SEED: Record<string, string> = {
   'tv.official_trailer': 'Official Trailer',
   'tv.watch_trailer': 'Watch the trailer: {title}',
   'tv.more_like_this': 'More Like This',
+  // The title screen's menu and its pages (Netflix's "Episodes & More" layout).
+  'tv.episodes_more': 'Episodes & More',
+  'tv.trailers_more': 'Trailers & More',
+  'tv.sources': 'Sources',
+  'tv.video_one': '1 video',
+  'tv.videos_count': '{n} videos',
+  // The facts line's first item: the public score as a percentage, Netflix's "98% Match".
+  'tv.match': '{n}% Match',
+  'tv.titles_count': '{n} titles',
+  // The credit lines under the synopsis: "Cast: …", "Creators: …" (one creator uses modal.creator).
+  'tv.cast': 'Cast',
+  'tv.creators': 'Creators',
   'mylist.add': 'Add to My List',
   'mylist.remove': 'Remove from My List',
 

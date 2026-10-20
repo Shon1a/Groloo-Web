@@ -115,12 +115,21 @@ export interface PlaySeries {
 
 interface PlayerState {
   source: PlaySource | null;
+  /* PARKED (TV): Back from a playing film keeps it, as Netflix does — paused, its frame standing in
+   * for the title screen's picture — until Play resumes it there and then, or the title screen goes
+   * and takes it with it. The source stays; only the player gets out of the way. */
+  parked: boolean;
   play: (s: PlaySource) => void;
   close: () => void;
+  park: () => void;
+  resume: () => void;
 }
 
 export const usePlayer = create<PlayerState>((set) => ({
   source: null,
-  play: (source) => set({ source }),
-  close: () => set({ source: null }),
+  parked: false,
+  play: (source) => set({ source, parked: false }),
+  close: () => set({ source: null, parked: false }),
+  park: () => set((s) => (s.source ? { parked: true } : s)),
+  resume: () => set({ parked: false }),
 }));

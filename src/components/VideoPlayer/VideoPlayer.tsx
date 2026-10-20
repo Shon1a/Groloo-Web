@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { usePlayer } from '../../stores/player';
+import { useModal } from '../../stores/modal';
 import { useHistory } from '../../stores/history';
 import { useSettings } from '../../stores/settings';
 import { useT } from '../../i18n/i18n';
@@ -381,6 +382,8 @@ export default function VideoPlayer() {
   const t = useT();
   const source = usePlayer((s) => s.source);
   const close = usePlayer((s) => s.close);
+  const parked = usePlayer((s) => s.parked);
+  const park = usePlayer((s) => s.park);
   const record = useHistory((s) => s.record);
   const putProgress = useHistory((s) => s.putProgress);
   const getResume = useHistory((s) => s.getResume);
@@ -1854,6 +1857,14 @@ export default function VideoPlayer() {
         return;
       }
       const consume = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+      /* PARKED, THE REMOTE IS THE TITLE SCREEN'S — all but ▶, which picks the film up as its Play
+         does, and ■, which ends it. */
+      if (usePlayer.getState().parked) {
+        const pm = mediaAction(e);
+        if (pm === 'play' || pm === 'playpause') { consume(); usePlayer.getState().resume(); }
+        else if (pm === 'stop') { consume(); close(); }
+        return;
+      }
       const v = videoRef.current;
 
       /* 1. THE TRANSPORT ROW, which works from anywhere including inside the gear menu. These
@@ -2106,7 +2117,8 @@ export default function VideoPlayer() {
    * panel, then playback — one press each. On the website a browser Back (or a phone's back swipe)
    * reaches them the same way (tvKeys `installBackGuard`). */
   useEffect(() => {
-    if (!source) return;
+    // Parked, the film is behind the title screen and its Back is the screen's (tvKeys `handleBack`).
+    if (!source || parked) return;
     return registerBackHandler(() => {
       // The hint tells the focus effect which button to hand the remote back to — see there.
       // A box's second-level list steps back to its first list; the box itself closes next.
@@ -2152,13 +2164,49 @@ export default function VideoPlayer() {
        *
        * So Back now falls through to the app's chain, which closes the player. Settings first,
        * shelf next, then out — one press each, in the order they were opened. */
+      /* …EXCEPT ON THE TV, WHERE OUT IS THE TITLE SCREEN WITH THE FILM STILL IN HAND — Netflix's Back
+       * (the user, Oct 20): paused, its frame behind the screen it was started from, and that screen's
+       * Play picks it up on the same frame. Only a film that has a frame to show, and only over its own
+       * title screen; post-play, an error or a source still loading leave the old way. */
+      const v = videoRef.current;
+      if (IS_TV && !ppOpenRef.current && !errKind && v && v.readyState >= 2
+        && String(useModal.getState().target?.id ?? '') === String(source.media?.id ?? '-')) {
+        if (seekPreviewRef.current != null) commitSeek();
+        park();
+        return true;
+      }
       return false;
       /* Registered AT THE PLAYER'S OWN LEVEL so that "falls through to the app's chain" means the
        * player closes, and not that the title screen underneath quietly steps its own view back
        * first — which is exactly what a series cost: one wasted press with nothing visibly
        * happening. See BACK_LAYER. */
     }, BACK_LAYER.player);
-  }, [source, menuOpen, menuDoor, boxLevel, audioOpen, epPanelOpen]);
+  }, [source, parked, park, errKind, commitSeek, menuOpen, menuDoor, boxLevel, audioOpen, epPanelOpen]);
+
+  /* PARKING AND PICKING UP. Parked: paused, its place written down (the title screen's Resume reads
+   * it), the remote let go. Picked up: playing again from the same frame, the remote back on the film. */
+  const wasParked = useRef(false);
+  useEffect(() => {
+    if (!source) { wasParked.current = false; return; }
+    const v = videoRef.current;
+    if (parked) {
+      wasParked.current = true;
+      v?.pause();
+      if (v && source.media?.key && v.currentTime > 0) putProgress(source.media.key, v.currentTime, v.duration || 0, source.media.lang);
+      setTvNav(false);
+      tvNavRef.current = false;
+      return;
+    }
+    if (!wasParked.current) return;
+    wasParked.current = false;
+    overlayRef.current?.focus({ preventScroll: true });
+    v?.play().catch(() => { /* autoplay policy — the play button stays */ });
+  }, [parked, source, putProgress]);
+  // The title screen it is parked behind went (Back, or another title opened in its place): so does the film.
+  const modalId = useModal((s) => (s.target ? String(s.target.id) : ''));
+  useEffect(() => {
+    if (parked && modalId !== String(source?.media?.id ?? '')) close();
+  }, [parked, modalId, source, close]);
 
   // picture-enhance: rewrite the unsharp-mask convolution kernel from the clarity
   // slider (identity at 0 → 3×3 Laplacian sharpen at 1; energy-preserving so it
@@ -2871,7 +2919,7 @@ export default function VideoPlayer() {
          absent means the arrows are transport and it must stand down. `tv` / `web` are the
          styling hooks for the two builds' own stylesheets; `tv-rail` lifts the bar clear of the
          episode shelf on both. */
-      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${held ? ' vp-held' : ''}${jumping ? ' vp-jumping' : ''}${fill ? ' vp-fill' : ''}`}
+      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${held ? ' vp-held' : ''}${jumping ? ' vp-jumping' : ''}${fill ? ' vp-fill' : ''}${parked ? ' vp-parked' : ''}`}
       id="playerOverlay"
       ref={overlayRef}
       /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the

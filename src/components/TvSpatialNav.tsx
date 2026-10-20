@@ -739,9 +739,11 @@ export default function TvSpatialNav() {
          *
          * A ROW OUTRANKS THE CHIP ABOVE IT, matching the seed in TvDetail: recovery should hand
          * the remote back to the thing the panel is FOR, not to the dropdown that chooses which
-         * list it is. The deck is unaffected — it has no `.tv-det-row`, so a deck with no selected
-         * card still falls through to its season chip. */
-        const fallback = ['#mWatch', '.tv-ep-card.on', '.tv-det-row', '.tv-chipmenu-btn']
+         * list it is.
+         *
+         * `[data-tv-recover]` IS THE TV TITLE SCREEN NAMING THE PLACE ITSELF: the menu item a page was
+         * opened from (Play otherwise), or the row of a page's left list whose content is showing. */
+        const fallback = ['#mWatch', '[data-tv-recover]', '.tv-chipmenu-btn']
           .map((sel) => layerNow!.querySelector<HTMLElement>(sel))
           .find(Boolean);
         if (fallback) { fallback.focus({ preventScroll: true }); seeded = true; return; }
@@ -774,7 +776,7 @@ export default function TvSpatialNav() {
        *
        * `#mWatch` USUALLY DOES NOT EXIST ANY MORE. The TV title screen dropped its WATCH button,
        * so on that layer this lookup finds nothing and the components seed themselves instead:
-       * TvEpisodeDeck claims its card when a season loads, TvDetail claims the sources panel.
+       * TvDetail claims its menu when the screen shows, TvTitlePage its list when a page opens.
        * The lookup stays because it is the correct answer for any layer that DOES have one
        * primary action, and because `seeded` must not be set by a miss — a layer whose primary
        * has not rendered yet has to be allowed to try again. */

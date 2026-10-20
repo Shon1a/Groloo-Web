@@ -1693,8 +1693,8 @@
   .m-streams .m-rail-head .lang-select{margin:0;flex:0 0 auto}
 
   /* ============================================================ *
-   *  THE EPISODE DECK — the season as a stack of cards, not a list of rows. It is the TV's
-   *  TvEpisodeDeck at desk and phone size: every card's transform + opacity comes from
+   *  THE EPISODE DECK — the season as a stack of cards, not a list of rows, at desk and phone
+   *  size: every card's transform + opacity comes from
    *  deckGeometry.ts as an inline style, and --ep-above / --ep-below (how far the fan reaches
    *  either side of the forward card, in card-heights) arrive the same way. This sheet only
    *  sizes a card, reserves the fan's height in the modal's flow and dresses the card.

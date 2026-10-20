@@ -3,12 +3,13 @@ import { useT } from '../../i18n/i18n';
 import { registerBackHandler } from '../../lib/tvKeys';
 import { previewDwellMs, previewsAllowed } from '../../lib/tvPreviewPolicy';
 import { useSettings } from '../../stores/settings';
+import { usePlayer } from '../../stores/player';
 import type { ImdbTrailer } from '../../lib/queries';
-import { GlanceIcon } from '../glance/GlanceIcons';
 import { INTRO_SKIP, useVideoTrailer } from './useVideoTrailer';
 
 /* ============================================================================
- * THE TRAILER BOX — the one place on the title screen a trailer may play.
+ * THE TRAILER BOX — one trailer on the Trailers & More page: its still with its name and length
+ * under it (no play disc, as on Netflix), and the one place on the title screen a trailer may play.
  *
  * The head of TvDetail.tsx tells why the screen lost its full-screen trailer: video repainting
  * under a deck the remote was walking made every press answer late. This box keeps the rule that
@@ -48,6 +49,10 @@ export interface TvTrailerBoxProps {
   ytKey?: string;
   /** A picture for the box when there is no YouTube thumbnail to show. */
   still?: string;
+  /** The trailer's own still (IMDb's), ahead of either. */
+  thumb?: string;
+  /** Its name ("Official Trailer 2"); "Official Trailer" when there is none. */
+  name?: string;
   title: string;
   /** The wordmark, shown in the full-screen caption. */
   logo?: string;
@@ -60,7 +65,7 @@ function clock(sec?: number | null): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export default function TvTrailerBox({ video, ytKey, still, title, logo }: TvTrailerBoxProps) {
+export default function TvTrailerBox({ video, ytKey, still, thumb: own, name, title, logo }: TvTrailerBoxProps) {
   const t = useT();
   const mediaRef = useRef<HTMLSpanElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
@@ -82,6 +87,11 @@ export default function TvTrailerBox({ video, ytKey, still, title, logo }: TvTra
   }, [focused, file, previews]);
 
   const src = file && (dwelt || full) ? file.url || undefined : undefined;
+  /* A trailer starting ends a film parked behind the title screen (stores/player `parked`): a set may
+   * have one video decoder to give, and the film's place is already written down. */
+  useEffect(() => {
+    if (src && usePlayer.getState().parked) usePlayer.getState().close();
+  }, [src]);
   useVideoTrailer(slotRef, mediaRef, src, title, {
     /* Read once, when the video mounts: a preview opens past the distributor logos like every other
      * preview in the app; a trailer asked for outright (OK before the preview began) starts at the top. */
@@ -143,18 +153,27 @@ export default function TvTrailerBox({ video, ytKey, still, title, logo }: TvTra
     return () => window.clearTimeout(id);
   }, [full, hud]);
 
-  /* The whole title screen gives way while the trailer is the screen — the deck behind it is hidden
-   * rather than painted under a full-screen video (tv.css `.tv-det.is-trailer-full`). */
+  /* The whole title screen gives way while the trailer is the screen — the page behind it is hidden
+   * rather than painted under a full-screen video, and its columns drop their scroll, which as a
+   * transform would pin the "full screen" to the column (tv.css `.tv-det.is-trailer-full`). Coming
+   * back, the scroll returns at once (`is-trailer-back`) rather than sliding in under the outline. */
   useEffect(() => {
-    const root = mediaRef.current?.closest('.tv-det');
-    root?.classList.toggle('is-trailer-full', full);
-    return () => root?.classList.remove('is-trailer-full');
+    const root = mediaRef.current?.closest<HTMLElement>('.tv-det');
+    if (!root || !full) return;
+    root.classList.add('is-trailer-full');
+    return () => {
+      root.classList.add('is-trailer-back');
+      root.classList.remove('is-trailer-full');
+      void root.offsetHeight;
+      root.classList.remove('is-trailer-back');
+    };
   }, [full]);
 
   /* hqdefault, not maxres: it exists for every video (maxres often does not, and a missing one comes
    * back as a grey placeholder rather than an error). Its letterbox bands fall outside the 16:9 box. */
-  const thumb = ytKey ? `https://i.ytimg.com/vi/${encodeURIComponent(ytKey)}/hqdefault.jpg` : still;
+  const thumb = own || (ytKey ? `https://i.ytimg.com/vi/${encodeURIComponent(ytKey)}/hqdefault.jpg` : still);
   const length = clock(file?.runtime);
+  const label = name || t('tv.official_trailer');
   const embed = full && !file && ytKey
     ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytKey)}?autoplay=1&controls=0&modestbranding=1&rel=0&playsinline=1&disablekb=1&fs=0&iv_load_policy=3`
     : '';
@@ -164,32 +183,33 @@ export default function TvTrailerBox({ video, ytKey, still, title, logo }: TvTra
       <button
         className={`tv-det-trailer${full ? ' is-full' : ''}`}
         type="button"
-        aria-label={t('tv.watch_trailer', { title })}
+        data-cell=""
+        data-ring="thumb"
+        aria-label={`${label}: ${title}`}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onClick={() => { if (!full) setFull(true); }}
       >
-        <span className="tv-det-trailer-media" ref={mediaRef}>
-          {thumb && <img className="tv-det-trailer-still" src={thumb} alt="" decoding="async" />}
-          <span className="tv-det-trailer-slot" ref={slotRef} />
-          {full && file && <span className="cat-loader tv-det-trailer-wait" aria-hidden="true" />}
-          {full && (
-            <span className={`tv-det-trailer-hud${hudOn ? ' on' : ''}`} aria-hidden="true">
-              <span className="tv-det-trailer-hud-name">
-                {logo ? <img src={logo} alt="" decoding="async" /> : <b>{title}</b>}
-                <span>{t('tv.official_trailer')}</span>
+        {/* The engine marks the media span, never the button: React rewrites the button's class list
+            when `full` changes, and a class the engine had added there would go with it. */}
+        <span className="tv-det-trailer-pic" data-ring="thumb">
+          <span className="tv-det-trailer-media" ref={mediaRef}>
+            {thumb && <img className="tv-det-trailer-still" src={thumb} alt="" decoding="async" />}
+            <span className="tv-det-trailer-slot" ref={slotRef} />
+            {full && file && <span className="cat-loader tv-det-trailer-wait" aria-hidden="true" />}
+            {full && (
+              <span className={`tv-det-trailer-hud${hudOn ? ' on' : ''}`} aria-hidden="true">
+                <span className="tv-det-trailer-hud-name">
+                  {logo ? <img src={logo} alt="" decoding="async" /> : <b>{title}</b>}
+                  <span>{label}</span>
+                </span>
+                {file && <span className="tv-det-trailer-bar"><i ref={barRef} /></span>}
               </span>
-              {file && <span className="tv-det-trailer-bar"><i ref={barRef} /></span>}
-            </span>
-          )}
+            )}
+          </span>
         </span>
-        {/* SIBLINGS OF THE MEDIA, so `.has-trailer ~` can fade them while the preview plays. The engine
-            marks the media span, never the button: React rewrites the button's class list when `full`
-            changes, and a class the engine had added there would go with it. */}
-        <span className="tv-det-trailer-shade" aria-hidden="true" />
-        <span className="tv-det-trailer-play ic3" aria-hidden="true"><GlanceIcon name="play" /></span>
         <span className="tv-det-trailer-cap" aria-hidden="true">
-          <b>{t('tv.official_trailer')}</b>
+          <b>{label}</b>
           {length && <span>{length}</span>}
         </span>
       </button>

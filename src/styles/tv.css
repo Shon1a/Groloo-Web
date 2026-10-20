@@ -2501,47 +2501,52 @@
   --u: min(1vw, 1.7778vh);
 }
 
-/* ---- Artwork + scrim.
+/* ---- Artwork + its fade.
    ONE picture, at w1280. The web hero paints a second, blurred copy of the poster behind the
    backdrop as ambience — the single most expensive decorative layer in the app, and invisible
    under a full-bleed still. It is simply not rendered here.
 
-   The scrim is two linear gradients and nothing else: a left-to-right wash that buys the
-   synopsis its contrast, and a soft floor so the action row never sits on a bright patch of
-   sky. No radial, no blur — those cost fill rate on a TV GPU and neither is load-bearing once
-   the copy has a dark side of the frame to live on. */
+   The fade is two linear gradients and nothing else: a left-to-right wash where the copy overlaps
+   the picture, and a soft floor under it. No radial, no blur — those cost fill rate on a TV GPU and
+   neither is load-bearing once the copy has a dark side of the frame to live on. */
+/* THE PICTURE SITS TOP RIGHT, NOT FULL BLEED — Netflix's title page (the user's reference, Oct 20):
+   the artwork drawn smaller than the screen, its left and bottom edges fading into the black the rest
+   of the page is.
+
+   THE FADE IS PAINTED IN THE PICTURE'S OWN BOX (`::after`), NOT ON A LAYER ABOVE IT. It was a scrim
+   of its own once, and the picture's arrival scales the picture: for that second the picture was the
+   larger of the two, and its hard left and bottom edges showed past the fade as bright lines (the
+   user's photo, Oct 20; on Chromium 120 the edge pixels read up to 179/255 mid-settle, 8 at rest).
+   In one box they are one layer — they fade, scale and rasterise together, so the fade's black is
+   always over the picture's edge. ONE LAYER otherwise too: a single picture from first paint to last
+   (see the note in TvDetail), nothing to dissolve between; `.rdy` is its arrival. */
 .tv-det-art {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  width: 72%;
+  height: 80%;
   z-index: 0;
-  background: #000;
+  opacity: 0;
 }
-/* ONE LAYER. This was briefly two, cross-fading a poster into the backdrop that replaced it — a
-   smooth swap, and a swap all the same. The poster is not shown at all now (see the note in
-   TvDetail), so there is one picture on this screen from first paint to last and nothing to
-   dissolve between. `.rdy` is its arrival, not a transition between two states.
-
-   Full strength at rest: the picture is the screen, and the scrim alone decides where it gives way. */
 .tv-det-art img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0;
-  transition: opacity .5s ease;
 }
-.tv-det-art img.rdy { opacity: 1; }
-.tv-det-scrim {
+/* 2px past the picture on every side: the picture's last row and column are drawn soft (anti-aliased
+   to a fraction of a pixel) where the fade's are snapped whole, and while the box is scaled that
+   fraction showed as a faint line along the bottom. Out there the fade is black over black. */
+.tv-det-art::after {
+  content: '';
   position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  /* A SHADE, NOT A PANEL. The wash used to run to near-black (.95) across the whole info column,
-     and that read as what it was: a black slab with a picture somewhere behind it. The user's call
-     (Oct 17, with a reference): the artwork should be SEEN, darkened only as much as the type needs.
-     So the left edge is ~.8 and the wash is gone by three-quarters of the way across, and the copy
-     buys the rest of its contrast itself — a soft shadow on every line (`.tv-det-info`), which
-     costs nothing where the picture is dark and holds the letters where it is bright.
-     Two flat gradients, no radial and no blur — the fill-rate rule at the head of this section. */
+  inset: -2px;
+  /* THE PICTURE'S EDGES, NOT A WASH OVER IT. The left edge runs from the page's black to clear across
+     the picture's left half, where the copy overlaps it; the bottom from black to clear across its
+     lowest two-fifths. The copy buys the rest of its contrast itself — a soft shadow on every line
+     (`.tv-dm-col`). */
   /* THE FALL-OFF IS AN S-CURVE, WRITTEN OUT AS STOPS. A CSS gradient interpolates LINEARLY between
      the stops it is given, and a linear ramp between two alpha values has a corner at each end —
      the rate of change starts and stops instantly. Over a wash this wide those corners are exactly
@@ -2554,15 +2559,72 @@
      stops are resolved once when the layer is rasterised. */
   background:
     linear-gradient(90deg,
-      rgba(0, 0, 0, .82) 0%,
-      rgba(0, 0, 0, .77) 16%,
-      rgba(0, 0, 0, .66) 30%,
-      rgba(0, 0, 0, .49) 42%,
-      rgba(0, 0, 0, .29) 53%,
-      rgba(0, 0, 0, .13) 63%,
-      rgba(0, 0, 0, .04) 72%,
-      rgba(0, 0, 0, 0) 80%),
-    linear-gradient(0deg, rgba(0, 0, 0, .66) 0%, rgba(0, 0, 0, .3) 22%, transparent 44%);
+      #000 0%,
+      rgba(0, 0, 0, .96) 7%,
+      rgba(0, 0, 0, .86) 15%,
+      rgba(0, 0, 0, .68) 23%,
+      rgba(0, 0, 0, .45) 31%,
+      rgba(0, 0, 0, .23) 39%,
+      rgba(0, 0, 0, .07) 46%,
+      rgba(0, 0, 0, 0) 52%),
+    linear-gradient(0deg,
+      #000 0%,
+      rgba(0, 0, 0, .9) 8%,
+      rgba(0, 0, 0, .62) 18%,
+      rgba(0, 0, 0, .3) 28%,
+      rgba(0, 0, 0, .08) 36%,
+      rgba(0, 0, 0, 0) 42%);
+}
+/* THE PAGES (Episodes & More, Sources) are black, as Netflix's are: the picture fades out behind them. */
+.tv-det-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: #000;
+  opacity: 0;
+  transition: opacity .3s ease;
+}
+.tv-det-scrim.is-page { opacity: 1; }
+/* PARKED (stores/player `parked`): Back from the film keeps it, paused, BEHIND this screen — full
+   screen, on the frame and in the place it stopped (`.vp-overlay.tv.vp-parked`). It does not move:
+   laid out in the picture's box it cut to black and came back shifted right and resized the moment
+   Back was pressed (the user's recording, Oct 20). So the page lets it through — no black of its own
+   (the player's is under it), no picture of its own — and darkens it where the copy stands with the
+   picture's fade drawn over the whole screen, fading in as the column arrives. The pages' black cover
+   still hides it. An attribute, not a class: TvTrailerBox adds classes to this element by hand, and a
+   React className would wipe them. */
+.tv-det[data-parked] { background: transparent; }
+.tv-det[data-parked] .tv-det-art { visibility: hidden; }
+.tv-det[data-parked]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* The same S-curve as the picture's own fade (`.tv-det-art::after`), across the screen rather than
+     across the box, and never quite black: the frame stays readable behind the copy. */
+  background:
+    linear-gradient(90deg,
+      rgba(0, 0, 0, .94) 0%,
+      rgba(0, 0, 0, .9) 12%,
+      rgba(0, 0, 0, .82) 24%,
+      rgba(0, 0, 0, .7) 34%,
+      rgba(0, 0, 0, .5) 44%,
+      rgba(0, 0, 0, .28) 53%,
+      rgba(0, 0, 0, .1) 61%,
+      rgba(0, 0, 0, 0) 70%),
+    linear-gradient(0deg,
+      rgba(0, 0, 0, .9) 0%,
+      rgba(0, 0, 0, .78) 8%,
+      rgba(0, 0, 0, .52) 18%,
+      rgba(0, 0, 0, .24) 28%,
+      rgba(0, 0, 0, .06) 36%,
+      rgba(0, 0, 0, 0) 42%);
+  animation: tvDetArtFade .5s ease backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tv-det[data-parked]::before { animation: none; }
 }
 
 /* ---- OPENING THE TITLE SCREEN --------------------------------------------------------------
@@ -2578,41 +2640,55 @@
    THIS IS WHAT IS LEFT OF A MUCH LARGER ANSWER TO THE SAME PROBLEM. A billboard's playing trailer
    used to fly in and grow to fill the screen, which solved it beautifully for the titles it
    applied to and cost more per frame than this screen could afford (the account is at the head of
-   TvDetail.tsx). This does the same job for every title, and it does it with two composited
-   properties on two elements.
+   TvDetail.tsx). This does the same job for every title with two composited properties.
 
-   WHAT MOVES, AND WHY SO LITTLE. The overlay fades; the artwork settles out of a 1.05 scale over
-   half a second. That scale is the whole trick — a still that comes to rest reads as the screen
-   arriving, where the same fade without it reads as a slow cut. Nothing else moves: the copy and
-   the panel only fade, deliberately, because on a series this element contains the episode deck,
-   and translating a subtree with eight overlapping cards in it is the exact shape of the cost this
-   screen has spent so long getting rid of. The deck deals itself in on its own clock — see
-   `intro` in TvEpisodeDeck — which is where per-card movement belongs. */
+   WHAT MOVES — Netflix's title page, and the user's "should show up gradually … also image should
+   show up fade in" (Oct 20). The overlay fades in over the screen it leaves; the picture fades up out
+   of that black as it settles out of a 1.03 scale; and the column arrives a line at a time, each block
+   fading in as it rises, 50ms behind the one above. Opacity and transform only, every one of them on
+   the compositor, and `backwards` fill: a block that has arrived holds no transform and gives its
+   layer back. (The column can take a transform now: the trailer, whose full-screen layer it would
+   have pinned, lives on the Trailers & More page.) */
 .tv-det { animation: tvDetIn .26s ease both; }
-.tv-det .tv-det-art img {
-  animation: tvDetArtIn .56s cubic-bezier(.2, .7, .2, 1) both;
-}
 @keyframes tvDetIn {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-/* TRANSFORM ONLY — the opacity belongs to the cross-fade now, and the two must not both own it.
-   This started as `opacity: 0 → .9` plus the scale, which was right when the backdrop was a single
-   <img>. With two layers trading places it is actively wrong: `both` holds the last frame, so the
-   animation would pin BOTH layers at .9 and the dissolve would have nothing to dissolve between —
-   two fully opaque pictures, the later one simply winning. The opening fade is not lost; the whole
-   overlay fades in above, and the artwork comes with it. */
-@keyframes tvDetArtIn {
-  from { transform: scale(1.05); }
+.tv-det-art.rdy {
+  opacity: 1;
+  animation:
+    tvDetArtFade .7s cubic-bezier(.3, .4, .5, 1) backwards,
+    tvDetArtSettle 1.1s cubic-bezier(.2, .7, .2, 1) backwards;
+}
+@keyframes tvDetArtFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes tvDetArtSettle {
+  from { transform: scale(1.03); }
   to   { transform: scale(1); }
 }
+/* THE COPY, A LINE AT A TIME. Held back until it can arrive whole — its callouts settled (TvDetail
+   `copyIn`) — so no line is ever pushed in under the cascade. Opacity, not visibility: the remote is
+   already on Play, and a hidden button cannot hold focus. */
+.tv-dm:not(.is-in) .tv-dm-col { opacity: 0; }
+.tv-dm.is-in .tv-dm-col > * { animation: tvDmRise .56s cubic-bezier(.2, .7, .2, 1) backwards; }
+.tv-dm.is-in .tv-dm-col > :nth-child(1) { animation-delay: 80ms; }
+.tv-dm.is-in .tv-dm-col > :nth-child(2) { animation-delay: 130ms; }
+.tv-dm.is-in .tv-dm-col > :nth-child(3) { animation-delay: 180ms; }
+.tv-dm.is-in .tv-dm-col > :nth-child(4) { animation-delay: 230ms; }
+.tv-dm.is-in .tv-dm-col > :nth-child(5) { animation-delay: 280ms; }
+.tv-dm.is-in .tv-dm-col > :nth-child(6) { animation-delay: 330ms; }
+.tv-dm.is-in .tv-dm-col > :nth-child(7) { animation-delay: 380ms; }
+@keyframes tvDmRise {
+  from { opacity: 0; transform: translateY(calc(var(--u) * 1.2)); }
+  to   { opacity: 1; transform: none; }
+}
 
-/* THE SECOND ARRIVAL: the veil giving way to the screen when /api/meta lands. That was a cut too,
-   and a more jarring one than the first — the spinner is replaced by a full screen of copy in a
-   single frame. Both ends of the swap fade, so it reads as one settling into the other.
-   Scoped `.tv-det …` (0,2,0) so it outranks `.m-load-veil`'s own `mVeilIn` from app.css, which is
+/* THE VEIL AND THE PAGES (Episodes & More, Sources) fade in rather than cut — a spinner, or a page,
+   replaced by a full screen of something else in a single frame. Scoped `.tv-det …` (0,2,0) so it outranks `.m-load-veil`'s own `mVeilIn` from app.css, which is
    a bare class and would otherwise win or lose on stylesheet order alone. */
-.tv-det :is(.tv-det-grid, .m-load-veil) {
+.tv-det :is(.tv-tp, .m-load-veil) {
   animation: tvDetSettle .3s cubic-bezier(.2, .7, .2, 1) both;
 }
 @keyframes tvDetSettle {
@@ -2620,524 +2696,634 @@
   to   { opacity: 1; }
 }
 
-/* ---- The two columns.
-   Padding is the overscan margin — a set that still overscans cuts roughly 5% off each edge, so
-   nothing readable may sit inside that band.
-   `align-items: start` is the screen's one anchor line: both columns begin at the top overscan
-   edge, so the wordmark and the chip above the sources sit level and the screen reads as one
-   thing. It was `end` when the copy was bottom-anchored against the picture (see `.tv-det-info`),
-   and each column has since had to say otherwise in its own rule — the panel with `start`, the
-   deck with `stretch`. Only the deck still needs to: it fills the column by design. */
-.tv-det-grid {
+/* ---- THE TITLE PAGE (TvDetail) ------------------------------------------------------------------
+   Netflix's TV title page, from the user's references (Oct 20): one column down the left of a
+   full-bleed picture — the wordmark, one line of facts, the episode up next or the tagline, three
+   lines of synopsis, three small credit lines, the thumbs, and a menu. Nothing on the right but the
+   artwork. Every size is a multiple of `--u` (see `.tv-det`), so 720p and 1080p land in the same
+   proportions and a desktop window shorter than 16:9 follows its height. */
+.tv-dm {
   position: absolute;
   inset: 0;
   z-index: 2;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(400px, 33vw, 620px);
-  gap: clamp(32px, 4vw, 76px);
-  align-items: start;
-  /* The padding is the overscan band and nothing else — it is where the SOURCES column starts, and
-     that column was already sitting right. Dropping the whole screen by padding this moved the
-     panel with it, which is what the extra breathing room the left column wanted cost. So the left
-     column asks for its own offset instead (see `.tv-det-info`). */
-  padding: clamp(40px, 6vh, 76px) clamp(48px, 4.5vw, 92px);
+  padding: calc(var(--u) * 4.4) calc(var(--u) * 6.2) calc(var(--u) * 3);
+  box-sizing: border-box;
 }
-/* TOP-ALIGNED, LEVEL WITH THE PANEL BESIDE IT — and this has now been all three things.
-   It began bottom-anchored, inherited from the row billboards where that is right for a reason
-   that does not hold here: a billboard's copy sits on a plate at the foot of a 16:9 card, and this
-   screen has no card. That wedged the type against the bottom overscan band with the upper half of
-   the picture empty.
-   Then centred, to halve the per-title drift — the block's height changes with the copy (one line
-   of genres or two, credits or none), so wherever it is anchored, the other end moves.
-   Centring fixed the drift and created a worse problem, which is what this is: the two columns
-   are ONE screen and they were starting at two different heights, the wordmark floating somewhere
-   in the middle of the frame while the source list began at the top of it. Nothing on screen
-   explains that offset, and the eye has to travel down and back up to read the pair.
-   Start-aligned they share a line, and the drift the centring was buying off is spent where it
-   costs least: at the BOTTOM, over empty artwork, rather than on the title itself. */
-.tv-det-info {
-  /* THE WHOLE HEIGHT OF THE FRAME, ANCHORED AT BOTH ENDS. The column was centred, for a reason that
-     still holds: its height is not fixed (two fact lines or three, a short synopsis or a long one),
-     and anchored at one end all of that variation is paid at the other. It now has something at
-     BOTH ends — the copy at the top, level with the chip row across the screen, and the trailer and
-     More Like This at the bottom (`.tv-det-foot`, `margin-top: auto`) — so neither end moves at all,
-     and a title's longer or shorter copy is paid in the gap between them, over the picture.
-     The copy keeps a reading measure (`> :not(.tv-det-foot)`); the foot takes the column's width. */
-  align-self: stretch;
+.tv-dm-col {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  /* THE CONTRAST THE SCRIM NO LONGER BUYS (see `.tv-det-scrim`): a tight shadow to edge each letter
-     and a wide soft one to lift the line off a bright patch. Inherited by everything in the column. */
+  align-items: flex-start;
+  width: calc(var(--u) * 42);
+  max-width: 100%;
+  /* THE CONTRAST THE FADE DOES NOT BUY (see `.tv-det-art::after`): a tight shadow to edge each letter and
+     a wide soft one to lift the line off a bright patch. Inherited by everything in the column. */
   text-shadow: 0 1px 2px rgba(0, 0, 0, .55), 0 0 18px rgba(0, 0, 0, .4);
 }
-.tv-det-info > :not(.tv-det-foot) { max-width: calc(var(--u) * 37); }
-/* Nothing in the stack gives up height to make room. Shrinking is how a flex column fits, and the one
-   item able to (the synopsis, being `overflow: hidden`) lost its last line without its ellipsis. The
-   sizes below are drawn to fit a 16:9 frame at every scale; the gap above the foot is the slack. */
-.tv-det-info > * { flex-shrink: 0; }
+/* Nothing gives up height to make room: a shrinking flex item is how the synopsis once lost its
+   ellipsis. The sizes are drawn to fit one 16:9 frame. */
+.tv-dm-col > * { flex-shrink: 0; max-width: 100%; }
 
-/* ---- Title, meta, synopsis, credits ---- */
 .tv-det-title {
-  margin: 0 0 clamp(10px, calc(var(--u) * .95), 22px);
+  margin: 0 0 calc(var(--u) * 1.1);
   font-family: var(--font);
   font-weight: 700;
-  font-size: clamp(34px, calc(var(--u) * 3.6), 76px);
+  font-size: calc(var(--u) * 3.6);
   line-height: 1.08;
   letter-spacing: .02em;
   color: #fff;
-  /* No gradient text clip here. The web title paints itself through `background-clip: text`,
-     which forces the whole heading onto its own composited layer for a colour effect that is
-     invisible at this size against a photograph. Plain white reads better and costs nothing. */
 }
-/* The wordmark FADES IN, for the same reason the backdrop dissolves rather than cutting: it
-   arrives with /api/meta, and it used to appear in whatever frame it finished decoding — which is
-   the same frame the backdrop was swapping in, so the screen produced two pops at once. Its box is
-   reserved either way (the heading has a height whether the picture is in it or not), so nothing
-   moves when it lands; only the ink arrives. */
+.tv-det-title.is-small { margin-bottom: calc(var(--u) * .8); font-size: calc(var(--u) * 2.5); }
+/* The wordmark fades in: it arrives with /api/meta, and its box is reserved either way (the heading
+   has a height whether the picture is in it or not), so nothing moves when it lands. */
 .tv-det-title .title-logo {
   display: block;
   width: auto;
-  height: clamp(52px, calc(var(--u) * 5.6), 130px);
-  max-width: min(100%, calc(var(--u) * 24));
+  height: calc(var(--u) * 6.8);
+  max-width: calc(var(--u) * 30);
   object-fit: contain;
   object-position: left center;
   opacity: 0;
   transition: opacity .45s ease;
 }
+.tv-det-title.is-small .title-logo { height: calc(var(--u) * 4.6); max-width: calc(var(--u) * 21); }
 .tv-det-title .title-logo.rdy { opacity: 1; }
-/* ---- THE FACTS: ★ 6.8 │ 2020 │ 12+ │ 1h 55min, then the seasons, then the genres --------------
-   THREE LINES, ONE KIND OF FACT EACH (see `metaBits` in TvDetail for why the single wrapping row
-   went: its rules ended up at the start of the lines it wrapped onto). Set tight — the lines are one
-   block — and the genres a step dimmer, because they describe where the other two lines state.
-   The FIRST line is still a flex row of cells, because a certificate is a CHIP — a red box with its
-   own padding — that a string cannot hold; `align-items: center` keeps the chip's box from riding
-   above the baseline of the words either side of it. */
-.tv-det-meta {
-  display: flex;
-  flex-direction: column;
-  gap: clamp(1px, calc(var(--u) * .14), 4px);
-  font-family: var(--font-mono);
-  font-size: clamp(13px, calc(var(--u) * 1.08), 23px);
-  line-height: 1.38;
-  letter-spacing: .03em;
-  color: #f2f2f2;
-  margin-bottom: clamp(10px, calc(var(--u) * .85), 20px);
-}
-.tv-det-facts {
+
+/* ONE LINE OF FACTS, SPACED RATHER THAN RULED, as Netflix sets it. */
+.tv-dm-facts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0 .62em;
-}
-.tv-det-genres { color: rgba(255, 255, 255, .74); }
-/* THE DIVIDER IS DRAWN, NOT TYPED. A "│" glyph is a character in the mono face: it inherits the
-   text's weight and colour, so it reads as loud as the facts it is separating, and it takes the
-   line's letter-spacing on both sides so the gaps come out uneven. A short rule sits behind the
-   words where a divider belongs, and — being a pseudo-element on every cell but the first — it
-   cannot be left dangling at the end of the line or doubled up when a cell is absent.
-   IT IS 2px AT 45%, not 1px at 28%: this line is read from across a room, and a hairline at a
-   quarter opacity is the first thing a television's own picture processing loses. The rule still
-   has to stay quieter than the facts either side of it — it is punctuation, not a fact — which is
-   what keeps this short of a full-strength line. */
-/* `min-width: 0` IS WHAT KEEPS A DIVIDER OFF THE START OF A LINE. A flex item will not shrink below
-   its own content by default, so the genres — the one cell long enough to matter — could not wrap
-   INSIDE the cell and were carried whole onto the next line instead. The rule that draws the
-   divider sits on the cell, so it went with them: a title with two lines of genres began its second
-   line with a dangling "│" that separated nothing. Released, the cell breaks its own text and the
-   divider stays where it belongs, between two things. */
-.tv-det-metabit { display: inline-flex; align-items: center; min-width: 0; }
-.tv-det-metabit + .tv-det-metabit::before {
-  content: '';
-  width: 2px;
-  height: 1em;
-  border-radius: 1px;
-  margin-right: .62em;
-  background: rgba(255, 255, 255, .5);
-  /* Pinned to the FIRST line rather than centred, for the cell that now wraps: centred, the rule
-     would float halfway down a two-line block of genres, level with nothing. `.1em` is the half
-     leading a normal line box puts above the type, so a one-line cell is unchanged. */
-  align-self: flex-start;
-  margin-top: .1em;
-}
-/* THE CERTIFICATE. The one thing in this line that is a mark rather than a word, so it is the one
-   thing with a fill.
-   A LITERAL RED, NOT `--accent`, and that is not an oversight to tidy up later: this build's accent
-   IS WHITE (app.css), so painting the chip with it would put white on white and delete it. Red is
-   not decoration here — it is the colour a certificate is printed in on every poster and box in
-   the world, and it is the one thing on this screen that is allowed to be alarming.
-   `.28em` of side padding rather than pixels, so a three-character "PG-13" and a two-character
-   "12" are both a box around their own text at any of the sizes this line clamps between. */
-.tv-det-age {
-  padding: .1em .28em;
-  border-radius: 3px;
-  background: #e50914;
-  color: #fff;
-  font-weight: 800;
-  letter-spacing: .02em;
-  /* Slightly under the line's own size: a certificate is a qualifier, and at full size the red
-     box out-shouts the title's own wordmark a few pixels above it. */
-  font-size: .86em;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-/* FIVE LINES. It has been three (an ellipsis on almost every title — a dead end on a screen with
-   no pointer) and six (most overviews whole, back when nothing sat below the synopsis and the column
-   grew about its middle). The column now has a foot — the trailer and More Like This — and the Play
-   button between, so the synopsis is the one block whose height is negotiable, and five lines at
-   this measure still carries the ~300 characters of a typical TMDB overview. An essay ends in an
-   ellipsis, which is the honest thing for the tail nobody was going to read from a sofa. */
-.tv-det-plot {
-  margin: 0 0 clamp(14px, calc(var(--u) * 1.35), 30px);
-  font-size: clamp(13px, calc(var(--u) * 1.04), 23px);
-  line-height: 1.5;
-  color: #e6e6e6;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-/* ---- THE CREDITS: THE CAST AS A ROW OF FACES ------------------------------------------------
-   This row is all the credits there are. It was a line of names, on the argument that the web modal's
-   38px avatars are unreadable from a sofa — true of the size, not of the photos — and then a small
-   table: a director line and a "Casts & Credits" label in a column of their own, with the names (then
-   the faces) beside them. The table went.
-   The faces sit edge to edge, each in a thin light ring, with the first name under each (castFaces.ts
-   says when it gets an initial). They live in the column's foot now, beside the trailer box under the
-   tagline (`.tv-det-extra-side`), so they are sized to that row: five at ~65px. A face is still a flex
-   BASIS, not a width, so a window too narrow for the row shrinks its circles instead of pushing the
-   last one out. The square comes from `padding-top: 100%` — `aspect-ratio` arrived in Chrome 88 and
-   this build's floor is 87. The captions are em of the list's font size. */
-.tv-det-faces {
-  --face: clamp(48px, calc(var(--u) * 3.9), 84px);
-  display: flex;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: clamp(11px, calc(var(--u) * .86), 19px);
-}
-.tv-det-face {
-  flex: 0 1 var(--face);
-  min-width: 0;
-}
-/* The circle, with its ring painted OVER the photo (`::after`) rather than around it, so neighbouring
-   circles meet ring to ring. A ring outside the box would overlap the next face. There is a ring at
-   all because a dark-haired head on a dark backdrop otherwise has no edge. `overflow: hidden` is the
-   round clip for the photo and for the silhouette's shoulders alike. */
-.tv-det-face-pic {
-  position: relative;
-  display: block;
-  padding-top: 100%;
-  border-radius: 50%;
-  overflow: hidden;
-  background: #262626;
-}
-.tv-det-face-pic::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .62);
-}
-.tv-det-face-pic img,
-.tv-det-face-pic svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-/* TMDB headshots are portraits with the face in their upper part; the square is cut from there. */
-.tv-det-face-pic img {
-  object-fit: cover;
-  object-position: 50% 20%;
-  opacity: 0;
-  transition: opacity .35s ease;
-}
-.tv-det-face-pic img.rdy { opacity: 1; }
-.tv-det-face-pic svg {
-  transform: translateY(10%);
-  fill: rgba(255, 255, 255, .26);
-}
-/* One line, no wider than its circle: the circles touch, so there is no gap for a caption to borrow. */
-.tv-det-face-name {
-  display: block;
-  margin-top: .45em;
-  font-size: .86em;
-  line-height: 1.3;
+  gap: .25em .8em;
+  margin-bottom: calc(var(--u) * .9);
+  font-size: calc(var(--u) * 1.2);
+  font-weight: 600;
+  line-height: 1.4;
   color: #ececec;
-  text-align: center;
+}
+/* The match, in Netflix's green — the one colour on the line, by the user's choice (Oct 20). */
+.tv-dm-match { color: #46d369; font-weight: 700; }
+/* THE CERTIFICATE: Netflix's grey box. */
+.tv-det-age {
+  padding: .08em .4em;
+  border-radius: 2px;
+  background: #4d4d4d;
+  color: #f2f2f2;
+  font-weight: 600;
+  letter-spacing: .02em;
+  font-size: .84em;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-shadow: none;
+}
+/* What is new about it, a top-ten place, an award: bold white lines, as Netflix's "Season 2 Coming
+   March 8". */
+.tv-dm-callouts {
+  margin: calc(var(--u) * -.2) 0 calc(var(--u) * .9);
+  font-size: calc(var(--u) * 1.22);
+  font-weight: 700;
+  line-height: 1.35;
+  color: #fff;
+}
+.tv-dm-callouts p { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tv-dm-headline {
+  margin: 0 0 calc(var(--u) * .3);
+  font-size: calc(var(--u) * 1.35);
+  font-weight: 700;
+  line-height: 1.3;
+  color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The same line box as the others (.76 × 1.47 ≈ .86 × 1.3), so a long name does not change the row's
-   height. */
-.tv-det-face-name.is-long {
-  margin-top: .51em;
-  font-size: .76em;
-  line-height: 1.47;
-}
-@media (prefers-reduced-motion: reduce) {
-  .tv-det-face-pic img { transition: none; }
-}
-
-/* ---- Actions ---- */
-.tv-det-actions {
-  display: flex;
-  align-items: center;
-  gap: clamp(12px, 1vw, 18px);
-}
-.tv-det-watch {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  border: none;
-  border-radius: 8px;
-  padding: clamp(13px, 1.5vh, 19px) clamp(26px, 2.4vw, 44px);
-  background: #fff;
-  color: #0b0b0b;
-  font-family: var(--font);
-  font-weight: 700;
-  font-size: clamp(18px, 1.25vw, 26px);
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  cursor: pointer;
+.tv-dm-plot {
+  margin: 0 0 calc(var(--u) * .85);
+  font-size: calc(var(--u) * 1.2);
+  line-height: 1.45;
+  color: #e8e8e8;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
 }
-:root[data-lang="ka"] .tv-det-watch { text-transform: none; letter-spacing: .02em; }
-.tv-det-watch .ic { font-size: .9em; }
-.tv-det-watch.has-resume { padding-bottom: calc(clamp(13px, 1.5vh, 19px) + 3px); }
-.tv-det-resume-at { font-weight: 600; opacity: .55; }
-.tv-det-disc {
+/* Cast, who made it, what kind of thing it is: small and grey, the label a step greyer. */
+.tv-dm-credits {
+  margin-bottom: calc(var(--u) * 1.7);
+  font-size: calc(var(--u) * .98);
+  line-height: 1.45;
+  color: rgba(255, 255, 255, .7);
+}
+.tv-dm-credits p { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tv-dm-credits span { color: rgba(255, 255, 255, .48); }
+
+/* ---- THE THUMBS AND THE MENU, under one gliding white box ----------------------------------------
+   Layers inside `.tv-dm-acts`, bottom up: the menu (white labels), the MARK (the white box, with a
+   black copy of the menu inside it — the ink), the thumbs. The mark covers the focused item and its
+   ink is held over the real menu (TvDetail moves the two by opposite amounts on one clock), so the
+   label under the box reads black at every frame of the slide. The thumbs sit above the mark: on a
+   thumb the box becomes the circle behind it. */
+.tv-dm-acts {
+  --dm-w: calc(var(--u) * 28);
+  --dm-r: calc(var(--u) * .42);
+  position: relative;
+  width: var(--dm-w);
+  max-width: 100%;
+}
+.tv-dm-icons {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  gap: calc(var(--u) * .5);
+  margin-bottom: calc(var(--u) * .7);
+}
+.tv-dm-icon {
+  position: relative;
   display: grid;
   place-items: center;
-  width: clamp(52px, 3.6vw, 68px);
-  height: clamp(52px, 3.6vw, 68px);
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, .38);
-  background: rgba(0, 0, 0, .45);
+  width: calc(var(--u) * 3);
+  height: calc(var(--u) * 3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
   color: #fff;
-  font-size: clamp(22px, 1.5vw, 30px);
-  line-height: 1;
   cursor: pointer;
 }
-.tv-det-disc.on { border-color: var(--accent); color: var(--accent); }
+/* `--knock` is the colour behind the icon: the band that cuts the pair's front thumb out of the back
+   one, black on the page and white on the box. A rating given fills its thumb. */
+.tv-dm-icon { --knock: #000; }
+.tv-dm-icon:focus { --knock: #fff; color: #0b0b0b; }
+.tv-dm-thumb { width: calc(var(--u) * 1.7); height: calc(var(--u) * 1.7); overflow: visible; }
+.tv-dm-thumb .tv-thumb-gap { fill: var(--knock); stroke: var(--knock); }
+.tv-dm-icon.on .tv-thumb { fill: currentColor; }
+/* The thumb's name, popped up above it while the remote is on it — Netflix's "Rated" tag. */
+.tv-dm-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + var(--u) * .5);
+  padding: .5em .8em;
+  border-radius: 6px;
+  background: #ececef;
+  color: #0a0a0a;
+  font: 700 calc(var(--u) * .8) / 1 var(--font);
+  white-space: nowrap;
+  text-shadow: none;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 30%) scale(.8);
+  transition: opacity .14s ease, transform .3s cubic-bezier(.34, 1.56, .64, 1);
+}
+.tv-dm-icon:focus .tv-dm-tip { opacity: 1; transform: translate(-50%, 0) scale(1); }
 
-/* ---- The panel: the only thing on this screen that scrolls -------------------------------
-   `min-height: 0` on both the panel and the list is what actually lets the list scroll: a grid
-   item's default `min-height: auto` refuses to shrink below its content, so without it the
-   panel grows past the viewport and the page scrolls instead of the list — which is the exact
-   behaviour this screen exists to remove.
-
-   TvSpatialNav needs no wiring for it. `scrollParent()` walks up from the focused row to the
-   nearest ancestor with its own overflow, finds `.tv-det-list`, and animates THAT — the same
-   easing it uses for the page. */
-.tv-det-panel {
-  /* ONE CARD GEOMETRY FOR THE WHOLE RIGHT-HAND COLUMN — the same idea `.tv-shell` applies to the
-     home screen. The deck lays its cards out with it, the head above sizes itself to it so the
-     season chip lines up with those cards, and the sources panel below takes the SAME width so
-     that choosing an episode does not hand you a differently-shaped object in the same place.
-     Declared once: change the card and the chip and the panel both follow. */
-  --ep-w: min(100%, clamp(340px, 29vw, 560px));
-  --ep-h: calc(var(--ep-w) * 9 / 16);
-  /* TOP-ALIGNED AND CONTENT-HEIGHT, not stretched. Stretched, a title with two sources drew a
-     half-empty black slab down the whole right of the screen; top-aligned it also keeps the
-     panel heading at the same y on every title, which is what stops the eye re-hunting for it
-     between one title and the next. `max-height: 100%` is what still lets a 30-episode list
-     fill the column and scroll. */
-  align-self: start;
-  max-height: 100%;
+.tv-dm-menu {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: 14px;
-  /* NEARLY OPAQUE ON PURPOSE. Every other translucent surface in this build sits over a dark
-     page; this one sits over a full-bleed photograph, and the frosting that would normally
-     separate it (backdrop-filter) is banned at the top of this file because a TV GPU stalls on
-     it. Without the blur, translucency is just a bright picture showing through a list of
-     episode names — so the panel pays for its own contrast with alpha instead. */
-  background: rgba(9, 9, 9, .93);
-  padding: clamp(18px, 2vh, 28px) clamp(16px, 1.4vw, 26px);
+  gap: calc(var(--u) * .28);
+  width: var(--dm-w);
+  max-width: 100%;
 }
-.tv-det-panel-head {
+/* Spelled out to the last property: the ink's copy is a <span> and the real item a <button>, and the
+   two must lay their labels out to the same pixel. */
+.tv-dm-item {
+  position: relative;
   display: flex;
-  align-items: baseline;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-bottom: clamp(12px, 1.6vh, 20px);
-}
-.tv-det-panel-title {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: clamp(14px, .95vw, 19px);
-  letter-spacing: .2em;
-  text-transform: uppercase;
-  color: #9a9a9a;
-}
-:root[data-lang="ka"] .tv-det-panel-title { text-transform: none; letter-spacing: .1em; }
-.tv-det-panel-sub { color: var(--accent); letter-spacing: .1em; }
-.tv-det-back {
-  border: 1px solid rgba(255, 255, 255, .22);
-  border-radius: 999px;
-  background: transparent;
-  color: #ddd;
-  font-family: var(--font-mono);
-  font-size: clamp(13px, .9vw, 17px);
-  letter-spacing: .06em;
-  padding: 6px 16px;
-  cursor: pointer;
-}
-
-/* Pills replace dropdowns wherever the set of options is small and FIXED. A menu that opens over
-   itself is a mouse control: on a remote it costs an OK to open, arrows to walk, an OK to choose,
-   and it hides the thing it is choosing between. Laid flat, the options are just there and Left/
-   Right walks them — one press per change, nothing to dismiss.
-
-   THE LANGUAGE PICKER IS NO LONGER ONE OF THEM, and the condition above is why: its options come
-   from whatever the add-ons return for this title, so the row was two pills for one film and six
-   for the next, wrapping to a second row and pushing the source list down by a different amount
-   each time. It is a chip menu now, beside the source tabs it sits under (see the note in
-   TvDetail). What still uses this: the signed-out SIGN IN pill. */
-.tv-det-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: clamp(12px, 1.6vh, 18px);
-  flex: 0 0 auto;
-}
-.tv-det-pill {
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .05);
-  color: #cfcfcf;
-  font-size: clamp(15px, 1vw, 19px);
-  padding: clamp(8px, .9vh, 12px) clamp(16px, 1.2vw, 24px);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.tv-det-pill.on {
-  background: #fff;
-  border-color: #fff;
-  color: #0b0b0b;
-  font-weight: 600;
-}
-/* `.tv-det-seasons` used to live here — a scroll cap on the flat row of season pills. The season
-   picker is a chip with a menu now (see below), which is what that cap was working around, so
-   the rule has no markup left to match. */
-.tv-det-langs .flag { vertical-align: -2px; }
-
-/* ---- THE EPISODE DECK ---------------------------------------------------------------------
-   The season as a stack of cards rather than a list of lines. The shape and the reasoning are
-   written up at the head of src/components/DetailModal/TvEpisodeDeck.tsx; this styles it.
-
-   THE PANEL GIVES UP ITS CHROME. `.tv-det-panel` is a nearly-opaque slab because a LIST of thin
-   rows has no contrast of its own against a full-bleed photograph. A deck's cards are opaque
-   surfaces that each carry their own scrim, so the slab becomes a second frame drawn around the
-   first — and, worse, a box the deck's cards would have to be clipped to. It goes.
-
-   IT ALSO STOPS SCROLLING, which is the point. TvSpatialNav's `scrollParent()` walks up from the
-   focused element looking for an ancestor with its own overflow; there now isn't one, so it
-   leaves the panel alone entirely and the deck's own Up/Down handler owns the movement. A deck
-   that ALSO scrolled would move twice per press. */
-.tv-det-panel.is-deck {
-  align-self: stretch;
-  max-height: none;
-  border: 0;
-  background: none;
-  padding: 0;
-  overflow: visible;
-}
-
-/* The season chip sits alone above the deck, on the artwork with no panel behind it. Pushed to
-   the end rather than spaced apart: the "EPISODES" heading that used to hold the other end of
-   this row is now `.sr-only` (see TvEpisodeDeck), so `space-between` had nothing to space and
-   would have parked the chip on the left, away from the column it belongs to. */
-/* AS WIDE AS A CARD, NOT AS WIDE AS THE COLUMN — which is what puts the chip over the deck.
-   The panel column is wider than the cards in it (the cards are sized to be read from a sofa,
-   the column to hold them plus the room the fan needs to recede into on the right). A head
-   stretched to the column therefore pushed its right-aligned chip 62px past the cards' right
-   edge, so the chip read as belonging to the screen rather than to the deck under it. Bounding
-   the head to `--ep-w` lands the two right edges flush. */
-.tv-ep-head {
-  /* `display: flex` stated HERE rather than inherited from `.tv-det-panel-head`, which the deck's
-     head happens to also carry and the sources head does not. Relying on a sibling class for the
-     layout of this one is how the sources chip ended up stacked under its back button instead of
-     beside it — the row is this class's job, so it owns it. */
-  display: flex;
-  flex: 0 0 auto;
-  width: var(--ep-w);
   align-items: center;
-  justify-content: flex-start;
-  /* THE GAP AND THE CHIP'S ZOOM ARE ONE DECISION, because the chip grows about its LEFT edge and
-     a `scale()` is a RATIO — all of the growth lands on the right, and how much there is depends
-     on how long the label is. "Season 1" (139px) grew 9.7px at the old 1.07; "Streaming Services"
-     (252px) grew 17.6px and covered the `+`. Widening the gap to 32px fixed that and left the row
-     looking sparse, which is the other half of the same trade.
-     Settled by measuring the WORST case rather than the common one: the longest label shipped, at
-     the zoom below, on both panels. */
-  gap: clamp(14px, .95vw, 18px);
-  margin-bottom: clamp(10px, 1.4vh, 18px);
+  gap: calc(var(--u) * .8);
+  box-sizing: border-box;
+  width: 100%;
+  height: calc(var(--u) * 2.85);
+  margin: 0;
+  padding: 0 calc(var(--u) * 1.05);
+  border: 0;
+  border-radius: var(--dm-r);
+  background: none;
+  color: #fff;
+  font-family: var(--font);
+  font-weight: 600;
+  font-size: calc(var(--u) * 1.22);
+  line-height: 1;
+  letter-spacing: .01em;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tv-dm-glyph { flex: 0 0 auto; width: 1.15em; height: 1.15em; }
+.tv-dm-label { overflow: hidden; text-overflow: ellipsis; }
+.tv-dm-sub { font-size: .86em; opacity: .62; }
+/* How far into it: a short bar at the item's far end. */
+.tv-dm-bar {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 4.2em;
+  height: calc(var(--u) * .22);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .3);
+  overflow: hidden;
+}
+.tv-dm-bar i { display: block; height: 100%; background: currentColor; }
+/* Only under the box: the menu's own bars are hidden (keeping their room), and the ink's copy shows the
+   one the box is on. */
+.tv-dm-menu > button .tv-dm-bar { visibility: hidden; }
+/* Asking the add-ons for a source takes a moment: the triangle gives way to a turning ring. */
+.tv-dm-item.is-busy .tv-dm-glyph { visibility: hidden; }
+.tv-dm-item.is-busy::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--u) * 1.05);
+  top: calc(50% - .55em);
+  width: 1.1em;
+  height: 1.1em;
+  box-sizing: border-box;
+  border: .14em solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: tvDmSpin .7s linear infinite;
+}
+@keyframes tvDmSpin { to { transform: rotate(360deg); } }
+/* The box IS the focus mark: no ring, and the radius restated against app.css's focused-button 4px.
+   One class more than the ring restated at the foot of the chip menu section, which comes later in the
+   file and would win the (0,3,0) tie. */
+.tv-det .tv-dm-acts .tv-dm-item:focus-visible { outline: none; border-radius: var(--dm-r); }
+.tv-det .tv-dm-acts .tv-dm-icon:focus-visible { outline: none; border-radius: 50%; }
+
+.tv-dm-mark {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  border-radius: var(--dm-r);
+  background: #fff;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .35);
+  opacity: 0;
+  pointer-events: none;
+}
+.tv-dm-mark.is-round { border-radius: calc(var(--u) * 1.5); }
+.tv-dm-mark.is-on { opacity: 1; }
+.tv-dm-ink {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #0b0b0b;
+  text-shadow: none;
+}
+/* Restated on the items: `.tv-dm-item` sets its own white, which would beat the inherited black. */
+.tv-dm-ink .tv-dm-item { color: #0b0b0b; }
+.tv-dm-ink .tv-dm-bar { background: rgba(0, 0, 0, .16); }
+/* THE CLOCK: the top bar's pill and the search page's box — (.25,.7,.5,1) over 480ms. The mark and its
+   ink share it exactly, which is what keeps the ink still on screen. */
+.tv-dm-mark.is-armed {
+  transition:
+    transform .48s cubic-bezier(.25, .7, .5, 1),
+    width .48s cubic-bezier(.25, .7, .5, 1),
+    height .48s cubic-bezier(.25, .7, .5, 1),
+    border-radius .48s cubic-bezier(.25, .7, .5, 1);
+}
+.tv-dm-mark.is-armed .tv-dm-ink { transition: transform .48s cubic-bezier(.25, .7, .5, 1); }
+
+/* ---- THE PAGES (TvTitlePage): Episodes & More, Trailers & More, More Like This, Sources -----------
+   Netflix's "Episodes & More": the list on the left, what it names on the right, over the artwork
+   darkened almost to black (`.tv-det-scrim.is-page`). Each column is a clipped view whose content
+   TvTitlePage moves by transform; the white outline travels between them on the same clock. */
+.tv-tp {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  gap: calc(var(--u) * 3.4);
+  padding: calc(var(--u) * 4.4) calc(var(--u) * 6.2) 0;
+  box-sizing: border-box;
+}
+.tv-tp-left {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 calc(var(--u) * 27);
+  min-height: 0;
+}
+.tv-tp-head { flex: 0 0 auto; margin-bottom: calc(var(--u) * 2.4); }
+.tv-tp-head .tv-dm-facts { margin-bottom: 0; font-size: calc(var(--u) * 1.1); }
+.tv-tp-headsub { margin: calc(var(--u) * .5) 0 0; font-size: calc(var(--u) * 1.1); font-weight: 600; color: #fff; }
+.tv-tp-view { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.tv-tp-inner { position: relative; transition: transform .48s cubic-bezier(.25, .7, .5, 1); }
+.tv-tp-left .tv-tp-inner { padding-bottom: calc(var(--u) * 3); }
+/* A new section is a new column: faded in. Opacity only — a transform here would become the containing
+   block of the trailer's full-screen layer and pin "full screen" to the column. */
+.tv-tp-content { animation: tvTpIn .26s ease both; }
+@keyframes tvTpIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
-/* ---- ADD / REPORT, AS TWO MORE CHIPS ------------------------------------------------------
-   Same row as the dropdown, and deliberately the same object: identical surface, identical
-   border, identical white-on-focus, identical 1.07 zoom. They are round rather than pill-shaped
-   only because they hold one glyph instead of a word — every other property is the chip's, so a
-   row of three controls reads as one set rather than as a dropdown with two foreign buttons
-   parked beside it.
-
-   These override the generic `.tv-det-disc` (a 68px outlined circle sized to stand beside the
-   old WATCH button), which is why the selector is scoped to the head rather than restyling that
-   class outright — the web build still uses it. */
-.tv-ep-head .tv-det-actions { display: flex; gap: clamp(8px, .7vw, 12px); flex: 0 0 auto; }
-.tv-ep-head .tv-det-disc {
-  /* Height matched to the chip's so the row has one baseline. The chip is padding + one line of
-     `clamp(15px, 1vw, 19px)`; these clamps track that to within a pixel at both resolutions. */
-  /* The floor is 37, not a rounder number: at 720p the chip stops shrinking on ITS floors (8px
-     padding, 15px text) and settles at 37px, so anything lower leaves the discs visibly short of
-     the control they sit beside. Measured at both resolutions — 44/44 and 37/37. */
-  width: clamp(37px, 4.1vh, 44px);
-  height: clamp(37px, 4.1vh, 44px);
-  border: 1px solid rgba(255, 255, 255, .14);
-  background: rgba(10, 10, 10, .92);
-  color: #e8e8e8;
-  font-size: clamp(16px, 1.9vh, 21px);
-  transform: scale(1);
-  will-change: transform;
-  transition: background-color .18s ease, color .18s ease, border-color .18s ease,
-              transform .2s cubic-bezier(.2, .7, .2, 1);
+.tv-tp-cap {
+  padding: calc(var(--u) * 1) calc(var(--u) * 1) calc(var(--u) * .3);
+  font-size: calc(var(--u) * .82);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .5);
 }
-/* The drawn glyphs (see PlusIcon / CheckIcon / FlagIcon in TvDetail) size themselves off this
-   rule's font-size via `1em`. `display: block` kills the inline baseline gap that would otherwise
-   sit an SVG a few pixels low inside a grid-centred circle — every disc in the row is an SVG now,
-   so without this they would all hang low together rather than centre in their circles. */
-.tv-ep-head .tv-det-disc svg { display: block; }
-.tv-ep-head .tv-det-disc:hover { background: rgba(24, 24, 24, .95); color: #fff; }
-/* `.on` is "this title is in your list" — the same job `.tv-chipmenu-opt.on` does in the menu,
-   and answered the same way: a light grey fill, so it never collides with the white that means
-   "the remote is here". */
-.tv-ep-head .tv-det-disc.on {
-  background: rgba(255, 255, 255, .17);
-  border-color: rgba(255, 255, 255, .24);
+:root[data-lang="ka"] .tv-tp-cap { text-transform: none; letter-spacing: .04em; }
+.tv-tp-sec {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+  box-sizing: border-box;
+  width: 100%;
+  height: calc(var(--u) * 2.75);
+  margin: 0;
+  padding: 0 calc(var(--u) * 1);
+  border: 0;
+  border-radius: calc(var(--u) * .3);
+  background: none;
+  color: rgba(255, 255, 255, .74);
+  font-family: var(--font);
+  font-size: calc(var(--u) * 1.22);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .18s ease, color .18s ease;
+}
+.tv-tp-sec.is-sub { padding-left: calc(var(--u) * 1.6); }
+.tv-tp-sec-label { display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tv-tp-sec-label .flag { margin-right: .55em; }
+.tv-tp-sec-count { flex: 0 0 auto; font-size: .82em; color: rgba(255, 255, 255, .58); }
+/* WHAT THE RIGHT IS SHOWING and WHERE THE REMOTE IS are different questions: a light grey panel for the
+   first, the white outline for the second — the chip menu's two currencies. */
+.tv-tp-sec.is-current { background: rgba(255, 255, 255, .12); color: #fff; }
+.tv-det .tv-tp .tv-tp-sec:focus-visible { outline: none; border-radius: calc(var(--u) * .3); color: #fff; }
+
+.tv-tp-heading {
+  display: flex;
+  align-items: center;
+  gap: .55em;
+  margin: 0 0 calc(var(--u) * 1.2);
+  font-size: calc(var(--u) * 1.55);
+  font-weight: 700;
+  line-height: 1.3;
   color: #fff;
 }
-/* Scoped past the blanket ring for the third time in this file — `:is(a, button, [tabindex])`
-   ties at (0,3,0) and wins on source order, so `outline: none` needs the extra class to land. */
-.tv-det .tv-ep-head .tv-det-disc:focus-visible {
-  outline: none;
-  transform: scale(1.07);
-  background: #fff;
-  border-color: #fff;
-  color: #0b0b0b;
+/* "Season 2 · [16]": Netflix's certificate there is an outlined box. */
+.tv-tp-dot { font-weight: 400; color: rgba(255, 255, 255, .6); }
+.tv-tp-age {
+  padding: .12em .36em;
+  border: 1px solid rgba(255, 255, 255, .8);
+  border-radius: 2px;
+  font-size: .6em;
+  font-weight: 600;
+  line-height: 1.1;
 }
+.tv-tp-heading .flag { margin: 0 .1em; }
+.tv-tp-cells {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--u) * .6);
+  padding-bottom: calc(var(--u) * 3);
+}
+.tv-tp-cells.is-grid { display: grid; gap: calc(var(--u) * 1.2); align-items: start; }
+
+/* THE OUTLINE. One per page, placed from offsets at the end of the scroll (tvGlide). */
+.tv-tp-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 5;
+  width: 0;
+  height: 0;
+  box-sizing: border-box;
+  border: calc(var(--u) * .17) solid #fff;
+  border-radius: calc(var(--u) * .45);
+  opacity: 0;
+  pointer-events: none;
+}
+.tv-tp-ring[data-shape="thumb"],
+.tv-tp-ring[data-shape="card"] { border-radius: calc(var(--u) * .62); }
+.tv-tp-ring[data-shape="pill"] { border-radius: calc(var(--u) * 2); }
+.tv-tp-ring.is-on { opacity: 1; }
+.tv-tp-ring.is-armed {
+  transition:
+    transform .48s cubic-bezier(.25, .7, .5, 1),
+    width .48s cubic-bezier(.25, .7, .5, 1),
+    height .48s cubic-bezier(.25, .7, .5, 1),
+    border-radius .48s cubic-bezier(.25, .7, .5, 1);
+}
+.tv-det .tv-tp :is(.tv-tp-ep, .tv-tp-card, .tv-tp-src, .tv-tp-signin, .tv-det-trailer):focus-visible { outline: none; }
+
+/* An episode: the still, then its name, what happens and how long it runs. */
+.tv-tp-ep {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(var(--u) * 1.5);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  font-family: var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+.tv-tp-ep + .tv-tp-ep { margin-top: calc(var(--u) * .9); }
+.tv-tp-ep-pic {
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(var(--u) * 22);
+  height: calc(var(--u) * 12.375);
+  border-radius: calc(var(--u) * .45);
+  overflow: hidden;
+  background: #151515;
+}
+.tv-tp-ep-pic img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity .35s ease;
+}
+.tv-tp-ep-pic img.rdy { opacity: 1; }
+.tv-tp-ep-nostill {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #1a1a1a, #0d0d0d);
+}
+.tv-tp-ep-nostill::after {
+  content: attr(data-n);
+  font-family: var(--font-mono);
+  font-size: calc(var(--u) * 1.8);
+  color: rgba(255, 255, 255, .22);
+}
+.tv-tp-ep-bar {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  bottom: 7%;
+  height: calc(var(--u) * .26);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .32);
+  overflow: hidden;
+}
+.tv-tp-ep-bar i { display: block; height: 100%; min-width: 4px; background: #fff; }
+.tv-tp-ep-wait { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.tv-tp-ep.is-busy .tv-tp-ep-pic img { opacity: .45; }
+.tv-tp-ep-copy {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * .45);
+  min-width: 0;
+  padding-top: calc(var(--u) * .3);
+}
+.tv-tp-ep-name {
+  font-size: calc(var(--u) * 1.35);
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tv-tp-ep-plot {
+  font-size: calc(var(--u) * 1.06);
+  line-height: 1.42;
+  color: rgba(255, 255, 255, .8);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tv-tp-ep-len { font-size: calc(var(--u) * 1.04); color: rgba(255, 255, 255, .55); }
+
+/* A title like this one: a 16:9 picture with its name on it. */
+.tv-tp-card {
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--u) * .55);
+  overflow: hidden;
+  background: #151515;
+  color: #fff;
+  font-family: var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+.tv-tp-card-pic { position: relative; display: block; padding-top: 56.25%; }
+.tv-tp-card-pic img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity .35s ease;
+}
+.tv-tp-card-pic img.rdy { opacity: 1; }
+.tv-tp-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(0deg, rgba(0, 0, 0, .8) 0%, rgba(0, 0, 0, .25) 46%, transparent 68%);
+  pointer-events: none;
+}
+.tv-tp-card-cap {
+  position: absolute;
+  left: .75em;
+  right: .75em;
+  bottom: .6em;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: .1em;
+  font-size: calc(var(--u) * .95);
+  line-height: 1.25;
+}
+.tv-tp-card-cap b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tv-tp-card-cap span { font-size: .84em; color: rgba(255, 255, 255, .72); white-space: nowrap; }
+
+/* A source: its logo or quality, its name and details, a chevron. */
+.tv-tp-src {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 1);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--u) * 46);
+  min-height: calc(var(--u) * 4);
+  margin: 0;
+  padding: calc(var(--u) * .7) calc(var(--u) * 1.1);
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: calc(var(--u) * .45);
+  background: rgba(255, 255, 255, .06);
+  color: #fff;
+  font-family: var(--font);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.tv-tp-src-logo {
+  flex: 0 0 auto;
+  width: calc(var(--u) * 2.6);
+  height: calc(var(--u) * 2.6);
+  border-radius: calc(var(--u) * .4);
+  overflow: hidden;
+  background: rgba(255, 255, 255, .08);
+}
+.tv-tp-src-logo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tv-tp-src-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: calc(var(--u) * 1.12);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tv-tp-src-sub { display: block; margin-top: .2em; font-family: var(--font-mono); font-size: .76em; color: rgba(255, 255, 255, .55); }
+.tv-tp-src-chev { flex: 0 0 auto; font-size: calc(var(--u) * 1.5); line-height: 1; color: rgba(255, 255, 255, .5); }
+.tv-tp-src .quality-badge { font-size: calc(var(--u) * .82); padding: .3em .7em; }
+.tv-tp-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--u) * .9);
+  max-width: calc(var(--u) * 40);
+  font-size: calc(var(--u) * 1.1);
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .62);
+}
+.tv-tp-signin {
+  padding: .65em 1.5em;
+  border: 1px solid rgba(255, 255, 255, .3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .08);
+  color: #fff;
+  font: 600 calc(var(--u) * 1.05) / 1 var(--font);
+  cursor: pointer;
+}
+.tv-det .tv-tp .tv-tp-signin:focus-visible { border-radius: 999px; }
+
+
 @media (prefers-reduced-motion: reduce) {
-  .tv-ep-head .tv-det-disc { transition: none; }
-  .tv-det .tv-ep-head .tv-det-disc:focus-visible { transform: scale(1); }
+  /* The box and the outline still MOVE — they are where the remote is — they just stop sliding there. */
+  .tv-dm-mark.is-armed, .tv-dm-mark.is-armed .tv-dm-ink, .tv-tp-ring.is-armed, .tv-tp-inner { transition: none; }
+  .tv-tp-content { animation: none; }
+  .tv-dm-tip { transition: none; }
 }
 
 /* ---- THE CHIP MENU ------------------------------------------------------------------------
@@ -3281,7 +3467,7 @@
 .tv-chipmenu-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 /* THE TRAVELLING HIGHLIGHT. One bar behind the options, moved and resized to whichever one has
-   focus (positions come from TvEpisodeDeck). It replaces both the per-option focus fill and the
+   focus (positions come from TvChipMenu). It replaces both the per-option focus fill and the
    focus RING — a ring on a row inside a menu is a rounded rectangle drawn around a rounded
    rectangle, and either of them can only ever CUT from one row to the next, because there is
    nothing travelling between them for the eye to follow. A bar that slides says "the remote
@@ -3302,7 +3488,7 @@
   pointer-events: none;
   z-index: 0;
 }
-/* Armed one frame after the bar is first placed — see the note in TvEpisodeDeck. Without the
+/* Armed one frame after the bar is first placed (TvChipMenu). Without the
    gate, opening the menu would animate the bar in from the top of the list. */
 .tv-chipmenu-list.is-armed .tv-chipmenu-mark {
   transition:
@@ -3360,492 +3546,13 @@
   border-radius: 10px;
   color: #0b0b0b;
 }
-
-/* ---- THE SOURCES PANEL, IN THE DECK'S LANGUAGE --------------------------------------------
-   Choosing an episode swaps the deck for the sources for that episode. Those two things sat in
-   the same place and looked like they came from different applications: the panel ran the full
-   width of the COLUMN while the cards ran to `--ep-w`, its tabs were hard white-on-black chips
-   where everything else had settled on grey-for-current / white-for-focused, and the swap itself
-   was a hard cut with nothing between the two states.
-
-   Nothing here invents a new look. Every value below is one already established by the deck, the
-   season chip or its menu — which is the point: the panel is the same object continuing, not a
-   second design occupying the slot. */
-.tv-src {
-  /* Carries the panel's own column layout, because it now sits between the panel and the list
-     that has to stretch — without this `.tv-det-list { flex: 1 1 auto }` has nothing to grow in
-     and a long list of sources stops scrolling and overflows instead. */
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
-/* AS WIDE AS A CARD, AND CARRYING NO SURFACE OF ITS OWN. The slab moved off the grid cell and
-   onto `.tv-src-card` below, because the chip row has to sit ABOVE it on the artwork — exactly
-   where the season chip sits above the deck. While the panel itself was the dark box there was
-   nowhere outside it to put anything. */
-.tv-det-panel:not(.is-deck) {
-  width: var(--ep-w);
-  border: 0;
-  background: none;
-  padding: 0;
-}
-
-/* The head row above the slab is `.tv-ep-head` unmodified — the chip alone, right-aligned, the
-   same as above the deck. It briefly held a "‹ EPISODES" button on its left and therefore a
-   `space-between`; the Back key does that job now, so there is nothing to space against. */
-
-/* NO SLAB. This was a dark panel with the rows inside it, which is one surface too many: a box
-   around a set of boxes, each already rectangular and already the same width. Dropping it makes
-   the sources read exactly as the episode deck does — free-standing rows over the artwork, the
-   same width as the cards were, in the same place.
-
-   The contrast the slab was providing has to go SOMEWHERE, though, and it moves onto the rows
-   (below). That is the only reason the slab existed: this column sits over a full-bleed
-   photograph and the frosting that would normally separate it is banned at the top of this file,
-   so something here has to be opaque. A row can be opaque on its own. */
-.tv-src-card {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-/* ---- THE LANGUAGE CHIP, IN THE HEAD ROW BESIDE THE SOURCE CHIP ----------------------------
-   A plain flex item so it sits in `.tv-ep-head`'s row and takes the row's own gap; it holds only
-   the chip, and it is here rather than restyling `.tv-chipmenu` so the source chip and the season
-   picker are untouched.
-
-   THE FLAG'S TRAILING MARGIN COMES OFF. `.flag` carries `margin-right: 9px` for its usual job —
-   sitting before a word — and there is no word any more (see TvDetail: the name is `.sr-only`).
-   Left on, it pushes the chevron out and the chip reads as a flag with an empty column after it
-   rather than as one control. The chip's own `gap: 8px` is what separates them now.
-
-   NO `overflow` ANYWHERE ON THIS PATH, deliberately: the menu is absolutely positioned out of the
-   chip and hangs over the panel beneath it. `.tv-chipmenu`'s z-index (300) puts it above the
-   rows; a clip here would cut it off instead. */
-.tv-src-langchip { display: flex; flex: 0 0 auto; }
-.tv-src-langchip .flag { margin-right: 0; }
-
-/* ---- AND IT HAS TO BE AS TALL AS THE CHIP BESIDE IT ---------------------------------------
-   It was 10px shorter — 36px against "Addon Sources"' 46px — and the padding was identical on
-   both, so it was never the chip's own box. `.tv-chipmenu-btn` is an `inline-flex`, so the source
-   chip's bare text becomes an anonymous flex item carrying the FONT'S LINE BOX (~26.6px), while
-   this one's tallest item is the 15px flag. The language name that would have set the same line
-   box is `.sr-only`, and `.sr-only` is `position:absolute` — out of flow, contributing no height.
-   Removing the word took the chip's height with it.
-
-   SO A STRUT PUTS IT BACK: one zero-width flex item holding a non-breaking space, which has the
-   button's own font and therefore its exact line box. The height is then DERIVED rather than
-   declared — no number here to fall out of step with the chip's `font-size` clamp, and it stays
-   right at both TV resolutions on its own.
-
-   `overflow: hidden` is not decoration: a flex item's `min-width: auto` resolves to its
-   min-content width, which for a space is not zero, so `width: 0` alone would not hold. Any
-   `overflow` other than `visible` makes that `auto` resolve to 0. `min-width: 0` says the same
-   thing outright, for the Chromium 87 floor.
-
-   The negative margin cancels ONE of the button's own `gap: 8px` — the strut is a real flex item,
-   so without it the flag would be pushed 8px off the chip's left padding and the control would
-   look mis-centred. If that gap ever changes, this changes with it. */
-.tv-src-langchip .tv-chipmenu-btn::before {
-  content: "\00a0";
-  width: 0;
-  min-width: 0;
-  overflow: hidden;
-  margin-right: -8px;
-}
-
-/* THE ARRIVAL. Opacity and transform only — the two things a TV composites for free — and short
-   enough that it never stands between a press and the list. `both` holds the opening frame, so
-   the panel cannot flash at full opacity before the animation's first tick. */
-@keyframes tvPanelIn {
-  from { opacity: 0; transform: translateY(14px) scale(.985); }
-  to   { opacity: 1; transform: none; }
-}
-.tv-src { animation: tvPanelIn .34s cubic-bezier(.2, .7, .2, 1) both; }
-
-/* THE DECK ITSELF NO LONGER ANIMATES, AND NEITHER DOES A KEYFRAME ON ITS CARDS.
-   Both were tried on the way here. The container slid as one block, which is cheap and reads as a
-   panel arriving rather than as a deck being dealt; a keyframe per card could stagger the fade but
-   never the MOVEMENT, because every card's position is an inline `transform` from `place` and a
-   keyframe touching transform hands the property back at its last frame — a jump, on eight cards.
-   The deal is driven from TvEpisodeDeck instead, through the cards' own transition below. See the
-   note on `intro` there; there is nothing left to do here. */
-
-/* `.tv-det-back` was styled here, as a chip mirroring the season one. The TV build no longer
-   renders it — Back is a key, not a button — so its rules are gone rather than left to rot. The
-   base `.tv-det-back` above still exists because it is not TV-only markup. */
-
-/* The language chips are still flat pills — a handful of options, fixed per title, which is the
-   case the "no dropdowns" rule was written for. They speak the chip menu's two-currency
-   vocabulary though: light grey = the one you are on, white = the one the remote is on. They
-   were white for "current", which collided with the focus colour and left no way to show both. */
-.tv-det-panel:not(.is-deck) .tv-det-pill {
-  border: 1px solid rgba(255, 255, 255, .2);
-  background: rgba(255, 255, 255, .05);
-  color: #cfcfcf;
-  transition: background-color .18s ease, color .18s ease;
-}
-.tv-det-panel:not(.is-deck) .tv-det-pill.on {
-  background: rgba(255, 255, 255, .17);
-  border-color: rgba(255, 255, 255, .24);
-  color: #fff;
-  font-weight: 600;
-}
-.tv-det .tv-det-panel:not(.is-deck) .tv-det-pill:focus-visible {
-  outline: none;
-  border-radius: 999px;
-  background: #fff;
-  border-color: #fff;
-  color: #0b0b0b;
-}
-
-/* Rows: the card's radius, the menu option's focus, and — since the panel behind them is gone —
-   the panel's opacity. `rgba(255,255,255,.04)` was a tint that only worked because something dark
-   was underneath it; standing on a bright still it left the row invisible and its text floating.
-   Each row is now its own surface, which is the same thing every other element in this build does
-   over artwork. No ring on focus, for the reason given on the cards: a rounded rectangle drawn
-   around a rounded rectangle. */
-.tv-det-panel:not(.is-deck) .tv-det-row {
-  border: 1px solid rgba(255, 255, 255, .1);
-  border-radius: 12px;
-  background: rgba(10, 10, 10, .92);
-  /* Rests at an explicit scale(1) — same reason as the chip and the nav: a transform that ENDS
-     hands its compositor layer back and re-rasterises the text on different subpixels, which
-     reads as a small jump at the moment focus leaves. */
-  transform: scale(1);
-  transition: background-color .18s ease, color .18s ease,
-              transform .2s cubic-bezier(.2, .7, .2, 1);
-}
-/* THE ROW LIFTS, matching the chip above it and the cards it replaced. Only 1.03: a source row is
-   the full width of the column, so the same 1.07 the chip uses would throw it 20px out each side
-   and read as a lurch rather than a lift.
-
-   NO DROP SHADOW UNDER IT, unlike the cards this borrowed the lift from. A shadow sells depth when
-   the thing casting it is a small bright object on a dark field; a full-width WHITE slab is the
-   brightest thing on the screen already, and the shadow only drew a hard grey band along its lower
-   edge — a second, dirtier rectangle trailing the row rather than lifting it. The white fill and
-   the scale carry the focus state on their own, which is the whole job. */
-.tv-det .tv-det-panel:not(.is-deck) .tv-det-row:focus-visible {
-  outline: none;
-  border-radius: 12px;
-  background: #fff;
-  border-color: #fff;
-  transform: scale(1.03);
-}
-
-/* ROOM TO GROW INTO, WITHOUT CHANGING HOW WIDE ANYTHING LOOKS.
-   `.tv-det-list` sets `overflow-y: auto`, and CSS resolves the other axis of a scroll container
-   from `visible` to `auto` — so the list clips horizontally whether or not it was asked to, and a
-   row scaled past its edges would be shaved off or, worse, grow a horizontal scrollbar. The
-   negative margin pulls the list's box 12px wider on each side and the padding puts the content
-   back exactly where it was: rows keep their width, and there is 12px of slack for a 1.03 zoom
-   that needs 8. Vertical the same, so the first and last rows can lift without being cut. */
-.tv-det-panel:not(.is-deck) .tv-det-list {
-  padding: 10px 12px;
-  margin: -10px -12px;
-}
-/* Every scrap of ink inside a focused row has to flip, not just the row's own colour — the title,
-   its sub-line, the episode number and the chevron each set their own, and left alone they stay
-   pale grey on white. */
-.tv-det .tv-det-panel:not(.is-deck) .tv-det-row:focus-visible :is(
-  .tv-det-rowtitle, .tv-det-rowsub, .tv-det-epn, .tv-det-chev
-) { color: #0b0b0b; }
-
-/* The notes ("no sources yet", "sign in to install your add-on") are the one thing in this panel
-   that is not a row, and with the slab gone they were bare text on a photograph. They take the
-   row's surface so they stay legible — they occupy the same slot for the same reason, they just
-   have nothing to press. The stacking is separate: the sign-in button used to be an inline child
-   of the sentence and the two overlapped once the text wrapped. */
-.tv-det-panel:not(.is-deck) .tv-det-note {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  border: 1px solid rgba(255, 255, 255, .1);
-  border-radius: 12px;
-  background: rgba(10, 10, 10, .92);
-  padding: clamp(14px, 1.6vh, 20px) clamp(14px, 1.2vw, 20px);
-}
-.tv-det-panel:not(.is-deck) .tv-det-signin { margin-top: 0; }
-
 @media (prefers-reduced-motion: reduce) {
-  .tv-src, .tv-ep-deck { animation: none; }
-  /* The zoom goes; the white fill stays. Reduced motion must not cost a viewer the ability to
-     see which row the remote is on. */
-  .tv-det-panel:not(.is-deck) .tv-det-row { transition: none; }
-  .tv-det .tv-det-panel:not(.is-deck) .tv-det-row:focus-visible { transform: scale(1); }
-}
-
-/* THE DECK IS A STACKING CONTEXT, NOT A LAYOUT. Every card is absolutely positioned at the same
-   anchor — vertically centred, flush to the column's left edge — and the only thing that tells
-   them apart is the transform TvEpisodeDeck hands each one. That is what makes walking the deck
-   free: no card ever changes size, position in flow, or paints anything new; eight elements
-   re-composite on a transform and an opacity, which is the one budget a TV GPU has.
-
-   NO `overflow: hidden`. The stack is bounded by the render window (three cards behind, four
-   ahead, each step shorter than the last), so it cannot run off the column — and a clip here
-   would shave the focus ring off the card the whole screen is pointing at. */
-.tv-ep-deck {
-  /* --ep-w / --ep-h are declared on `.tv-det-panel.is-deck` — the head above needs them too. */
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-/* THE FAN HANGS FROM THE BOTTOM OF THE COLUMN, NOT FROM ITS MIDDLE — and every pixel of slack
-   therefore collects at the TOP, under the season chip, which is where the chip's menu needs it.
-
-   This replaces a percentage (the focused card sat at 35%, which centred the whole fan). A
-   fraction splits the spare room evenly between the two ends, and the two ends do not want it
-   equally: below the focused card there is a hard limit — the last card must not cross the
-   overscan band — while above it the only thing competing for space is the menu. So the bottom
-   is PINNED and the top is whatever is left.
-
-   `--ep-below` is how far the fan reaches under the focused card's centre, in card-heights, and
-   it is computed in TvEpisodeDeck from the same constants that lay the cards out (see
-   BELOW_EXTENT). It is not a number written twice: change the step, the decay, the count or the
-   scale and this anchor follows. Roughly 1.8 as things stand. */
-.tv-ep-card {
-  position: absolute;
-  left: 0;
-  top: calc(100% - var(--ep-below) * var(--ep-h));
-  width: var(--ep-w);
-  height: var(--ep-h);
-  margin: 0;
-  margin-top: calc(var(--ep-h) / -2);
-  padding: 0;
-  border: 0;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #101010;
-  cursor: pointer;
-  text-align: left;
-  /* The card's resting state is an explicit scale(1) rather than no transform at all, for the
-     reason written against the nav and the row billboards: a transform that ENDS hands its
-     compositor layer back and the text re-rasterises on different subpixels, which reads as a
-     small jump. Every card here always has one, so there is no handover to see. */
-  transform: scale(1);
-  transform-origin: 0% 50%;
-  transition:
-    transform .34s cubic-bezier(.2, .7, .2, 1),
-    opacity .34s ease;
-}
-/* will-change ONLY on the card the remote is on, and its two neighbours would be next — but the
-   deck is eight elements total and they all move together on every press, so promoting one is
-   pointless and promoting all eight is a screen's worth of GPU memory. Neither: the transition is
-   short, the elements are small, and a TV composites this without help. */
-
-.tv-ep-art { position: absolute; inset: 0; }
-/* THE STILL FADES UP OUT OF THE CARD'S OWN BACKGROUND rather than replacing it in one frame.
-   Eight of these decode at eight different moments, so without it the deck finishes its glide as
-   a burst of hard-edged photographs appearing in no particular order — which is what read as the
-   whole thing arriving heavily. `.rdy` is added by TvEpisodeDeck on load; see the note there for
-   why `complete` is checked too. Slower than the deck's own entrance on purpose: the picture
-   settling in after the card has landed is the order that looks deliberate. */
-.tv-ep-art img {
-  width: 100%; height: 100%;
-  object-fit: cover;
-  display: block;
-  opacity: 0;
-  transition: opacity .45s ease;
-}
-.tv-ep-art img.rdy { opacity: 1; }
-/* A still that never arrived. The episode number at low contrast, so the card still reads as
-   that episode rather than as a hole in the deck. */
-.tv-ep-nostill {
-  position: absolute; inset: 0;
-  display: grid; place-items: center;
-  background: linear-gradient(135deg, #1a1a1a, #0d0d0d);
-}
-.tv-ep-nostill::after {
-  content: attr(data-n);
-  font-family: var(--font-mono);
-  font-size: clamp(24px, 2vw, 38px);
-  color: rgba(255, 255, 255, .22);
-}
-/* Bottom-up only. The copy sits in the bottom third and nothing else on the card needs
-   protecting, so a full-card wash would only dull the picture that is doing the work. */
-.tv-ep-scrim {
-  position: absolute; inset: 0;
-  background: linear-gradient(0deg, rgba(0, 0, 0, .92) 0%, rgba(0, 0, 0, .55) 34%, rgba(0, 0, 0, 0) 68%);
-}
-
-.tv-ep-copy {
-  position: absolute;
-  left: clamp(14px, 1.2vw, 22px);
-  right: clamp(14px, 1.2vw, 22px);
-  bottom: clamp(13px, 1.4vh, 20px);
-  display: block;
-}
-.tv-ep-title {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: clamp(18px, 1.3vw, 27px);
-  font-weight: 600;
-  line-height: 1.22;
-  color: #fff;
-}
-/* The number is the fastest thing to find on a card from across a room — heavier than the name
-   it introduces, and never wrapped away from it. */
-.tv-ep-title b { font-weight: 800; }
-.tv-ep-sub {
-  display: block;
-  margin-top: 5px;
-  font-family: var(--font-mono);
-  font-size: clamp(13px, .92vw, 18px);
-  letter-spacing: .04em;
-  color: rgba(255, 255, 255, .68);
-}
-
-/* Sits at the very bottom edge, clipped into the card's own corners by its overflow + radius —
-   the same treatment (and the same 6px) the row billboards give resume progress on the home
-   screen, so "part-way through this" looks identical wherever it appears. */
-.tv-ep-progress {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  height: 6px;
-  background: rgba(0, 0, 0, .55);
-  overflow: hidden;
-}
-.tv-ep-progress > i {
-  display: block; height: 100%; min-width: 4px;
-  background: var(--accent, #ffffff);
-}
-
-/* NO LINE AROUND THE SELECTED CARD — IT LIFTS INSTEAD.
-   It used to carry a 2px inset hairline AND the stage-5 focus ring outside that: two concentric
-   outlines around one rounded rectangle, both of them the brightest thing in the column, both
-   fighting the still they were drawn on. A card is not a pill or a bare tile; it has a picture,
-   a size and a shadow to speak with.
-
-   What says "this one" now: it is the biggest card (see FOCUS_SCALE / STEP_SCALE in
-   TvEpisodeDeck) and the only fully opaque one. Size, not a border.
-
-   AND NOT A SHADOW EITHER, any more. It carried `0 16px 34px` on `.on` and `0 26px 56px` while
-   lifted, and both snapped on the frame a step came to rest: the cards settled and a dark halo
-   grew around the one in front a beat later, which read as an outline being drawn on the
-   still — the same complaint the web deck got from a phone, fixed there the same way. The
-   biggest, brightest card in a fan of dimmer ones needs no elevation to be found. */
-/* `.tv-ep-deck` is in the selector for specificity, not scope: the blanket ring at the foot of
-   this file is `.tv-det :is(a, button, [tabindex]):focus-visible`, and `:is()` takes its most
-   specific argument, so it ties (0,3,0) with `.tv-det .tv-ep-card:focus-visible` and wins on
-   source order. The same trap as the season chip and its menu. */
-.tv-det .tv-ep-deck .tv-ep-card:focus-visible {
-  outline: none;
-  border-radius: 12px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tv-ep-card { transition: none; }
-  /* The deal is skipped in TvEpisodeDeck itself — it starts at its finished phase under this
-     query, so there is no entrance to switch off here. The still's fade STAYS, and is deliberately
-     not listed above with the card transition: it is a picture replacing a placeholder, which is a
-     change of content, and this query is not meant to make those more abrupt. */
-  /* The chip's zoom is switched off, but the zoom is now half of how it says the remote is on
-     it — and the other half is a colour, which is not motion and stays. Reduced motion must not
-     cost a viewer the ability to see where focus is. */
+  /* The chip's zoom goes; its white stays — reduced motion must not cost a viewer the ability to see
+     where focus is. The menu's bar still MOVES, it just stops sliding there. */
   .tv-chipmenu-btn { transition: none; }
   .tv-det .tv-chipmenu .tv-chipmenu-btn:focus-visible { transform: scale(1); }
-  /* The bar still MOVES — it is the only thing saying where the remote is — it just stops
-     sliding there. Removing it outright would leave the menu with no focus indicator at all. */
   .tv-chipmenu-list.is-armed .tv-chipmenu-mark { transition: none; }
 }
-
-.tv-det-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  /* The remote drives this list; a visible bar is desktop furniture that only ever obscures a
-     row edge on a panel this size. */
-  scrollbar-width: none;
-}
-.tv-det-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
-
-.tv-det-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  flex: 0 0 auto;
-  text-align: left;
-  text-decoration: none;
-  border: 1px solid rgba(255, 255, 255, .1);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, .035);
-  color: var(--text);
-  padding: clamp(11px, 1.3vh, 17px) clamp(12px, 1vw, 18px);
-  cursor: pointer;
-}
-.tv-det-row.on { border-color: var(--accent); }
-.tv-det-rowtitle {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: clamp(17px, 1.15vw, 23px);
-  line-height: 1.3;
-  color: #f0f0f0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.tv-det-rowsub {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: clamp(13px, .85vw, 17px);
-  color: #8f8f8f;
-  margin-top: 3px;
-}
-.tv-det-epn {
-  flex: 0 0 auto;
-  font-family: var(--font-mono);
-  font-size: clamp(15px, 1vw, 20px);
-  color: var(--accent);
-  min-width: 3.2em;
-}
-.tv-det-chev { flex: 0 0 auto; color: #7d7d7d; font-size: clamp(20px, 1.4vw, 28px); line-height: 1; }
-.tv-det-logo {
-  flex: 0 0 auto;
-  width: clamp(38px, 2.6vw, 52px);
-  height: clamp(38px, 2.6vw, 52px);
-  border-radius: 8px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, .08);
-  display: block;
-}
-.tv-det-logo img { width: 100%; height: 100%; object-fit: cover; }
-.tv-det-row .quality-badge { font-size: clamp(13px, .9vw, 17px); padding: 5px 11px; }
-.tv-det-note {
-  font-size: clamp(16px, 1.05vw, 21px);
-  line-height: 1.5;
-  color: #9a9a9a;
-  padding: clamp(10px, 1.2vh, 16px) 2px;
-}
-.tv-det-signin { margin-top: 14px; }
-
-/* CLOSE LIVES IN THE CHIP ROW NOW (see TvDetail), so it is a `.tv-det-disc` and takes that
-   styling. All it needs here is to sit at the FAR end of the row — `margin-left: auto` — which
-   is what separates "leave this screen" from the two buttons that act on the title.
-
-   It was pinned to the overlay's top-left corner: the only control on the screen that was nowhere
-   near another, a full screen-width from everything the remote actually visits. */
-.tv-ep-head .tv-det-close { margin-left: auto; }
-
-/* The corner placement survives for one state only: the loading veil, which has no chip row to
-   put the button in. Positioned by this wrapper rather than by the button, so the button itself
-   stays a plain disc in both places and nothing has to be un-styled in the common case. */
-/* `.tv-det-close-corner` USED TO BE HERE — the absolute top-right slot the ✕ sat in while
-   /api/meta was in flight. The veil renders the spinner alone now, so there is nothing to place;
-   see the note on `closeBtn` in TvDetail.tsx for why it went. The ✕ itself is unchanged, in the
-   chip row, once the screen has content. */
 
 /* THE FOCUS RING HAS TO BE RESTATED HERE. The `.tv-shell …:focus-visible` block below styles
    the shell; this overlay is a SIBLING of the shell, so none of it applies inside — see the
@@ -3856,161 +3563,31 @@
   outline: 3px solid rgba(255, 255, 255, .72);
   outline-offset: 3px;
 }
-.tv-det .tv-det-pill:focus-visible,
-.tv-det .tv-det-back:focus-visible,
-.tv-det .tv-det-disc:focus-visible,
-.tv-det .tv-det-close:focus-visible { border-radius: 999px; }
-.tv-det .tv-det-row:focus-visible { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .3); }
 
-/* Keep a focused row clear of the panel's own edges. TvSpatialNav already pads by TV_EDGE_PAD
-   when it scrolls, but scroll-margin is what a native `scrollIntoView` (Left/Right along the
-   pills) honours, and without it the first and last row sit flush against the fade. */
-.tv-det .tv-det-row,
-.tv-det .tv-det-pill { scroll-margin: 24px; }
-
-/* ---- PLAY, THE TRAILER BOX, MORE LIKE THIS -------------------------------------------------------
-   The left column's controls (TvDetail, TvTrailerBox). Written AFTER the ring above on purpose: each
-   focus rule here is `.tv-det .x:focus-visible`, which ties that ring's (0,3,0) and has to win on
-   source order to swap the outline for its own white.
-
-   ONE LANGUAGE FOR "THE REMOTE IS HERE", the one the chip row already speaks: at rest a control is
-   a quiet surface (grey glass for the button, the picture itself for the cards); focused it turns
-   WHITE, or takes a white edge, and lifts. Nothing is white at rest — on this screen white means
-   the remote. Every size is a clamp of `--u` (see `.tv-det`). */
-
-/* PLAY — a pill like the season chip, grey glass at rest (no backdrop blur: fill rate), white with
-   dark ink under the remote. A resume carries a progress line across its foot, like a deck card. */
-.tv-det-cta { display: flex; align-items: center; gap: calc(var(--u) * .7); }
-.tv-det-play {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: .48em;
-  height: clamp(36px, calc(var(--u) * 3), 66px);
-  padding: 0 1.5em 0 1.15em;
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 999px;
-  background: rgba(78, 78, 84, .62);
-  color: #fff;
-  font-family: var(--font);
-  font-weight: 700;
-  font-size: clamp(14px, calc(var(--u) * 1.12), 25px);
-  letter-spacing: .01em;
-  white-space: nowrap;
-  text-shadow: none;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, .3);
-  cursor: pointer;
-  transform: scale(1);
-  transition: background-color .18s ease, color .18s ease, border-color .18s ease,
-              box-shadow .22s ease, transform .22s cubic-bezier(.2, .7, .2, 1);
-}
-.tv-det-play .ic3 .gl-ic { width: 1.2em; height: 1.2em; }
-.tv-det-play-sub { font-weight: 600; font-size: .84em; opacity: .7; }
-.tv-det-play-bar {
-  position: absolute;
-  left: 1.15em;
-  right: 1.5em;
-  bottom: .38em;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, .26);
-  overflow: hidden;
-}
-.tv-det-play-bar i { display: block; height: 100%; background: currentColor; }
-/* Each focus rule restates its radius: app.css forces `border-radius: 4px` on any focused button,
-   and a pill that squares off as the remote arrives reads as a different control. */
-.tv-det .tv-det-play:focus-visible {
-  outline: none;
-  border-radius: 999px;
-  background: #fff;
-  border-color: #fff;
-  color: #0b0b0b;
-  transform: scale(1.06);
-  box-shadow: 0 10px 34px rgba(0, 0, 0, .45);
-}
-.tv-det .tv-det-play:focus-visible .tv-det-play-bar { background: rgba(0, 0, 0, .16); }
-/* Asking the add-ons for a source takes a moment: the triangle gives way to a turning ring. */
-.tv-det-play.is-busy .ic3 { visibility: hidden; }
-.tv-det-play.is-busy::before {
-  content: '';
-  position: absolute;
-  left: 1.2em;
-  top: calc(50% - .55em);
-  width: 1.1em;
-  height: 1.1em;
-  box-sizing: border-box;
-  border: .14em solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  animation: tvDetSpin .7s linear infinite;
-}
-@keyframes tvDetSpin { to { transform: rotate(360deg); } }
-
-/* THE FOOT: the trailer row, then More Like This, held to the column's bottom edge. */
-.tv-det-foot {
-  margin-top: auto;
-  padding-top: clamp(16px, calc(var(--u) * 1.6), 36px);
-  display: flex;
-  flex-direction: column;
-  gap: clamp(14px, calc(var(--u) * 1.45), 32px);
-  min-width: 0;
-}
-.tv-det-extra {
-  display: flex;
-  align-items: center;
-  gap: clamp(16px, calc(var(--u) * 1.6), 36px);
-  min-width: 0;
-}
-/* The rest of the row, not its content's width: the faces are flex BASES, and a block sized to its
-   content would size them to their names and squeeze the circles when no tagline widens it. */
-.tv-det-extra-side {
-  flex: 1 1 0;
-  display: flex;
-  flex-direction: column;
-  gap: clamp(8px, calc(var(--u) * 1), 22px);
-  min-width: 0;
-}
-/* The film's own line, in its own quotes — the one sentence the studio chose to sell it with. */
-.tv-det-tagline {
-  margin: 0;
-  max-width: 21em;
-  font-family: var(--font);
-  font-weight: 600;
-  font-size: clamp(14px, calc(var(--u) * 1.18), 26px);
-  line-height: 1.32;
-  color: #fff;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.tv-det-tagline::before { content: '\201C'; }
-.tv-det-tagline::after { content: '\201D'; }
-
-/* THE TRAILER BOX. A 16:9 card: the trailer's own still, a play disc, its name and length. Under the
-   remote it lifts and takes a white edge, the disc turns white, and after a rest the trailer plays
-   in it, muted. `width` is computed from `--tr-h` rather than `aspect-ratio` (Chrome 88; the floor
-   here is 87). Layers, bottom up: media (still, then video), the caption's shade, the disc and the
-   caption, the edge. */
-.tv-det-trailer-wrap { flex: 0 0 auto; }
+/* ---- THE TRAILER BOX (TvTrailerBox, in Trailers & More) ----------------------------------------
+   One trailer in the page's grid: its still, and its name and length under it — no play disc, as on
+   Netflix. The page's outline is its focus mark; after a rest the trailer plays in the still, muted.
+   The 16:9 is padding, not `aspect-ratio` (Chrome 88; the floor here is 87). */
+.tv-det-trailer-wrap { min-width: 0; }
 .tv-det-trailer {
-  --tr-h: clamp(104px, calc(var(--u) * 10.2), 230px);
-  position: relative;
   display: block;
-  width: calc(var(--tr-h) * 16 / 9);
-  height: var(--tr-h);
+  width: 100%;
+  margin: 0;
   padding: 0;
   border: 0;
-  border-radius: clamp(8px, calc(var(--u) * .55), 12px);
-  background: #0c0c0c;
+  background: none;
   color: #fff;
   font-family: var(--font);
   text-align: left;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
   cursor: pointer;
-  transform: scale(1);
-  transition: transform .22s cubic-bezier(.2, .7, .2, 1), box-shadow .22s ease;
+}
+.tv-det-trailer-pic {
+  position: relative;
+  display: block;
+  padding-top: 56.25%;
+  border-radius: calc(var(--u) * .55);
+  overflow: hidden;
+  background: #151515;
 }
 .tv-det-trailer-media {
   position: absolute;
@@ -4031,77 +3608,25 @@
 /* The engine lays the video out as a cover itself (cropScale 1) and reveals it with `.on`. */
 .tv-det-trailer-slot video { position: absolute; opacity: 0; transition: opacity .35s ease; }
 .tv-det-trailer-slot video.on { opacity: 1; }
-.tv-det-trailer-shade {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: inherit;
-  background: linear-gradient(0deg, rgba(0, 0, 0, .74) 0%, rgba(0, 0, 0, .22) 42%, transparent 64%);
-  transition: opacity .4s ease;
-}
-.tv-det-trailer::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14);
-  pointer-events: none;
-  transition: box-shadow .18s ease;
-}
-.tv-det-trailer-play {
-  position: absolute;
-  left: 50%;
-  top: 44%;
-  z-index: 2;
-  width: clamp(34px, calc(var(--u) * 2.9), 64px);
-  height: clamp(34px, calc(var(--u) * 2.9), 64px);
-  margin: calc(clamp(34px, calc(var(--u) * 2.9), 64px) / -2) 0 0 calc(clamp(34px, calc(var(--u) * 2.9), 64px) / -2);
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, .7);
-  background: rgba(0, 0, 0, .42);
-  font-size: clamp(13px, calc(var(--u) * 1.1), 25px);
-  transition: background-color .18s ease, border-color .18s ease, opacity .3s ease;
-}
-.tv-det-trailer-play .gl-ic { width: 1.15em; height: 1.15em; margin-left: .12em; }
 .tv-det-trailer-cap {
-  position: absolute;
-  left: .85em;
-  right: .85em;
-  bottom: .62em;
-  z-index: 2;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: .6em;
-  font-size: clamp(11px, calc(var(--u) * .9), 20px);
-  transition: opacity .4s ease;
+  flex-direction: column;
+  gap: .2em;
+  margin-top: .6em;
+  font-size: calc(var(--u) * 1.02);
+  line-height: 1.3;
 }
 .tv-det-trailer-cap b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tv-det-trailer-cap span { font-size: .86em; color: rgba(255, 255, 255, .78); font-variant-numeric: tabular-nums; }
-/* The trailer has the box: its own picture, nothing printed over it (trailers carry their own
-   captions, and a label on top of them is two lines of text fighting). */
-.tv-det-trailer-media.has-trailer ~ .tv-det-trailer-shade,
-.tv-det-trailer-media.has-trailer ~ .tv-det-trailer-play,
-.tv-det-trailer-media.has-trailer ~ .tv-det-trailer-cap { opacity: 0; }
-.tv-det .tv-det-trailer:focus-visible {
-  outline: none;
-  border-radius: clamp(8px, calc(var(--u) * .55), 12px);
-  transform: scale(1.05);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, .55);
-}
-.tv-det .tv-det-trailer:focus-visible::after { box-shadow: inset 0 0 0 3px #fff; }
-.tv-det .tv-det-trailer:focus-visible .tv-det-trailer-play { background: #fff; border-color: #fff; }
+.tv-det-trailer-cap span { font-size: .86em; color: rgba(255, 255, 255, .6); font-variant-numeric: tabular-nums; }
 
 /* FULL SCREEN. The media layer leaves the card and takes the viewport — `fixed`, so the engine's
-   ResizeObserver re-places the playing video for the new box and nothing reloads. The card loses its
-   lift at the same instant, with no transition: a transformed ancestor would become the containing
-   block of a fixed child and pin the "full screen" to the card. The deck is hidden underneath, not
-   painted under a full-screen video. */
-.tv-det .tv-det-trailer.is-full,
-.tv-det .tv-det-trailer.is-full:focus-visible { transform: none; transition: none; }
-/* The trailer has the screen: the full-screen layer keeps its own square corners. */
-.tv-det .tv-det-trailer.is-full .tv-det-trailer-media { border-radius: 0; }
+   ResizeObserver re-places the playing video for the new box and nothing reloads. A transformed
+   ancestor would become the containing block of a fixed child and pin the "full screen" to it, so
+   the page's columns drop their scroll while it plays (and take it back at once, `is-trailer-back`);
+   the page itself is hidden underneath, not painted under a full-screen video. */
+.tv-det.is-trailer-full .tv-tp-inner { transform: none !important; }
+.tv-det.is-trailer-full .tv-tp-inner,
+.tv-det.is-trailer-back .tv-tp-inner { transition: none; }
 .tv-det-trailer.is-full .tv-det-trailer-media {
   position: fixed;
   z-index: 60;
@@ -4109,7 +3634,7 @@
   animation: tvDetTrailerIn .34s cubic-bezier(.2, .8, .2, 1) both;
 }
 .tv-det-trailer.is-full .tv-det-trailer-still { visibility: hidden; }
-.tv-det.is-trailer-full .tv-det-panel { visibility: hidden; }
+.tv-det.is-trailer-full :is(.tv-tp-left, .tv-tp-heading, .tv-tp-ring) { visibility: hidden; }
 @keyframes tvDetTrailerIn {
   from { opacity: 0; }
   to   { opacity: 1; }
@@ -4157,90 +3682,7 @@
 }
 .tv-det-trailer-yt iframe { display: block; width: 100%; height: 100%; border: 0; }
 
-/* MORE LIKE THIS — four 16:9 cards with their names on them, the size of a small row card. */
-.tv-det-more { min-width: 0; }
-.tv-det-more-title {
-  margin: 0 0 clamp(8px, calc(var(--u) * .62), 14px);
-  font-family: var(--font);
-  font-weight: 600;
-  font-size: clamp(12px, calc(var(--u) * 1.02), 22px);
-  letter-spacing: .01em;
-  color: #fff;
-}
-.tv-det-more-row { display: flex; gap: clamp(10px, calc(var(--u) * .85), 18px); min-width: 0; }
-.tv-det-more-card {
-  position: relative;
-  display: block;
-  flex: 0 1 clamp(130px, calc(var(--u) * 12.6), 280px);
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  border-radius: clamp(6px, calc(var(--u) * .42), 10px);
-  background: #151515;
-  color: #fff;
-  font-family: var(--font);
-  text-align: left;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
-  cursor: pointer;
-  transform: scale(1);
-  transition: transform .22s cubic-bezier(.2, .7, .2, 1), box-shadow .22s ease;
-}
-.tv-det-more-pic { position: relative; display: block; padding-top: 56.25%; overflow: hidden; border-radius: inherit; }
-.tv-det-more-pic img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0;
-  transition: opacity .35s ease;
-}
-.tv-det-more-pic img.rdy { opacity: 1; }
-.tv-det-more-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: inherit;
-  background: linear-gradient(0deg, rgba(0, 0, 0, .8) 0%, rgba(0, 0, 0, .25) 46%, transparent 68%);
-  pointer-events: none;
-}
-.tv-det-more-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1);
-  pointer-events: none;
-  transition: box-shadow .18s ease;
-}
-.tv-det-more-cap {
-  position: absolute;
-  left: .72em;
-  right: .72em;
-  bottom: .55em;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  gap: .1em;
-  font-size: clamp(10px, calc(var(--u) * .84), 18px);
-  line-height: 1.25;
-}
-.tv-det-more-cap b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tv-det-more-cap span { font-size: .84em; color: rgba(255, 255, 255, .72); white-space: nowrap; }
-.tv-det .tv-det-more-card:focus-visible {
-  outline: none;
-  border-radius: clamp(6px, calc(var(--u) * .42), 10px);
-  transform: scale(1.07);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, .55);
-}
-.tv-det .tv-det-more-card:focus-visible::after { box-shadow: inset 0 0 0 3px #fff; }
 @media (prefers-reduced-motion: reduce) {
-  .tv-det-play, .tv-det-trailer, .tv-det-more-card { transition: none; }
-  .tv-det .tv-det-play:focus-visible,
-  .tv-det .tv-det-trailer:focus-visible,
-  .tv-det .tv-det-more-card:focus-visible { transform: none; }
   .tv-det-trailer.is-full .tv-det-trailer-media, .tv-det-trailer-yt { animation: none; }
 }
 
@@ -4354,8 +3796,9 @@
      Instant is the correct answer here rather than a slower fade: the whole effect is a
      movement, and half of it is not a compromise, it is the same movement done worse. */
   .tv-det,
-  .tv-det .tv-det-art img,
-  .tv-det :is(.tv-det-grid, .m-load-veil) { animation: none; }
+  .tv-det-art.rdy,
+  .tv-dm.is-in .tv-dm-col > *,
+  .tv-det :is(.tv-tp, .m-load-veil) { animation: none; }
   .tv-spot-rowtitle, .tv-spot-info { transition: none; }
   .tv-spot.is-open .tv-spot-info { animation: none; }
   .tv-spot-hero { transition: none; }
@@ -4915,6 +4358,17 @@
    ~5% a set that still overscans cuts off each edge. Generous on purpose: the chrome reads as laid
    over the picture rather than jammed against the frame. */
 .vp-overlay.tv { --vp-gutter: clamp(64px, 7vw, 140px); }
+
+/* ---- PARKED (stores/player `parked`): the film paused behind its title screen, as Netflix leaves it
+   on Back. Below that screen (150 against its 200), the player shows nothing but the <video> — WHERE IT
+   WAS. Nothing about the picture changes when it parks or is picked up: not its box (which a
+   television's video plane follows), not its fit, not its opacity. Moved into the title picture's box
+   it cut to black and jumped right the moment Back was pressed (the user's recording, Oct 20); held
+   still, Back is the film stopping with the screen coming up over it, and Resume is the screen going
+   — back over everything in one frame, never faded: under a fading player the title screen, which has
+   already let go of the film, showed its own picture (the user's photo, Oct 20). */
+.vp-overlay.tv.vp-parked { z-index: 150; }
+.vp-overlay.tv.vp-parked :is(.vp-ui, .vp-prompt, .vp-loading, .vp-grain, .vp-gestures, .vp-silent, .vp-eprail, .vp-cues) { display: none !important; }
 /* Nothing lives at the top on this build any more but the status line, so it carries no scrim: a
    dark band over the top of the picture with nothing in it is just a darker picture. */
 .vp-overlay.tv .vp-top { padding: clamp(28px, 4.5vh, 52px) var(--vp-gutter); background: none; }
