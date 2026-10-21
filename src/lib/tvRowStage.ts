@@ -1,5 +1,5 @@
 import { retainImage, isDecoded } from './useImageReady';
-import { parallaxEnabled } from './tvMotionFlags';
+import { parallaxEnabled, HELD } from './tvMotionFlags';
 import { whenQuiet } from './tvQuiet';
 import { glanceIconNode, type GlanceIconName } from '../components/glance/glanceSymbols';
 
@@ -51,8 +51,9 @@ import { glanceIconNode, type GlanceIconName } from '../components/glance/glance
  * together, or the pair goes out of step. */
 /** A deliberate press: one poster pitch in 267ms on cubic-bezier(.33,1,.68,1). */
 export const SLIDE_MS = 267;
-/** A held key: a little LONGER than the 300ms pace, so a re-aimed transition never completes. */
-export const HELD_SLIDE_MS = 340;
+/** A held key: a little LONGER than the held pace (lib/tvMotionFlags `HELD`), so a re-aimed transition
+ *  never completes. 340ms on a television. */
+export const HELD_SLIDE_MS = HELD.slide;
 /* ---- THE DISSOLVE IS ONE ANIMATION, AND IT USED TO BE THREE ----------------------------------------
  * The incoming picture used to be two layers fading against each other on their own clocks (the
  * outgoing one collapsing in two frames, the incoming one rising linearly over 190ms — the "dark
@@ -196,7 +197,9 @@ export interface StageParts {
   posterMark: HTMLElement;
 }
 
-export interface ShowOpts { dir: 1 | -1; held: boolean; animate: boolean }
+/** `held`: the walk is fast (a hold or quick taps) — no copy, no callouts. `glide`: a hold — the peek slides
+ *  linearly with the strip (defaults to `held`). */
+export interface ShowOpts { dir: 1 | -1; held: boolean; glide?: boolean; animate: boolean }
 
 const div = (cls: string): HTMLDivElement => {
   const d = document.createElement('div');
@@ -291,7 +294,7 @@ export class TvRowStage {
   private peekImgs: HTMLElement[] = [];
   private peekCur: PeekArt = { src: '', pos: '50% 50%' };
   private peekAnim: Animation | null = null;
-  private peekRun = { from: 0, end: 0, ms: 0, held: false };
+  private peekRun = { from: 0, end: 0, ms: 0, held: false, t0: 0 };
   private peekShown = false;
   /** A card's callouts waiting for the remote to be still (see CALLOUT_QUIET_MS): its cancel. */
   private chipsWait: (() => void) | null = null;
@@ -470,7 +473,7 @@ export class TvRowStage {
       this.arrive(o.dir, outgoing);
       if (!o.held) this.arriveCopy(o.dir);
     }
-    this.setPeek(peek, o.dir, o.held, o.animate);
+    this.setPeek(peek, o.dir, o.glide ?? o.held, o.animate);
     /* Not painted here, on the press: the row is open, so the poster is not showing. `posterNow` paints
      * it when the row closes, and React's catch-up (`refresh`) a beat after the walk stops. */
     this.posterSlot = slot;
@@ -871,19 +874,23 @@ export class TvRowStage {
     if (!(stride > 0)) { this.measureSoon(0); return; }   // pressed before the first measurement: this one is a cut
     const end = dir > 0 ? -stride : 0;
     let from = end + dir * stride;
+    /* Where it is NOW by the clock, and the new slide pinned to that instant — the animation's own
+     * `currentTime` is behind the screen inside a key handler (see flipOffset in lib/tvPageScroll). */
+    const now = performance.now();
     const live = this.peekAnim;
     if (live && live.playState === 'running') {
       const r = this.peekRun;
-      const p = Math.min(1, (Number(live.currentTime) || 0) / (r.ms || 1));
+      const p = Math.min(1, Math.max(0, (now - r.t0) / (r.ms || 1)));
       const cur = r.from + (r.end - r.from) * (r.held ? p : stripEase(p));
       from = cur + dir * stride;
       live.cancel();
     }
     const ms = held ? HELD_SLIDE_MS : SLIDE_MS;
-    this.peekRun = { from, end, ms, held };
+    this.peekRun = { from, end, ms, held, t0: now };
     this.peekAnim = prevTrack.animate(
       [{ transform: `translateX(${from}px)` }, { transform: `translateX(${end}px)` }],
-      held ? { duration: ms, easing: 'linear' } : { duration: ms, easing: 'cubic-bezier(.33, 1, .68, 1)' },
+      { duration: ms, easing: held ? 'linear' : 'cubic-bezier(.33, 1, .68, 1)', fill: 'backwards' },
     );
+    this.peekAnim.startTime = now;
   }
 }

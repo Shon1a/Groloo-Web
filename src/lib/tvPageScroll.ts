@@ -222,31 +222,46 @@ export function flipScroll(): boolean {
   } catch { /* default stands */ }
   return flipOn;
 }
-let flip: { anim: Animation; from: number; ms: number; ease: (p: number) => number } | null = null;
+let flip: { anim: Animation; from: number; ms: number; ease: (p: number) => number; t0: number } | null = null;
 /** Where the page was last sent, so a press need not read the scroll position back. */
 let flipAt: number | null = null;
 
-/** How far the page is visibly from where it has been scrolled to, right now (0 when nothing moves). */
-export function flipOffset(): number {
+/* ---- A PRESS MID-GLIDE RE-AIMS FROM WHERE THE PAGE IS NOW, ON THE CLOCK, NOT THE ANIMATION'S ---------
+ * The glide runs on the compositor and asks the main thread for no frames, so the document timeline is
+ * not advanced between presses: read inside a key handler, `anim.currentTime` was 4-21ms behind the
+ * picture on screen (measured in Chrome at 240Hz, a held Down). The next glide then started from where
+ * the page HAD been, and every repeat of a held key, every wheel notch and every quick second tap threw
+ * the page back 10-50px before carrying it on. So the progress is taken from `performance.now()`, and the
+ * new glide's start time is pinned to that same instant: the compositor plays it from the moment it was
+ * aimed, whenever it first draws it, and the hand-over is the same position on both curves.
+ * A RECTANGLE IS ON THE ANIMATION'S CLOCK, though: layout applies the glide at the timeline's time, so
+ * geometry subtracts the offset at that time (the default) and only a re-aim asks for `performance.now()`. */
+/** How far the page is offset from where it has been scrolled to, at `at` — by default the animation
+ *  clock, which is what a rectangle measured now includes (0 when nothing moves). */
+export function flipOffset(at = Number(document.timeline.currentTime) || 0): number {
   if (!flip) return 0;
-  const p = Math.min(1, (Number(flip.anim.currentTime) || 0) / flip.ms);
+  const p = Math.min(1, Math.max(0, (at - flip.t0) / flip.ms));
   return flip.from * (1 - flip.ease(p));
 }
 
 /** Move the page to `target` on `ease` over `ms`, starting from wherever it visibly is. */
 export function flipTo(target: number, ms: number, easing: string, ease: (p: number) => number): void {
   if (!track) { window.scrollTo(0, target); return; }
-  const visible = flip && flipAt !== null ? flipAt - flipOffset() : window.scrollY;
+  const now = performance.now();
+  const visible = flip && flipAt !== null ? flipAt - flipOffset(now) : window.scrollY;
   stopFlip();
   window.scrollTo(0, target);
   flipAt = target;
   const from = Math.round(target - visible);
   if (Math.abs(from) < 1) return;
+  /* `backwards`: until the timeline catches up with `now` the glide shows its first frame, which is where
+   * the page visibly is — not the bare scroll position. It holds nothing after the end. */
   const anim = track.animate(
     [{ transform: `translate3d(0,${from}px,0)` }, { transform: 'translate3d(0,0,0)' }],
-    { duration: ms, easing },
+    { duration: ms, easing, fill: 'backwards' },
   );
-  const run = { anim, from, ms, ease };
+  anim.startTime = now;
+  const run = { anim, from, ms, ease, t0: now };
   flip = run;
   anim.onfinish = () => { if (flip === run) flip = null; };
 }
