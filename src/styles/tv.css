@@ -945,6 +945,16 @@
   opacity: 1;
   transition: transform var(--sp-grow, 240ms cubic-bezier(0, 1, 0, 1)), opacity 180ms cubic-bezier(.4, .3, .4, 1);
 }
+/* ---- A ROW BELOW THE REMOTE SHOWS THREE POSTERS (the user, 2026-10-21: "fewer posters below") ------
+   On the set the strips are what a vertical press pays for — hiding them took the dropped frames of a
+   Down walk from ~33% to ~13% — so a closed row below the remote draws its card and the three posters
+   after it, and the clip opens to the whole strip the moment the row does: the posters behind it ride
+   in on the rail's own slide. A rect clip, so what it cuts is not painted, rastered or decoded. The
+   third poster's right edge is `--sp-wl` + 3 pitches in the rail's box; half a gap of slack keeps the
+   clip off its rounded corner. Rows above the remote keep their billboard shape and all of their strip. */
+.tv-spot:not(.is-open):not(.is-above) .tv-spot-rail {
+  clip-path: inset(0 calc(100% - var(--sp-wl) - 3 * (var(--sp-wp) + var(--sp-gap)) - var(--sp-gap) / 2) 0 var(--sp-wl));
+}
 
 /* THE PREVIOUS CARD PEEKS IN FROM THE LEFT EDGE. The stage starts at --page-pad; positioning a
    portrait one full card-width plus one normal gap to its left leaves only the page gutter's
