@@ -239,6 +239,8 @@ const SEED: Record<string, string> = {
   'player.skip_recap': 'Skip Recap',
   // Beside Next Episode once a series' credits start: dismisses the countdown and keeps watching.
   'player.watch_credits': 'Watch Credits',
+  // Beside Watch Credits once a film's credits start: counts down, then opens post-play.
+  'player.see_more': 'See More',
   // Shown in place of the track list when the release has several audio languages and the
   // browser exposes no way to choose between them. {langs} is a readable list.
   // Shown in the audio menu when tracks cannot be switched. Three different causes, three
@@ -700,10 +702,9 @@ const SEED: Record<string, string> = {
   // Picked for you: the home row
   'sec.top_picks': 'Today’s Top Picks for You',
 
-  // Post-play: the screen that takes over when the credits roll
+  // Post-play: the screen See More opens when the credits roll
   'postplay.label': 'Up next',
   'postplay.because': 'More like {title}',
-  'postplay.back_to_credits': 'Back to credits',
   'postplay.watch': 'Watch',
   'postplay.close': 'Close',
   'settings.postplay': 'Show trailers and picks when a film ends',

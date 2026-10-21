@@ -462,7 +462,9 @@ export function useVideoTrailer(
         const bw = slot.clientWidth, bh = slot.clientHeight;
         if (!bw || !bh) return;
         const a = v.videoWidth > 0 && v.videoHeight > 0 ? v.videoWidth / v.videoHeight : 16 / 9;
-        const w = Math.max(bw, bh * a, bh * coverAspect) * cropScale;
+        /* The bands `coverAspect` pushes out are a 16:9 file's. An old 4:3 file may hold a 16:9 picture
+         * inside its own bands instead (Paycheck's), which the cover alone already trims. */
+        const w = Math.max(bw, bh * a, a > 1.7 ? bh * coverAspect : 0) * cropScale;
         const h = w / a;
         v.style.width = `${w}px`;
         v.style.height = `${h}px`;

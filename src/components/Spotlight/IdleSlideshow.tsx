@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useHome } from '../../lib/queries';
-import { usePicks } from '../../lib/picks';
 import { markShown, wake } from '../../lib/idle';
 import { registerBackHandler, BACK_LAYER } from '../../lib/tvKeys';
 import SlideShow from './SlideShow';
@@ -13,8 +12,8 @@ const IS_TV = import.meta.env.MODE === 'tv';
  *
  * Post-play's slideshow (SlideShow.tsx), over everything, once ten minutes have passed in which
  * nobody touched anything and nothing was playing — lib/idle.ts keeps that clock and catches the
- * press that ends it. The titles are the mix post-play's slideshow takes: series, films and anime in
- * turn plus a couple still to come, ranked by the viewer's taste, from their picks and the home rows.
+ * press that ends it. The titles are the mix post-play's slideshow takes: trending series, films and
+ * anime in turn, in a random order drawn afresh each time (useMoreList).
  *
  * IT ONLY COMES UP READY. Mounted when the clock runs out, it stays invisible — and lets every press
  * through — until its titles are dressed and the first picture is decoded; then black fades in over
@@ -32,9 +31,7 @@ const NONE = new Set<string>();
 export default function IdleSlideshow({ leaving }: { leaving: boolean }) {
   // The rows' titles, even when the home screen's copy has been dropped since it was last open.
   useHome();
-  const { picks } = usePicks(12, true);
-  const sources = useMemo(() => [picks.map((p) => p.item)], [picks]);
-  const { items, ready } = useMoreList(sources, NONE, true);
+  const { items, ready } = useMoreList(NONE, true);
 
   /* TAKEN ONCE, when its artwork has arrived: a refetch behind the screen must not swap the titles
    * under a slideshow that is already running. */
