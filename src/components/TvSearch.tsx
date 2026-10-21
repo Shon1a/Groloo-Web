@@ -42,6 +42,9 @@ const DWELL = 600;
 /** Letters come off the keyboard slowly enough that most of a longer wait lands after the last one. */
 const TYPE_DEBOUNCE = 150;
 const SUGGESTIONS = 8;
+/** Results the grid wants before it stops asking for pages by itself, and how many pages it may ask. */
+const FILL = COLS * 2;
+const FILL_PAGES = 4;
 /** How long a Right pressed before the results are in stays owed (see `enter`). */
 const OWED_MS = 3000;
 const ARROWS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
@@ -146,7 +149,8 @@ export default function TvSearch() {
     if (!typedDesc || sug.isPlaceholderData) return null;
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const m of sug.data?.pages[0]?.results ?? []) {
+    // Every page loaded, not the first: that can be people only (see FILL in SearchGrid).
+    for (const m of (sug.data?.pages ?? []).flatMap((p) => p.results ?? [])) {
       const name = String(m.title || '').trim();
       if (!name || seen.has(name.toLowerCase())) continue;
       seen.add(name.toLowerCase());
@@ -476,9 +480,19 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
      So it is kept, and paid once the new results land: only if the remote is still where it pressed from. */
   const owed = useRef<{ at: number; from: Element | null } | null>(null);
   const loading = q.isLoading;
+  /* A FIRST PAGE OF PEOPLE IS NOT AN EMPTY SEARCH. TMDB's search ranks people among the titles, and
+     for a short prefix its first page can be people only ("brid": twenty of them, Bridgerton on the
+     next), which the server drops — so the grid said "no results" halfway through a word. Short of
+     two rows it asks for the next page, for a few pages at most, and reads as loading meanwhile. */
+  const pages = q.data?.pages.length ?? 0;
+  const filling = !stale && !!q.hasNextPage && items.length < FILL && pages < FILL_PAGES;
+  useEffect(() => {
+    if (filling && !q.isFetching) void q.fetchNextPage();
+  }, [filling, q]);
+  const waiting = !items.length && filling;
   // A new set of results starts at the top.
   useEffect(() => {
-    if (stale || loading) return;
+    if (stale || loading || waiting) return;
     top.current = 0;
     y.current = 0;
     if (rowsRef.current) rowsRef.current.style.transform = '';
@@ -487,12 +501,12 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
     if (o && performance.now() - o.at < OWED_MS && document.activeElement === o.from) {
       (rowsRef.current?.children[0] as HTMLElement | undefined)?.focus({ preventScroll: true });
     }
-  }, [desc, front, stale, loading]);
+  }, [desc, front, stale, loading, waiting]);
 
   useEffect(() => {
     apiRef.current = {
       enter: (later = false) => {
-        if (later || stale || loading) { owed.current = { at: performance.now(), from: document.activeElement }; return; }
+        if (later || stale || loading || waiting) { owed.current = { at: performance.now(), from: document.activeElement }; return; }
         (rowsRef.current?.children[top.current * COLS] as HTMLElement | undefined)?.focus({ preventScroll: true });
       },
       y: () => y.current,
@@ -529,7 +543,7 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
     if (to >= n - COLS * 2 && q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
   };
 
-  if (loading) {
+  if (loading || waiting) {
     return <div className="tv-sg-view"><span className="cat-loader" role="status" aria-label={t('grid.loading')} /></div>;
   }
   if (!items.length && !q.isFetching) {
