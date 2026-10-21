@@ -2129,8 +2129,9 @@
    the next repeat relaunches it and the eye reads a sequence of little arrivals as stepping.
    Linear, re-targeted in flight by the next step, is one continuous movement instead. The duration
    that pairs with this is HELD_SLIDE_MS in TvSpotlight, deliberately longer than the step pace so
-   the transition never completes and stalls mid-hold. */
-.tv-spot.is-fast .tv-spot-strip {
+   the transition never completes and stalls mid-hold. `is-glide`, not `is-fast`: fast TAPPING gets the
+   held decoration but keeps the press's own curve, so each tap still answers at once. */
+.tv-spot.is-glide .tv-spot-strip {
   transition-timing-function: linear !important;
 }
 

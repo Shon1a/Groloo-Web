@@ -18,7 +18,7 @@ import { useSettings } from '../stores/settings';
 import { useHistory } from '../stores/history';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
 import { registerTvRow, rowIndexOf, prepareRowWindow, ROW_PREPARE_EVENT } from '../lib/tvRowRegistry';
-import { tileFadeAlways } from '../lib/tvMotionFlags';
+import { tileFadeAlways, HELD } from '../lib/tvMotionFlags';
 import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '../lib/tvRowWindow';
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
@@ -448,7 +448,8 @@ const SLIDE_CHAIN_WINDOW = 400;
  * measured, not guessed: 240ms cost 8 points of on-time horizontally and 22 vertically, and
  * tripled the frames over 67ms on the horizontal axis. So if a hold still reads as slow, the next
  * step down is not free and should be measured on the panel rather than tuned by feel. */
-const HELD_STEP_MIN_MS = 300;
+/* 300 IS THE SET'S: off a television a hold walks at the reference's pace (lib/tvMotionFlags `HELD`). */
+const HELD_STEP_MIN_MS = HELD.pace;
 
 /* ---- AND WHY A HELD KEY GLIDES RATHER THAN STEPS --------------------------------------------
  * Pacing alone did not fix the feel. Each press eases with `cubic-bezier(.25,.46,.45,.94)`, which
@@ -491,23 +492,23 @@ const OPEN_COMMIT_MS = 420;
 /* 200 -> 260 (2026-09-23): on the 65UT8100 pictures decode slower than on a PC, and a swap that
  * capped out before its picture was ready dissolved to the placeholder and then popped the photo in
  * with no drift — the "skips its animation" the user saw when pressing fast. 260 is still under the
- * 267ms slide, so the rule above holds, and taps are now paced at TAP_STEP_MIN_MS (300) so the extra
- * wait always fits between two steps. */
+ * 267ms slide, so the rule above holds. A tap that comes sooner supersedes the waiting swap (see
+ * `showSlot`), so fast taps show the card they land on, not every card on the way. */
 const SWAP_WAIT_CAP = 260;
 
-/* ---- TAPS WALK AT A STEADY PACE, LIKE A HELD KEY — AND LIKE THE REFERENCE ----------------------
- * Spam Right on Netflix and the row does not try to follow every press: it steps at an even rate
- * and the extra presses simply ride along. This row used to take every tap the moment it arrived,
- * so fast tapping cancelled each drift, dissolve and copy arrival part-way and the billboard jumped
- * between titles instead of moving — and on the set, where pictures decode slower, the swap often
- * outran its own picture.
+/* ---- EVERY TAP STEPS, THE MOMENT IT ARRIVES ------------------------------------------------------
+ * Taps used to be paced like a hold (one step per 300ms, a tap inside that held back and any further
+ * ones folded into it). Measured in Chrome at 240Hz (2026-10-21): six taps 180ms apart moved the row
+ * five times, each step up to 120ms after its press, and the strip STOOD STILL three times in that
+ * second (each 267ms slide finished and waited for the pace) — move, stop, move: the stutter of fast
+ * tapping. At 90ms, six taps moved it three times.
  *
- * So a tap closer than this to the last step is NOT dropped (a deliberate press must never be lost —
- * see the note on `chained` in `step`); it is held and taken the moment the pace allows. Only ONE is
- * ever held: further taps inside the window replace its direction rather than queueing more steps,
- * so letting go stops the row at once instead of letting a backlog play out. Same number as
- * HELD_STEP_MIN_MS, measured best on the set, so a tapped walk and a held walk go at one speed. */
-const TAP_STEP_MIN_MS = HELD_STEP_MIN_MS;
+ * Now a tap steps at once and the strip's transition is re-aimed in flight, from where it is, on the
+ * press's own curve. What the pace protected against — every tap restarting the dissolve, the copy and
+ * the callouts part-way — is handled the way a hold handles it: a press that arrives while the last
+ * step is still settling (SLIDE_CHAIN_WINDOW) is FAST (`is-fast`, the held decoration: the picture
+ * swaps, the copy and callouts wait) and the card the taps stop on gets the full arrival. Only a held
+ * key is paced (HELD_STEP_MIN_MS) and glides linearly (`is-glide`). */
 
 
 /* ---- HOW FAST THE PHOTOGRAPH ITSELF COMES UP, and why a HELD key needs its own answer --------
@@ -1059,11 +1060,6 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
    *  Up here with the other refs because `step` is defined past an early return. */
   const lastStepAt = useRef(0);
-  /** The one tap held back by TAP_STEP_MIN_MS, and its timer. Up here, above `if (!n) return null`,
-   *  with the other press refs — `paced` itself is below that early return, and a hook there is
-   *  called conditionally (lint caught it; a row that renders empty and then fills would throw). */
-  const pendingTap = useRef<{ delta: number; id: number } | null>(null);
-  useEffect(() => () => { if (pendingTap.current) window.clearTimeout(pendingTap.current.id); }, []);
   /* WHICH ARROW IS PHYSICALLY DOWN, which is the difference between a hold and fast tapping and
    * cannot be inferred from timing (see SLIDE_CHAIN_WINDOW). A hold sends keydown after keydown
    * with no keyup between them; separate presses each send a keyup. So a keydown that arrives
@@ -1112,6 +1108,9 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   /** Whether the stage is on the held-key timings, so they are written when they change and not on
    *  every press. */
   const paceHeld = useRef(false);
+  /** The walk is fast — a hold or quick taps (`is-fast`): the next card is built without its copy, and
+   *  soon after each step rather than once the remote is still. Cleared by `endChain`. */
+  const fastRef = useRef(false);
   /** A commit is owed to React: the walk is ahead of `active` / `pos`. `syncId` is its coalescing
    *  timer. See `syncNow`. */
   const syncOwed = useRef(false);
@@ -2027,7 +2026,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * gradient-then-photo path takes over — a worse frame but never a stuck one. A newer press
    * supersedes a pending swap rather than queueing behind it: holding a direction walks to where
    * the remote actually is, not through every card on the way. */
-  const showSlot = (at: number, dir: 1 | -1, chained: boolean) => {
+  const showSlot = (at: number, dir: 1 | -1, fast: boolean, glide: boolean) => {
     const stage = stageRef.current;
     if (!stage) return;
     const g = gate.current;
@@ -2050,8 +2049,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       window.clearTimeout(gate.current.timer);
       gate.current.timer = 0;
       shownAt.current = at;
-      stage.show(info, peek, { dir, held: chained, animate: !reduceMotion });
-      prefillSoon(chained);
+      stage.show(info, peek, { dir, held: fast, glide, animate: !reduceMotion });
+      prefillSoon(fast);
     };
     const urls = [info.bgUrl, info.logoUrl].filter(Boolean);
     let left = urls.length;
@@ -2130,8 +2129,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
   const prefillNow = () => {
     const stage = stageRef.current;
     if (!stage || stops < 2 || !artOn || gate.current.timer) return;
-    if (performance.now() - lastStepAt.current < prefillQuiet.current) { prefillSoon(paceHeld.current); return; }
-    stage.prefill(describeLatest.current(slotAt(mod(liveActive.current + lastDir.current, stops))), !paceHeld.current);
+    if (performance.now() - lastStepAt.current < prefillQuiet.current) { prefillSoon(fastRef.current); return; }
+    stage.prefill(describeLatest.current(slotAt(mod(liveActive.current + lastDir.current, stops))), !fastRef.current);
   };
   const prefillLatest = useRef(prefillNow);
   prefillLatest.current = prefillNow;
@@ -2189,7 +2188,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * key comparison if the next card is unchanged and a rebuild if its facts have moved — AT THE WALK'S
      * PACE: a hold's catch-up re-arming at the deliberate 420ms is what pushed every other held step's
      * card past the next step (traced: prefilled, built-in-the-press, prefilled, built-in-the-press…). */
-    if (changed || !prefillTimer.current) prefillSoon(paceHeld.current);
+    if (changed || !prefillTimer.current) prefillSoon(fastRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageSig]);
 
@@ -2316,12 +2315,13 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * armed by — mid-slide, once the slide stopped needing the main thread: seven image requests and their
    * decodes inside the movement (Chromium 120 trace, 10ms of requests at 6x in the slide's first 100ms).
    * A tap now warms once its press has settled (lib/tvQuiet `afterMotion`), and a fast run of taps that
-   * never settles still gets one at the cap, so the warm is postponed, never starved. A HOLD keeps the idle
-   * callback: it never settles, and its steps need pictures six cards ahead. */
+   * never settles still gets one at the cap, so the warm is postponed, never starved. A FAST walk (a hold, or
+   * taps inside SLIDE_CHAIN_WINDOW) keeps the idle callback: it never settles, and its steps need pictures
+   * six cards ahead. */
   const warmSoon = () => {
     if (warmCancel.current) return;
     const run = () => { warmCancel.current = null; warmLatest.current(); };
-    if (paceHeld.current) {
+    if (fastRef.current) {
       const ric = window.requestIdleCallback;
       if (typeof ric === 'function') { const id = ric(run, { timeout: 600 }); warmCancel.current = () => window.cancelIdleCallback(id); }
       else { const id = window.setTimeout(run, 120); warmCancel.current = () => window.clearTimeout(id); }
@@ -2565,14 +2565,16 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * reached yet — and the window carries nine of them ahead of a strip that shows six.
    *
    * A HOLD IS THE SAME CODE WITH A SHORTER SLIDE. `chained` picks the durations, and tv.css's
-   * `.is-fast` picks the linear curve; the reasoning behind each number is in the notes at
+   * `.is-glide` picks the linear curve; the reasoning behind each number is in the notes at
    * HELD_STEP_MIN_MS and SLIDE_CHAIN_WINDOW above and was not changed. Both halves are required
    * for a hold: recent enough to be one gesture AND the button still down — timing alone cannot tell
-   * a held key from a quick second tap. */
+   * a held key from a quick second tap. QUICK TAPS are `fast` without being `chained`: the held
+   * decoration, the press's own curve, no pace (see EVERY TAP STEPS). */
   const step = (delta: number, held = false) => {
     const now = performance.now();
     const since = now - lastStepAt.current;
-    const chained = held && since < SLIDE_CHAIN_WINDOW;
+    const fast = since < SLIDE_CHAIN_WINDOW;
+    const chained = held && fast;
     /* A held key repeating faster than the row is allowed to walk — see HELD_STEP_MIN_MS. Dropped
      * outright, and `lastStepAt` deliberately not moved, so the pace is measured from the last
      * step the viewer actually saw rather than from the last repeat the platform sent. */
@@ -2581,16 +2583,18 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     const dir: 1 | -1 = delta > 0 ? 1 : -1;
     lastDir.current = dir;
 
-    /* ---- A HELD KEY GETS THE SLIDE AND NOTHING ELSE ------------------------------------------
-     * `is-fast` takes the decoration off while the key is held (the plates and the copy cut instead
-     * of dissolving — see tv.css) and is cleared on a timer, so letting go restores the full cascade
-     * for the card you actually stop on. */
+    /* ---- A FAST WALK GETS THE SLIDE AND NOTHING ELSE -----------------------------------------
+     * `is-fast` takes the decoration off while the key is held or tapped quickly (the plates and the
+     * copy cut instead of dissolving — see tv.css) and is cleared on a timer, so letting go restores
+     * the full cascade for the card you actually stop on. `is-glide` is the hold's linear slide. */
     const el = sectionRef.current;
     if (el) {
-      el.classList.toggle('is-fast', chained);
+      el.classList.toggle('is-fast', fast);
+      el.classList.toggle('is-glide', chained);
       if (fastOff.current) window.clearTimeout(fastOff.current);
       fastOff.current = window.setTimeout(() => endChainRef.current(), SLIDE_CHAIN_WINDOW);
     }
+    fastRef.current = fast;
     if (paceHeld.current !== chained) { paceHeld.current = chained; stageRef.current?.setPace(chained); }
 
     const next = mod(liveActive.current + delta, stops);
@@ -2611,8 +2615,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
 
     const track = trackRef.current;
     if (track) putActive(track, sp);
-    showSlot(next, dir, chained);
-    scheduleSync(chained);
+    showSlot(next, dir, fast, chained);
+    scheduleSync(fast);
     promoteSoon();
     warmSoon();
     armDetailWarm();
@@ -2635,31 +2639,12 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
     if (stage && stops > 0) {
       stage.settle(describeLatest.current(slotAt(liveActive.current) ?? list[0] ?? 'end'), lastDir.current < 0 ? -1 : 1, !reduceMotion);
     }
-    sectionRef.current?.classList.remove('is-fast');
+    sectionRef.current?.classList.remove('is-fast', 'is-glide');
+    fastRef.current = false;
     if (paceHeld.current) { paceHeld.current = false; stageRef.current?.setPace(false); }
     syncNow();
   }
   endChainRef.current = endChain;
-
-  /** Step now, or — for a tap that came too soon after the last step — once the pace allows. */
-  const paced = (delta: number, held: boolean) => {
-    if (held) { step(delta, true); return; }   // a hold has its own pace (HELD_STEP_MIN_MS)
-    const wait = TAP_STEP_MIN_MS - (performance.now() - lastStepAt.current);
-    if (wait <= 0 && !pendingTap.current) { step(delta, false); return; }
-    if (pendingTap.current) { pendingTap.current.delta = delta; return; }
-    const id = window.setTimeout(() => {
-      const p = pendingTap.current;
-      pendingTap.current = null;
-      if (!p) return;
-      // The remote may have left the row (Down, Up, OK) while this waited — then it is not ours.
-      if (!sectionRef.current?.contains(document.activeElement)) return;
-      // Left off the first card leaves the row only on a press the viewer made there, not on one
-      // that was queued behind the walk — a held-back tap that would run off the start just stops.
-      if (p.delta < 0 && liveActive.current <= 0) return;
-      step(p.delta, false);
-    }, Math.max(0, wait));
-    pendingTap.current = { delta, id };
-  };
 
   const onHeroKey = (e: ReactKeyboardEvent) => {
     // Left/Right walk the row and are consumed here so the global D-pad handler doesn't also
@@ -2669,7 +2654,7 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
      * return of its own and both directions have to record the key either way. */
     const held = e.repeat || heldKey.current === e.key;
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') heldKey.current = e.key;
-    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); paced(1, held); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); step(1, held); }
     else if (e.key === 'ArrowLeft') {
       e.preventDefault(); e.stopPropagation();
       /* ---- LEFT OFF THE FIRST CARD LEAVES THE ROW --------------------------------------------
@@ -2686,12 +2671,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       if (liveActive.current <= 0) {
         /* A HELD KEY STOPS AT THE FIRST CARD; only a press made there leaves. Holding Left to rewind
          * the row used to overshoot: the repeat that arrived as the walk reached the start threw focus
-         * into the nav bar and scrolled the page, mid-hold. Same rule `paced` keeps for a queued tap. */
-        if (held) return;
+         * into the nav bar and scrolled the page, mid-hold. A QUICK TAP that reaches the start stops there
+         * too (it would otherwise run on into the bar and walk it to another page); a press made once the
+         * walk has settled leaves. */
+        if (held || performance.now() - lastStepAt.current < SLIDE_CHAIN_WINDOW) return;
         const nav = barItemHere() || document.querySelector<HTMLElement>('.tv-nav-item');
         if (nav) { nav.focus(); return; }
       }
-      paced(-1, held);
+      step(-1, held);
     }
   };
 

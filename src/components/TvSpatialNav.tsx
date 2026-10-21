@@ -4,6 +4,7 @@ import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch, firs
 import { setActiveRowIndex } from '../lib/tvRowWindow';
 import { barItemHere, pageEntry } from '../lib/tvBar';
 import { onBootRevealing } from '../lib/bootGate';
+import { HELD } from '../lib/tvMotionFlags';
 
 /* REMOTE / D-PAD NAVIGATION — mounted only in the `--mode tv` build. A TV has no pointer, so
  * this turns the four arrow keys (the remote's directional pad) into spatial focus movement:
@@ -196,7 +197,8 @@ const SCROLL_MS = 280;        // a settled, deliberate move — see the 60fps no
  * HELD_SCROLL_MS (440) still comfortably outlasts this, which is the constraint that keeps a hold
  * one continuous glide rather than a series of arrivals, and CHAIN_WINDOW_MS (500) still clears it,
  * which is what stops jitter dropping a held press onto the deliberate path. */
-const HELD_ROW_MIN_MS = 300;
+/* The set's 300; off a television the reference's pace, with the row's own (lib/tvMotionFlags `HELD`). */
+const HELD_ROW_MIN_MS = HELD.pace;
 
 /* ---- THE TWO VERTICAL ARMS, SO THE SET CAN SETTLE THEM ON ONE BINARY -------------------------
  *
@@ -252,7 +254,8 @@ const CHAIN_WINDOW_MS = 500;
  *
  * So: 220 pace, 260 duration, unchanged. If a faster hold is wanted as a matter of feel rather than
  * of frames, BOTH numbers move together and the pair is the thing to try, not this one alone. */
-const HELD_SCROLL_MS = 440;
+/* 440 on a television; shorter with the faster pace elsewhere (lib/tvMotionFlags `HELD`). */
+const HELD_SCROLL_MS = HELD.scroll;
 /* ---- THE CURVE STARTS SLOW NOW, AND THAT REVERSES WHAT THE NOTE ABOVE SAYS ------------------
  *
  * The note argues against an ease-in-out because "its easing starts slow, which reads as lag on

@@ -19,9 +19,24 @@
  * something off for the length of a measurement.
  */
 
+import { linkDeviceInfo } from './deviceInfo';
+
 const read = (key: string): string => {
   try { return localStorage.getItem(key) || ''; } catch { return ''; }
 };
+
+/* ---- HOW FAST A HELD KEY WALKS: THE SET'S MEASURED FLOOR, OR THE REFERENCE'S PACE ------------------
+ * 300ms a step (both axes) was measured best on the 65UT8100 against 240 — see HELD_STEP_MIN_MS in
+ * TvSpotlight. That is a floor for the set's hardware, not a choice of feel: the reference walks a held
+ * key at four or five titles a second, and a desktop browser has the frames to spare (Chrome at 240Hz,
+ * 2026-10-21). So off a television a hold walks at the reference's pace. `slide` and `scroll` are the
+ * held glides on each axis — each longer than the gap between two accepted repeats (a 33ms keyboard
+ * repeat accepts every 231ms at a 220 pace), so a glide is re-aimed in flight and never stalls.
+ * The television's numbers are the ones it already had. */
+const ON_TV_SET = ['webos', 'tizen', 'androidtv'].includes(linkDeviceInfo().platform);
+export const HELD = ON_TV_SET
+  ? { pace: 300, slide: 340, scroll: 440 }
+  : { pace: 220, slide: 280, scroll: 320 };
 
 let parallax: boolean | null = null;
 /** The artwork drift: every arrival on the billboard — a deliberate press and each step of a held
