@@ -424,6 +424,9 @@ export interface ImdbTrailer {
   urls?: Record<string, string>;
   /** Seconds, when IMDb reports it. */
   runtime?: number | null;
+  /** The film's widest frame from IMDb's technical specs (2.39 for "2.39 : 1"), or null — the bands
+   *  IMDb bakes into a 16:9 trailer of a wider film are this picture's (useVideoTrailer `coverAspect`). */
+  aspect?: number | null;
 }
 
 function imdbTrailerQuery(imdb: string | undefined) {

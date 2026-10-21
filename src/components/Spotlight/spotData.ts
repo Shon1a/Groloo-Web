@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiIdOf, useCards, useHomeCached, useImdbTrailerMany, useMeta, useMetaMany, usePrefetchAwards, type ImdbTrailer } from '../../lib/queries';
 import { homePool, usePicks, useTaste } from '../../lib/picks';
-import { kindOf, tasteMatch } from '../../lib/taste';
+import { kindOf } from '../../lib/taste';
 import type { Airing, MediaItem, MetaDetail } from '../../lib/types';
 
 /* ---- WHAT THE SPOTLIGHT SHOWS -----------------------------------------------------------------
  *
  * Two lists:
  *
- *   SPOT  — up to ten titles that each get the stage in turn, with a slice of their own trailer.
- *           They need the most: an IMDb id (for the trailer), the wordmark, the facts line. So
+ *   SPOT  — up to ten titles that each get the stage in turn, with their own trailer.
+ *           They need the most: an IMDb id (for the trailer), the wordmark, the title page's
+ *           column (facts, synopsis, credits). So
  *           they are described from /api/meta, one read each, and their trailers resolved.
  *   MORE  — the slideshow that takes over once the trailers are done: other films, series and
  *           anime, deliberately NOT more of the same — a viewer who has just watched a thriller
@@ -28,11 +29,19 @@ export interface SpotItem extends MediaItem {
   genres?: string[];
   imdb?: string;
   seasons?: number;
+  tagline?: string;
+  /** The title page's credit lines: the first three billed, the director (a film), the creators (a series). */
+  cast?: string[];
+  director?: string;
+  creators?: string[];
 }
 
-/* Ten trailers, from fourteen candidates: some titles have no trailer, and those go to the back. */
+/* Ten trailers, from twenty candidates: some titles have no trailer, and those go to the back; some
+ * have only a poor one, and those are left out (`sharpTrailer`). */
 const SPOT = 10;
-const CANDIDATES = 14;
+const CANDIDATES = 20;
+/** The year trailers started to be made in HD — see `sharpTrailer`. */
+const HD_TRAILERS_FROM = 2005;
 const MORE = 16;
 /** How long the spot list may wait on slow answers before going with what it has. */
 const SETTLE_MS = 4500;
@@ -47,7 +56,9 @@ function describe(base: MediaItem, m: MetaDetail | undefined, trailer: ImdbTrail
     title: m.title || base.title,
     titleLogo: m.titleLogo || (base.titleLogo as string | undefined),
     backdrop: (m.artBackdrop as string | undefined) || m.backdrop || base.backdrop,
+    posterArt: m.posterArt || base.posterArt,
     overview: m.plot || base.overview,
+    tagline: m.tagline?.trim() || undefined,
     rating: m.rating || base.rating,
     year: m.year || base.year,
     released: m.released ?? base.released,
@@ -58,8 +69,26 @@ function describe(base: MediaItem, m: MetaDetail | undefined, trailer: ImdbTrail
     runtimeText: m.runtime ?? null,
     airing: m.airing ?? null,
     seasons: m.seasons,
+    cast: (m.cast ?? []).slice(0, 3).map((c) => c.name).filter(Boolean),
+    director: m.director || undefined,
+    creators: (m.creators ?? []).slice(0, 2).map((c) => c.name).filter(Boolean),
     trailer: trailer ?? null,
   };
+}
+
+/* A TRAILER FIT FOR THE STAGE (the user, Oct 21: don't show the films whose trailers are very bad quality).
+ * Read off the files IMDb has for it, the one thing about a trailer known before it plays — its thumbnail
+ * is key art as often as a frame, and sharpness measured on real frames did not separate good from bad:
+ *   - nothing at 720p or above: an old tape transfer (Alive's is titled "Official VHS Trailer");
+ *   - 720p at best for a film from before HD trailers: the same tape, upscaled (White Hunter Black
+ *     Heart's). A real remaster of an old film's trailer comes at 1080p (Jurassic Park's re-release,
+ *     The Fugitive's 20th anniversary); 720p from the HD years is a real HD file (Eddie the Eagle's). */
+function sharpTrailer(tr: ImdbTrailer, year: unknown): boolean {
+  if (!tr.urls) return true;
+  const lines = Math.max(0, ...Object.keys(tr.urls).map((l) => Number(/^(\d+)p$/.exec(l)?.[1]) || 0));
+  if (lines >= 1080) return true;
+  const y = Number(year);
+  return lines >= 720 && !(y > 0 && y < HD_TRAILERS_FROM);
 }
 
 /** Lets a list wait a little for the network, and never longer. */
@@ -96,7 +125,7 @@ export function useSpotList(cands: MediaItem[], enabled: boolean): { spot: SpotI
   const spot = useMemo(() => {
     if (!settled) return [];
     const all = list.map((c, i) => describe(c, metas[i]?.data, trailerOf(imdbs[i])?.data));
-    const withT = all.filter((s) => s.trailer?.url);
+    const withT = all.filter((s) => s.trailer?.url && sharpTrailer(s.trailer, s.year));
     const without = all.filter((s) => !s.trailer?.url && (s.backdrop || s.poster));
     return [...withT, ...without].slice(0, SPOT);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,45 +133,47 @@ export function useSpotList(cands: MediaItem[], enabled: boolean): { spot: SpotI
   return { spot, settled };
 }
 
-/* THE SLIDESHOW: a mix of kinds, ordered so neighbours differ. Films, series and anime are taken
- * in turn (each kind's own list ranked by taste when there is one, by standing when not), plus a
- * couple of upcoming titles, which is where a "Coming Friday" earns its place on this screen.
- * `ready` once the artwork request has answered (or failed) for the list as it stands. */
-export function useMoreList(
-  sources: MediaItem[][],
-  exclude: Set<string>,
-  enabled: boolean,
-): { items: SpotItem[]; ready: boolean } {
+/** The home rows the slideshow draws from. */
+const TRENDING = ['trending_tv', 'trending_movie', 'trending_anime'];
+
+/** A stable random number for `key` under `seed`: one shuffle per slideshow, which stays put while it runs. */
+function jitter(seed: number, key: string): number {
+  let h = seed | 0;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 0x9e3779b1);
+  return (h ^ (h >>> 15)) >>> 0;
+}
+
+/* THE SLIDESHOW: what is trending — series, films and anime, taken in turn so neighbours differ, each
+ * kind in a random order drawn afresh every time a slideshow starts (the user, Oct 21: it should be
+ * random trending titles, where it kept showing the same ones — it was ranked by taste and rating, from
+ * the picks and every home row, so the same top-rated titles led every time). What the viewer has seen
+ * or thumbed down stays out. `ready` once the artwork request has answered (or failed) for the list. */
+export function useMoreList(exclude: Set<string>, enabled: boolean): { items: SpotItem[]; ready: boolean } {
   const taste = useTaste();
   const home = useHomeCached();
+  const [seed] = useState(() => Math.floor(Math.random() * 2 ** 31));
   const mixed = useMemo(() => {
     if (!enabled) return [];
     const seen = new Set(exclude);
     const byKind: Record<'movie' | 'series' | 'anime', MediaItem[]> = { movie: [], series: [], anime: [] };
-    const add = (m: MediaItem) => {
-      const k = keyOf(m);
-      if (!m?.id || seen.has(k) || taste.seen.has(String(m.id)) || taste.thumbs[String(m.id)] === 'down') return;
-      if (!m.backdrop && !m.poster) return;
-      seen.add(k);
-      byKind[kindOf(m)].push(m);
-    };
-    for (const list of sources) for (const m of list) add(m);
-    for (const m of homePool(home)) add(m);
-    const rank = (a: MediaItem, b: MediaItem) =>
-      ((tasteMatch(taste, b) ?? 0.5) + (Number(b.rating) || 0) / 20) - ((tasteMatch(taste, a) ?? 0.5) + (Number(a.rating) || 0) / 20);
-    (Object.keys(byKind) as Array<keyof typeof byKind>).forEach((k) => byKind[k].sort(rank));
-    const upcoming = [...(home?.upcoming?.movie || []), ...(home?.upcoming?.series || [])]
-      .filter((m) => !seen.has(keyOf(m)) && (m.backdrop || m.poster));
+    for (const cat of TRENDING) {
+      for (const m of home?.rows?.[cat]?.results || []) {
+        const k = keyOf(m);
+        if (!m?.id || seen.has(k) || taste.seen.has(String(m.id)) || taste.thumbs[String(m.id)] === 'down') continue;
+        if (!m.backdrop && !m.poster) continue;
+        seen.add(k);
+        byKind[kindOf(m)].push(m);
+      }
+    }
+    (Object.keys(byKind) as Array<keyof typeof byKind>).forEach((k) => byKind[k].sort((a, b) => jitter(seed, keyOf(a)) - jitter(seed, keyOf(b))));
     const out: MediaItem[] = [];
     const order: Array<keyof typeof byKind> = ['series', 'movie', 'anime'];
     for (let i = 0; out.length < MORE && i < MORE; i++) {
       for (const k of order) { const m = byKind[k][i]; if (m && out.length < MORE) out.push(m); }
-      if (i === 2 && upcoming[0]) out.push(upcoming[0]);
-      if (i === 6 && upcoming[1]) out.push(upcoming[1]);
     }
-    return out.slice(0, MORE);
+    return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, sources.map((s) => s.map(keyOf).join(',')).join('|'), [...exclude].join(','), home, taste]);
+  }, [enabled, [...exclude].join(','), home, taste, seed]);
 
   // One request dresses the lot: wordmark, textless backdrop, genre, full date.
   const ids = useMemo(() => mixed.map((m) => `${norm(m.type)}/${apiIdOf(m) ?? m.id}`), [mixed]);
@@ -185,6 +216,6 @@ export function usePostPlayData(media: { id: string | number; type?: string; imd
   const spotImdbs = spot.map((s) => s.imdb).join(',');
   useEffect(() => { prefetchAwards(spot.map((s) => s.imdb)); }, [spotImdbs, prefetchAwards]); // eslint-disable-line react-hooks/exhaustive-deps
   const exclude = useMemo(() => new Set([...spot.map(keyOf), ...(media ? [keyOf({ id: apiId ?? media.id, type: media.type })] : [])]), [spot, apiId, media]);
-  const { items: more } = useMoreList([recs.slice(CANDIDATES), picks.map((p) => p.item)], exclude, settled);
+  const { items: more } = useMoreList(exclude, settled);
   return { finished, spot, more, settled };
 }

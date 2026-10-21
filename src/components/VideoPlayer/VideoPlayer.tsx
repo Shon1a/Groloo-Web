@@ -26,8 +26,6 @@ import { createCreditsDetector, creditsFallback, creditsWatchFrom, type CreditsD
  * the next episode, a film gets closed early), so the screen, its data hooks and its stylesheet are
  * fetched only once a film is close enough to its end to need them — see `ppArmed` below. */
 const PostPlay = lazy(() => import('../Spotlight/PostPlay'));
-/** How long post-play keeps the credits in their corner before they fade out. */
-const PP_MINI_MS = 10000;
 
 /* THE TWO BUILDS ARE ONE PLAYER WITH TWO INPUTS, and this constant is what splits them.
  * `import.meta.env.MODE` is a Vite compile-time string, so every `IS_TV` branch below is resolved
@@ -317,6 +315,7 @@ const TV_HIDE_MS = 5000;        // chrome auto-hide — longer than the desktop'
 /* THE SKIP PROMPTS COUNT DOWN, in seconds of PLAYBACK — the fill pauses with the film. */
 const SKIP_SHOW_S = 10;         // Skip Intro / Skip Recap fills, then steps aside
 const NEXT_COUNT_S = 10;        // Next Episode fills, then starts the next episode
+const SEE_MORE_S = 30;          // See More (a film's credits) fills, then opens post-play
 
 
 /* The tick sits at the row's far end, after the label — where the big apps put it. A row with a
@@ -469,24 +468,24 @@ export default function VideoPlayer() {
   const [logoFailed, setLogoFailed] = useState(false); // the wordmark would not load → text title
   const [logoReady, setLogoReady] = useState(false);   // decoded, so its entrance can play on a real picture
 
-  /* ---- POST-PLAY: the credits shrink into the corner and the next thing to watch takes over -----
-   * Two states, because the screen has to be READY before it is SHOWN: `ppArmed` mounts it a few
+  /* ---- POST-PLAY: at the credits, Watch Credits + See More; See More is the next thing to watch ---
+   * Three states, because the screen has to be READY before it is SHOWN: `ppArmed` mounts it a few
    * minutes before the end so its recommendations and trailers resolve while the film is still on,
+   * `ppCueAt` is where the credits were found (the prompt shows from there on — see `skipMode`), and
    * `ppOpen` is the takeover itself. Only for a film, or a series with no next episode to roll
    * into — an episode with a next one keeps the Next Episode button, as it always did. */
   const [ppArmed, setPpArmed] = useState(false);
   const [ppOpen, setPpOpen] = useState(false);
+  const [ppCueAt, setPpCueAt] = useState<number | null>(null);
   const ppOpenRef = useRef(false);
-  /* "Back to credits" was chosen: the viewer wants the names, so post-play stays out of the way
-   * until the film actually ends. */
+  /* Watch Credits was chosen: the viewer wants the names, so post-play stays out of the way until
+   * the film actually ends. */
   const ppDismissed = useRef(false);
   /* The film's own `muted`, held while a trailer has the sound — null when nothing is ducked. */
   const ppDucked = useRef<boolean | null>(null);
   const detector = useRef<CreditsDetector | null>(null);
   const detectorBlocked = useRef(false);
   useEffect(() => { ppOpenRef.current = ppOpen; }, [ppOpen]);
-  /* The credits keep their corner for PP_MINI_MS, then fade away (see the effect by backToCredits). */
-  const [ppMiniGone, setPpMiniGone] = useState(false);
 
   // --- TV remote (see "TEN FEET AWAY" above; all of this is dropped from the web build) ---
   const [tvNav, setTvNav] = useState(false);              // the D-pad is driving the chrome
@@ -1139,7 +1138,7 @@ export default function VideoPlayer() {
   const ppEligible = !!source?.media && settings.postPlay !== false && !(source?.series && source?.next);
 
   useEffect(() => {
-    setPpArmed(false); setPpOpen(false);
+    setPpArmed(false); setPpOpen(false); setPpCueAt(null);
     ppDismissed.current = false; ppDucked.current = null;
     detector.current?.dispose(); detector.current = null; detectorBlocked.current = false;
   }, [source]);
@@ -1156,32 +1155,10 @@ export default function VideoPlayer() {
      * up so the playing credits cannot pull it back under the line. */
     const v = videoRef.current, m = source?.media;
     if (v && m?.key && v.duration > 0) putProgress(m.key, v.duration, v.duration, m.lang);
+    /* THE FILM STOPS HERE. The screen covers it in black (spotlight.css), its music would only fight
+     * the trailers', and on a television its decoder is the one the trailers need. */
+    if (v && !v.paused) v.pause();
   }, [source, putProgress]);
-
-  const backToCredits = useCallback(() => {
-    ppDismissed.current = true;
-    ppOpenRef.current = false;
-    setPpOpen(false);
-    const v = videoRef.current;
-    if (v && ppDucked.current !== null) { v.muted = ppDucked.current; ppDucked.current = null; }
-    if (IS_TV) overlayRef.current?.focus({ preventScroll: true });
-    bump();
-  }, [bump]);
-
-  /* THE CORNER IS BRIEF. The credits hold their frame for ten seconds — long enough to see the film
-   * has not been taken away, and to step back into it — and then fade out of the screen, leaving the
-   * trailers alone. Once faded the film is paused: its picture is gone, its music would only fight
-   * the trailers', and on a television its decoder is the one the trailers need. */
-  useEffect(() => {
-    if (!ppOpen) { setPpMiniGone(false); return; }
-    const id = window.setTimeout(() => setPpMiniGone(true), PP_MINI_MS);
-    return () => window.clearTimeout(id);
-  }, [ppOpen]);
-  useEffect(() => {
-    if (!ppMiniGone) return;
-    const id = window.setTimeout(() => { const v = videoRef.current; if (v && !v.paused) v.pause(); }, 900);
-    return () => window.clearTimeout(id);
-  }, [ppMiniGone]);
 
   /* A post-play trailer with its sound up takes the room's sound: the credits are ducked under it
    * and given back the moment it stops (the slideshow is silent, so the music returns there). */
@@ -1200,17 +1177,17 @@ export default function VideoPlayer() {
     if (!ppEligible || !dur || ppOpen) return;
     const short = dur < 600;   // a clip, a short: no credits worth detecting — only its end counts
     if (!ppArmed && cur >= (short ? dur * 0.5 : Math.min(dur - 240, creditsWatchFrom(dur)))) setPpArmed(true);
-    if (ppDismissed.current || short) return;
+    if (ppDismissed.current || short || ppCueAt != null) return;
     const outro = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro.start : null;
     /* While the picture can still be read, the tail waits for it — down to the last 25 seconds, for
      * credits rolled over footage that the detector will never recognise. */
     const at = outro ?? (detectorBlocked.current ? creditsFallback(dur) : dur - 25);
-    if (cur >= at && dur - cur > 1) openPostPlay();
-  }, [cur, dur, ppEligible, ppArmed, ppOpen, segments, openPostPlay]);
+    if (cur >= at && dur - cur > 1) setPpCueAt(at);
+  }, [cur, dur, ppEligible, ppArmed, ppOpen, ppCueAt, segments]);
 
   // The picture: once a second over the last stretch of the film, while it is playing.
   useEffect(() => {
-    if (!ppEligible || ppOpen || !playing || !dur || dur < 600) return;
+    if (!ppEligible || ppOpen || ppCueAt != null || !playing || !dur || dur < 600) return;
     const v = videoRef.current;
     if (!v) return;
     const id = window.setInterval(() => {
@@ -1219,10 +1196,10 @@ export default function VideoPlayer() {
       if (!detector.current) detector.current = createCreditsDetector(v);
       const r = detector.current.sample();
       if (r.verdict === 'blocked') detectorBlocked.current = true;
-      else if (r.verdict === 'credits') openPostPlay();
+      else if (r.verdict === 'credits') setPpCueAt(Math.max(0, v.currentTime - 1));
     }, IS_TV ? 1500 : 1000);
     return () => window.clearInterval(id);
-  }, [ppEligible, ppOpen, playing, dur, openPostPlay]);
+  }, [ppEligible, ppOpen, ppCueAt, playing, dur]);
 
   /** Tear down the hold ramp. Safe to call when no ramp is running. */
   const stopRamp = useCallback(() => {
@@ -1850,8 +1827,8 @@ export default function VideoPlayer() {
     const onKey = (e: KeyboardEvent) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return;
       /* POST-PLAY HAS THE REMOTE. This listener was registered first, so it is the one that must
-         step aside: the arrows walk post-play's row, OK opens a title, and nothing here may seek the
-         credits playing in the corner. Stop still means stop. */
+         step aside: the arrows walk post-play's grid, OK opens a title, and nothing here may seek the
+         paused film under it. Stop still means stop. */
       if (ppOpenRef.current) {
         if (mediaAction(e) === 'stop') { e.preventDefault(); close(); }
         return;
@@ -1950,7 +1927,7 @@ export default function VideoPlayer() {
       const pr = promptRef.current;
       if (!tvNav && pr) {
         if ((k === 'Enter' || k === ' ') && seekPreviewRef.current == null) { consume(); pr.act(); bump(); return; }
-        if (pr.kind === 'next' && (k === 'ArrowLeft' || k === 'ArrowRight')) { consume(); setPromptSel(k === 'ArrowLeft' ? 'ghost' : 'main'); return; }
+        if ((pr.kind === 'next' || pr.kind === 'more') && (k === 'ArrowLeft' || k === 'ArrowRight')) { consume(); setPromptSel(k === 'ArrowLeft' ? 'ghost' : 'main'); return; }
       }
 
       // 3. THE SCRUBBER, whether it holds focus or nothing does. Same two keys, same job — which
@@ -2222,13 +2199,14 @@ export default function VideoPlayer() {
    * idle minutes the slideshow may come up over it, and goes again with the next press. */
   useKeepAwake(!!source && ((playing && !errKind) || ppOpen));
 
-  /* THE CONTEXTUAL PROMPT — "Skip Recap", "Skip Intro", or "Watch Credits" + "Next Episode" once a
-   * series' credits start. Markers when there are some (films too — a film's opening titles are as
-   * skippable as a series intro); without them a series falls back to a heuristic intro window and
-   * a fixed tail, and a film offers nothing, because guessing where a film's titles are is how a
+  /* THE CONTEXTUAL PROMPT — "Skip Recap", "Skip Intro", "Watch Credits" + "Next Episode" once a
+   * series' credits start, or "Watch Credits" + "See More" once a film's do (`ppCueAt`, found by the
+   * post-play triggers above). Markers when there are some (films too — a film's opening titles are
+   * as skippable as a series intro); without them a series falls back to a heuristic intro window
+   * and a fixed tail, and a film offers nothing, because guessing where a film's titles are is how a
    * button lands on the opening scene. Worked out above the early return because the prompt has
    * state of its own (below) and hooks cannot follow a return. */
-  let skipMode: 'intro' | 'recap' | 'next' | null = null;
+  let skipMode: 'intro' | 'recap' | 'next' | 'more' | null = null;
   let skipTo = INTRO_TO;
   if (source && dur >= 300) {
     const intro = segments?.intro && segments.intro.end < dur ? segments.intro : null;
@@ -2236,6 +2214,7 @@ export default function VideoPlayer() {
     const outroStart = segments?.outro && segments.outro.start > 0 && segments.outro.start < dur ? segments.outro.start : null;
     const nextAt = outroStart != null ? outroStart : dur - CREDITS_TAIL;
     if (source.series && source.next && cur >= nextAt && dur - cur > 0.5) skipMode = 'next';
+    else if (ppEligible && ppCueAt != null && !ppOpen && cur >= ppCueAt && dur - cur > 0.5) skipMode = 'more';
     /* The end is EXCLUSIVE: Skip lands exactly on it, and a prompt still "inside" at that instant
        stayed up until the next timeupdate carried the clock past it — the press looked ignored. */
     else if (recap && cur >= recap.start && cur < recap.end) { skipMode = 'recap'; skipTo = recap.end; }
@@ -2253,6 +2232,8 @@ export default function VideoPlayer() {
    *   Next Episode              fills over NEXT_COUNT_S and then STARTS the next episode, unless
    *                             the viewer pressed Watch Credits beside it (or has auto-play-next
    *                             off, when it waits, solid, to be pressed).
+   *   See More                  a film's: fills over SEE_MORE_S and then OPENS post-play, unless
+   *                             the viewer pressed Watch Credits beside it.
    *
    * The fill is a CSS animation on a transform, so it costs the compositor and not a render per
    * frame, and it is paused with the film (`animation-play-state`), so a viewer who pauses on the
@@ -2301,7 +2282,7 @@ export default function VideoPlayer() {
   const [promptRun, setPromptRun] = useState(0);
   useEffect(() => { setPromptGone(false); setPromptSel('main'); setPromptRun((n) => n + 1); }, [skipMode]);
   useEffect(() => { setCreditsDismissed(false); }, [source]);
-  const promptShown = (skipMode === 'next' ? !creditsDismissed : !!skipMode && (!promptGone || !hideUi)) && switching == null;
+  const promptShown = (skipMode === 'next' || skipMode === 'more' ? !creditsDismissed : !!skipMode && (!promptGone || !hideUi)) && switching == null;
   /* THE BOTTOM STACK IS UP FROM THE FIRST FRAME: the wordmark, the episode line, the icons and the
    * bar, the moment the player opens. It used to be held until the file's length was known and the
    * chapter markers had answered (up to 8 s), so the stack arrived in one piece — and a film opened
@@ -2445,7 +2426,8 @@ export default function VideoPlayer() {
   const startNextRef = useRef(startNext);
   startNextRef.current = startNext;
   const goNext = startNext;
-  const watchCredits = () => { promptLeft(); setCreditsDismissed(true); bump(); };
+  const watchCredits = () => { promptLeft(); setCreditsDismissed(true); ppDismissed.current = true; bump(); };
+  const seeMore = () => { promptLeft(); openPostPlay(); };
   /* ON THE TV THE PROMPT IS WHERE THE REMOTE IS. In transport mode OK already presses it (2b in
    * the key handler). With the controls up, the remote was left wherever it stood — usually the
    * scrubber, where OK pauses — so a viewer pressing OK at a white Skip Intro paused the film
@@ -2466,10 +2448,10 @@ export default function VideoPlayer() {
   }, [skipMode, promptShown]);
   /* What OK does in transport mode while a prompt is up — read by the remote's handler, which is
    * bound once per mode and would otherwise see the prompt as it was when it was bound. */
-  const promptRef = useRef<{ kind: 'intro' | 'recap' | 'next'; act: () => void } | null>(null);
+  const promptRef = useRef<{ kind: 'intro' | 'recap' | 'next' | 'more'; act: () => void } | null>(null);
   useEffect(() => {
     promptRef.current = promptShown && skipMode
-      ? { kind: skipMode, act: skipMode === 'next' ? (promptSel === 'ghost' ? watchCredits : goNext) : skipAhead }
+      ? { kind: skipMode, act: skipMode === 'next' || skipMode === 'more' ? (promptSel === 'ghost' ? watchCredits : skipMode === 'next' ? goNext : seeMore) : skipAhead }
       : null;
   });
 
@@ -2919,7 +2901,7 @@ export default function VideoPlayer() {
          absent means the arrows are transport and it must stand down. `tv` / `web` are the
          styling hooks for the two builds' own stylesheets; `tv-rail` lifts the bar clear of the
          episode shelf on both. */
-      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${ppOpen && ppMiniGone ? ' pp-mini-gone' : ''}${switching != null ? ' vp-switching' : ''}${held ? ' vp-held' : ''}${jumping ? ' vp-jumping' : ''}${fill ? ' vp-fill' : ''}${parked ? ' vp-parked' : ''}`}
+      className={`vp-overlay open pp-host${hideUi ? ' hide-ui' : ''}${settings.enhance ? ' enhance-on' : ''}${isTouch ? ' gestures-on' : ''}${webkitPip ? ' vp-has-webkit-pip' : ''}${IS_TV ? ' tv' : ' web'}${IS_TV && tvNav ? ' tv-nav' : ''}${railShown ? ' tv-rail' : ''}${ppOpen ? ' pp-on' : ''}${switching != null ? ' vp-switching' : ''}${held ? ' vp-held' : ''}${jumping ? ' vp-jumping' : ''}${fill ? ' vp-fill' : ''}${parked ? ' vp-parked' : ''}`}
       id="playerOverlay"
       ref={overlayRef}
       /* Focusable-but-not-tabbable so the remote has somewhere to rest when it steps out of the
@@ -3233,6 +3215,22 @@ export default function VideoPlayer() {
               {IcPlaySolid}<span>{t('player.next_episode')}</span>
             </button>
           </>
+        ) : skipMode === 'more' ? (
+          <>
+            <button type="button" className={`vp-pbtn${promptSel === 'ghost' ? ' sel full' : ''}`} id="vpWatchCredits"
+              onFocus={() => setPromptSel('ghost')} onClick={watchCredits}>
+              <span>{t('player.watch_credits')}</span>
+            </button>
+            <button type="button" className={`vp-pbtn vp-pbtn-main${promptSel === 'main' ? ' sel' : ''}`} id="vpSkip"
+              onFocus={() => setPromptSel('main')} onClick={seeMore}>
+              {promptShown && (
+                <span className="vp-pfill" key={promptRun} aria-hidden="true"
+                  style={{ animationDuration: `${SEE_MORE_S}s`, animationPlayState: playing ? 'running' : 'paused' }}
+                  onAnimationEnd={seeMore} />
+              )}
+              <span>{t('player.see_more')}</span>
+            </button>
+          </>
         ) : skipMode ? (
           <button type="button" className={`vp-pbtn vp-pbtn-main sel${promptGone ? ' full' : ''}`} id="vpSkip" onClick={skipAhead}>
             {!promptGone && (
@@ -3261,10 +3259,10 @@ export default function VideoPlayer() {
       )}
 
       {/* POST-PLAY — mounted once armed (its data resolves while the film is still on), shown once
-          the credits start. The film's own <video> above is what shrinks into the corner. */}
+          See More is pressed (or fills), or the film ends. It covers the paused film in black. */}
       {ppArmed && source.media && (
         <Suspense fallback={null}>
-          <PostPlay media={source.media} open={ppOpen} miniGone={ppMiniGone} onBackToCredits={backToCredits} onAudible={onPpAudible} />
+          <PostPlay media={source.media} open={ppOpen} onAudible={onPpAudible} />
         </Suspense>
       )}
     </div>
