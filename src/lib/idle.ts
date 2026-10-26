@@ -14,7 +14,8 @@ import { create } from 'zustand';
  * the home screen and on a title hold nothing either: they play once and end long before ten minutes.
  *
  * THE PRESS THAT WAKES THE SCREEN IS SPENT ON WAKING IT. OK must not also open whatever was focused
- * behind the slideshow, an arrow must not move the selection, Back must not close the player. So
+ * behind the slideshow, an arrow must not move the selection, Back must not close the player. (OK
+ * does one thing more: it opens the title the slideshow is showing — `setWakeOk`.) So
  * while the slideshow is up every key and click is caught here and goes no further — which works only
  * because this is the FIRST listener on the window: main.tsx installs it before React mounts anything,
  * ahead of every capture-phase listener the app adds later (the Back resolver in tvKeys, the player's
@@ -85,6 +86,13 @@ function check() {
   useIdle.setState({ on: true, shown: false });
 }
 
+/** What OK does as it wakes the screen, besides waking it: the slideshow opens the title it is showing
+ *  (the user, Oct 26: OK on a slide did not open that film's page). */
+let wakeOk: (() => void) | null = null;
+export function setWakeOk(fn: (() => void) | null): void {
+  wakeOk = fn;
+}
+
 /** Somebody is here: the slideshow goes (or never comes), and the ten minutes start again. */
 export function wake(): void {
   last = Date.now();
@@ -117,6 +125,7 @@ function onKeyDown(e: KeyboardEvent) {
   last = Date.now();
   const s = useIdle.getState();
   if (!s.on) return;
+  const ok = s.shown && (e.key === 'Enter' || e.keyCode === 13) ? wakeOk : null;
   if (s.shown) {
     swallow(e);
     wakeKey = keyId(e);
@@ -124,6 +133,7 @@ function onKeyDown(e: KeyboardEvent) {
     wakeKeyTimer = window.setTimeout(() => { wakeKey = null; }, KEY_GRACE_MS);
   }
   wake();
+  ok?.();
 }
 
 function onKeyUp(e: KeyboardEvent) {

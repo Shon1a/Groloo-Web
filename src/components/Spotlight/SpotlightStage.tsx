@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useGenre, useT } from '../../i18n/i18n';
 import { artPosition, artW, imgW, rasterLogo } from '../../lib/img';
 import type { ImdbTrailer } from '../../lib/queries';
+import { afterMotion, whenQuiet } from '../../lib/tvQuiet';
 import { useRatings, type Thumb } from '../../stores/ratings';
 import { useVideoTrailer } from '../DetailModal/useVideoTrailer';
 import { moveMark } from '../DetailModal/tvGlide';
 import ThumbIcon from '../DetailModal/ThumbIcon';
-import { previewsAllowed } from '../../lib/tvPreviewPolicy';
+import { previewDwellMs, previewsAllowed } from '../../lib/tvPreviewPolicy';
 import { useSettledGlance } from '../glance/useGlance';
 import { GlanceIcon } from '../glance/GlanceIcons';
 import SlideShow, { type SlidesApi } from './SlideShow';
@@ -25,8 +26,9 @@ const IS_TV = import.meta.env.MODE === 'tv';
  *              the black, the bands IMDb bakes into a wide film's 16:9 file cropped away; down the
  *              left, the selected title's column as the title page sets it — wordmark, facts line
  *              (84% Match · year · [cert] · runtime), callouts as bold lines, tagline, synopsis, the
- *              credit lines and the three thumbs; along the foot, one row of posters running off the
- *              right of the screen, with one white box gliding to whichever the remote is on. Up to
+ *              credit lines and the three thumbs; along the foot, one row of posters cut to fit between
+ *              margins as wide on the right as on the left, with one white box gliding to whichever the
+ *              remote is on; its trailer starts once the remote rests there. Up to
  *              ten titles take the stage in turn, each playing its WHOLE trailer, from the first
  *              frame to the last, fading up out of its still and back down into it — picture and
  *              sound together. The poster whose trailer is playing carries a thin bar filling along
@@ -45,8 +47,12 @@ const IS_TV = import.meta.env.MODE === 'tv';
 
 /** Seconds a title with no playable trailer holds the screen before the next one takes it. */
 const STILL_SECONDS = 6;
-/** The longest the screen waits for a trailer's first frame before treating the title as a still. */
-const TRAILER_PATIENCE = 8000;
+/** The longest a trailer may stand still — not started yet, or stuck buffering — before it gives way.
+ *  Under the engine's REVEAL_FALLBACK (6s), so a file that never starts is given up before it is shown. */
+const TRAILER_PATIENCE = 4000;
+/** The fewest places the row is cut for: fewer posters than this leave room on the right rather than
+ *  grow taller than the space under the words. */
+const ROW_FEWEST = 8;
 /** Idle time after the viewer last pressed something before the screen carries on by itself. */
 const RESUME_MS = 9000;
 /** A trailer fading up out of its still, picture and sound together. */
@@ -121,6 +127,12 @@ export default function SpotlightStage(props: SpotlightStageProps) {
   const mainRef = useRef<HTMLDivElement>(null);
   const slidesApi = useRef<SlidesApi | null>(null);
   const onSlidesApi = useCallback((api: SlidesApi | null) => { slidesApi.current = api; }, []);
+
+  // The page under the player is not drawn while this covers it (spotlight.css, NOTHING UNDER IT IS DRAWN).
+  useEffect(() => {
+    document.documentElement.classList.add('pp-up');
+    return () => document.documentElement.classList.remove('pp-up');
+  }, []);
 
   // A new list starts from the top.
   const spotKey = spot.map(keyOf).join(',');
@@ -255,7 +267,9 @@ function TrailerScreen(p: {
   const [revealed, setRevealed] = useState(false);
   /** Seconds the trailer on the stage had left when its first frame showed — its whole run. 0 = not known. */
   const [clipLeft, setClipLeft] = useState(0);
-  const [failed, setFailed] = useState<Record<string, true>>({});
+  /** A title whose trailer would not play: 1 = its best file would not, so the one the rows play (the
+   *  server's 720p pick) is tried instead; 2 = that would not either. */
+  const [failed, setFailed] = useState<Record<string, 1 | 2>>({});
   const [sound, setSound] = useState(true);
   const [logoBad, setLogoBad] = useState<Record<string, true>>({});
 
@@ -276,14 +290,34 @@ function TrailerScreen(p: {
   const failedKey = useRef('');
   const closing = useRef<{ id: number; done: boolean } | null>(null);
   const autoNext = useRef(false);
+  /** Counts the stage's moves. A trailer is started for one visit, and a visit opens on its still. */
+  const [visit, setVisit] = useState(0);
+
+  /* ---- A TRAILER ONLY ONCE THE REMOTE IS STILL ---------------------------------------------------
+   * Starting a trailer is the most expensive thing a set does — the cost is the MOUNT, not the playback
+   * (lib/tvPreviewPolicy) — and walking the row started one for every poster it passed: ten players
+   * built and torn down in twelve presses, measured (the user, Oct 26: "very laggy when scroll between
+   * posters"). Now the remote cuts to the poster's picture at once, and its trailer is asked for only
+   * once the remote has been still for the rows' dwell, counted from the last press — so the screen
+   * moving on by itself, with nobody pressing anything, starts the next trailer at once. */
+  const [armed, setArmed] = useState(-1);
+  useEffect(() => whenQuiet(() => setArmed(visit), previewDwellMs(), true), [visit]);
 
   // The film under this screen is paused (VideoPlayer `openPostPlay`), so its decoder is free from the start.
   const canTrail = !IS_TV || previewsAllowed(true);
-  const src = stageCur && canTrail && !failed[stageKey] ? stageCur.trailer?.url || undefined : undefined;
+  const tries = failed[stageKey] ?? 0;
+  /** The title on the stage has a trailer to play: now, or once the remote is still. */
+  const wantsTrailer = !!stageCur?.trailer?.url && canTrail && tries < 2;
+  const src = wantsTrailer && armed === visit ? stageCur?.trailer?.url || undefined : undefined;
+  const giveUp = useCallback((key: string) => {
+    failedKey.current = key;
+    setFailed((f) => ({ ...f, [key]: f[key] ? 2 : 1 }));
+  }, []);
   const { muted, toggleMute, fadeOutSound } = useVideoTrailer(slotRef, stageRef, src, stageCur?.title || '', {
     /* THE WHOLE TRAILER, FROM ITS FIRST FRAME (the user, Oct 21: "trailer should play full time") —
-     * no `startAt`, where it used to be a slice from a third of the way in. */
-    renditions: stageCur?.trailer?.urls,
+     * no `startAt`, where it used to be a slice from a third of the way in. Its best file first; if that
+     * will not play, the server's own pick, the file the rows play (`tries`). */
+    renditions: tries ? undefined : stageCur?.trailer?.urls,
     // TV: the crop is laid out, never transformed — the set does not apply transforms to video.
     cropScale: IS_TV ? 1 : undefined,
     /* NO BLACK BANDS (the user, Oct 21: "zoom that trailer and black spaces will hide"). IMDb puts a scope
@@ -300,8 +334,8 @@ function TrailerScreen(p: {
     targetRenditionPx: 1920,
     sound,
     fadeSoundMs: FADE_IN_MS,
-    restartKey: stageKey,
-    onFail: () => { if (stageKey) { failedKey.current = stageKey; setFailed((f) => ({ ...f, [stageKey]: true })); } },
+    restartKey: `${stageKey}:${tries}`,
+    onFail: () => { if (stageKey) giveUp(stageKey); },
   });
 
   /* Ducked for as long as a trailer is on screen, loading or playing. */
@@ -337,20 +371,32 @@ function TrailerScreen(p: {
    * up out of and back down into. Always the SELECTED title's picture (the user, Oct 21: moving to the
    * next poster faded the trailer back into the PREVIOUS title's picture, then to this one's, and only
    * then started its trailer). The screen moving on by itself cross-fades one picture into the next (from
-   * `advance`); the remote CUTS to the new one — the old one is dropped rather than faded. */
-  const [layers, setLayers] = useState<{ a?: SpotItem; b?: SpotItem; front: 'a' | 'b' }>({ front: 'a' });
-  const show = useCallback((it: SpotItem, cut: boolean) => setLayers((l) => {
+   * `advance`); the remote CUTS to the new one — the old one is dropped rather than faded.
+   *
+   * …OVER A PICTURE, THE NEW ONE FADES IN (the user, Oct 26: "now it just appearing without fade"). A
+   * press used to land over a trailer nearly every time, and the fade down brought the new picture in
+   * over it; with the trailer waiting for the remote to rest, most presses land over a picture. So the
+   * new one fades in on top of that one, at the same pace (spotlight.css `is-cut`), and the old one is
+   * held fully up under it (`under`) until the remote rests — its trailer is asked for then, and must
+   * not find a stranger's picture under its still. */
+  const [layers, setLayers] = useState<{ a?: SpotItem; b?: SpotItem; front: 'a' | 'b'; under?: true }>({ front: 'a' });
+  const show = useCallback((it: SpotItem, cut: boolean, overPicture = false) => setLayers((l) => {
     const front = l.front === 'a' ? l.a : l.b;
     if (front && keyOf(front) === keyOf(it)) return l;
-    if (cut) return { a: it, front: 'a' };
-    return l.front === 'a' ? { a: l.a, b: it, front: 'b' } : { a: it, b: l.b, front: 'a' };
+    if (cut && !(overPicture && front)) return { a: it, front: 'a' };
+    const next = l.front === 'a' ? { a: l.a, b: it, front: 'b' as const } : { a: it, b: l.b, front: 'a' as const };
+    return cut ? { ...next, under: true } : next;
   }), []);
   /* In the same render as the selection, not an effect after it: the picture has to be on the page when
    * the fade down starts (`closeThen`, from the effect below), or it arrives over a fade already running. */
   const [layersFor, setLayersFor] = useState('');
-  if (cur && curKey !== layersFor) { setLayersFor(curKey); show(cur, true); }
-  // The pictures either side of the selection, fetched ahead: a cut to a picture still downloading is a cut to black.
-  useEffect(() => { for (const it of [spot[at - 1], spot[at + 1]]) if (it) void warmPicture(art(it, 'w1280')); }, [at, spot]);
+  if (cur && curKey !== layersFor) { setLayersFor(curKey); show(cur, true, !revealed); }
+  const keepUnder = !!layers.under && (at !== stageAt || armed !== visit);
+  /* The pictures either side of the selection, fetched ahead: a cut to a picture still downloading is a cut
+   * to black. Once the box has landed, not under its glide. */
+  useEffect(() => afterMotion(() => {
+    for (const it of [spot[at - 1], spot[at + 1]]) if (it) void warmPicture(art(it, 'w1280'));
+  }), [at, spot]);
 
   /* Moving on by itself. After the last title, the same fade hands over to the slideshow. */
   const advance = useCallback(() => {
@@ -417,23 +463,39 @@ function TrailerScreen(p: {
     const ms = autoNext.current ? FADE_OUT_MS : SWITCH_FADE_MS;
     autoNext.current = false;
     if (closing.current && !closing.current.done) return;
-    closeThen(ms, () => setStageAt(atRef.current));
+    closeThen(ms, () => { setStageAt(atRef.current); setVisit((n) => n + 1); });
   }, [at, stageAt, closeThen]);
-  // A new title on the stage starts from its still, fully up.
-  useEffect(() => { stageRef.current?.classList.remove('is-closing'); }, [stageKey]);
+  // A new visit to the stage starts from its still, fully up.
+  useEffect(() => { stageRef.current?.classList.remove('is-closing'); }, [visit, stageKey]);
 
-  /* A trailer asked for and not yet showing: wait, but not forever. A title with no trailer holds its
-   * still for STILL_SECONDS — unless the viewer is busy with the remote. */
+  /* A TRAILER THAT IS NOT MOVING GIVES WAY (the user, Oct 26: "sometimes … it's not playing"). The engine
+   * shows a video REVEAL_FALLBACK after asking for it whether or not it has started — a set that never
+   * reports a clock must not keep it hidden — and a file that stalls part-way stays on its last frame:
+   * either way the stage held a frozen picture and nothing moved it on. So the element's own clock is
+   * watched, and one standing still for TRAILER_PATIENCE is given up: the best file first, then the one
+   * the rows play, then the title. */
   useEffect(() => {
-    if (!settled || !stageCur || at !== stageAt || (src && revealed)) return;
-    if (src) {
-      const id = window.setTimeout(() => setFailed((f) => ({ ...f, [stageKey]: true })), TRAILER_PATIENCE);
-      return () => window.clearTimeout(id);
-    }
-    if (held) return;
-    const id = window.setTimeout(advance, STILL_SECONDS * 1000);
+    if (!src || !stageKey) return;
+    let last = -1;
+    let since = performance.now();
+    const id = window.setInterval(() => {
+      const v = slotRef.current?.querySelector('video');
+      const now = performance.now();
+      if (!v || v.currentTime !== last || document.hidden) { last = v ? v.currentTime : -1; since = now; return; }
+      if (now - since < TRAILER_PATIENCE) return;
+      window.clearInterval(id);
+      giveUp(stageKey);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [src, stageKey, tries, giveUp]);
+
+  /* A title with no trailer to play holds its still for STILL_SECONDS; one whose trailer would not play
+   * moves on at once — it was promised motion. Neither while the viewer is busy with the remote. */
+  useEffect(() => {
+    if (!settled || !stageCur || at !== stageAt || wantsTrailer || held) return;
+    const id = window.setTimeout(advance, tries ? 0 : STILL_SECONDS * 1000);
     return () => window.clearTimeout(id);
-  }, [settled, stageCur, held, at, stageAt, src, revealed, advance, stageKey]);
+  }, [settled, stageCur, held, at, stageAt, wantsTrailer, tries, advance]);
 
   /* ---- THE ROW AND ITS WHITE BOX ---------------------------------------------------------------
    * One box for the whole row, gliding from poster to poster on the search page's clock (tvGlide). The
@@ -451,7 +513,8 @@ function TrailerScreen(p: {
     const x = r.left - g.left;
     const room = view.clientWidth - view.getBoundingClientRect().left;
     let s = shift.current;
-    if (x + r.width - s > room) s = x + r.width - room;
+    // Half a pixel's grace: the last poster of a row cut to fit ends ON the margin, give or take rounding.
+    if (x + r.width - s > room + 0.5) s = x + r.width - room;
     if (x < s) s = x;
     shift.current = s = Math.max(0, s);
     row.style.transform = s ? `translate3d(${-s}px, 0, 0)` : '';
@@ -469,33 +532,41 @@ function TrailerScreen(p: {
    *   The ascent that made history.            (the tagline)
    *   three lines of synopsis…
    *   Cast: …  Director: …  genres             (a series: its creators)
-   *   👎  👍  👍👍                              (Up from the row; OK rates) */
+   *   👎  👍  👍👍                              (Up from the row; OK rates)
+   *
+   * A BEAT BEHIND THE BOX. The column is rebuilt for every title and cascades in line by line, and built
+   * in the press's own render it held back the box's first frame with it. So it follows a deferred
+   * selection: the box sets off in the press frame, the words are put up after it, and presses quicker
+   * than the column skip the titles they pass. */
+  const shownAt = useDeferredValue(at);
+  const copy = spot[shownAt];
+  const copyKey = copy ? keyOf(copy) : '';
   const glance = useSettledGlance({
-    item: cur || { id: '' },
-    meta: cur ? { airing: cur.airing, released: cur.released, imdb: cur.imdb, genre: cur.genres, seasons: cur.seasons } : null,
-    awards: !!cur?.imdb,
-  }, curKey).slice(0, 2);
-  const logo = cur ? rasterLogo(String(cur.titleLogo || cur.logo || ''), 'w500') : '';
-  const year = cur?.year && cur.year !== '—' ? String(cur.year) : '';
-  const rating = Number(cur?.rating) || 0;
+    item: copy || { id: '' },
+    meta: copy ? { airing: copy.airing, released: copy.released, imdb: copy.imdb, genre: copy.genres, seasons: copy.seasons } : null,
+    awards: !!copy?.imdb,
+  }, copyKey).slice(0, 2);
+  const logo = copy ? rasterLogo(String(copy.titleLogo || copy.logo || ''), 'w500') : '';
+  const year = copy?.year && copy.year !== '—' ? String(copy.year) : '';
+  const rating = Number(copy?.rating) || 0;
   const match = rating > 0 ? Math.round(Math.min(10, rating) * 10) : 0;
-  const isSeries = cur?.type === 'tv' || cur?.type === 'series';
-  const seasonsText = isSeries && cur?.seasons
-    ? (cur.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: cur.seasons }))
+  const isSeries = copy?.type === 'tv' || copy?.type === 'series';
+  const seasonsText = isSeries && copy?.seasons
+    ? (copy.seasons === 1 ? t('modal.season_one') : t('modal.seasons_count', { n: copy.seasons }))
     : '';
-  const facts: ReactNode[] = cur ? [
+  const facts: ReactNode[] = copy ? [
     match ? <span key="match" className="pp-match">{t('tv.match', { n: match })}</span> : '',
     year,
-    cur.certification ? <span key="cert" className="pp-cert">{cur.certification}</span> : '',
+    copy.certification ? <span key="cert" className="pp-cert">{copy.certification}</span> : '',
     seasonsText,
-    !isSeries ? cur.runtimeText || '' : '',
+    !isSeries ? copy.runtimeText || '' : '',
   ].filter(Boolean) : [];
-  const castLine = (cur?.cast ?? []).join(', ');
-  const makers = isSeries ? cur?.creators ?? [] : [];
-  const makerLine = isSeries ? makers.join(', ') : cur?.director || '';
+  const castLine = (copy?.cast ?? []).join(', ');
+  const makers = isSeries ? copy?.creators ?? [] : [];
+  const makerLine = isSeries ? makers.join(', ') : copy?.director || '';
   const makerLabel = isSeries ? (makers.length > 1 ? t('tv.creators') : t('modal.creator')) : t('modal.director');
-  const genresLine = (cur?.genres ?? []).slice(0, 3).map(genre).join(', ');
-  const rated = useRatings((s) => (cur ? s.ratings[String(cur.id)]?.r ?? null : null));
+  const genresLine = (copy?.genres ?? []).slice(0, 3).map(genre).join(', ');
+  const rated = useRatings((s) => (copy ? s.ratings[String(copy.id)]?.r ?? null : null));
 
   return (
     <>
@@ -505,10 +576,15 @@ function TrailerScreen(p: {
         {/* UNDER the stills, first in the DOM: a trailer is revealed by its still fading away and closed
             by the still fading back — see THE FADE DOWN. */}
         <div className="pp-stage-slot" ref={slotRef} aria-hidden="true" />
-        {(['a', 'b'] as const).map((s) => (
-          <img key={`${s}-${layers[s] ? keyOf(layers[s]!) : ''}`} className={`pp-stage-art${layers.front === s ? ' on' : ''}`}
-            src={art(layers[s], 'w1280') || undefined} alt="" decoding="async" />
-        ))}
+        {(['a', 'b'] as const).map((s) => {
+          const front = layers.front === s;
+          if (!front && layers.under && !keepUnder) return null;
+          return (
+            <img key={`${s}-${layers[s] ? keyOf(layers[s]!) : ''}`}
+              className={`pp-stage-art${front ? (layers.under ? ' on is-cut' : ' on') : layers.under ? ' under' : ''}`}
+              src={art(layers[s], 'w1280') || undefined} alt="" decoding="async" />
+          );
+        })}
       </div>
       {!IS_TV && src && revealed && (
         <button type="button" className="pp-sound" aria-pressed={!muted}
@@ -519,16 +595,16 @@ function TrailerScreen(p: {
       )}
 
       {/* Remounted per title, so its lines arrive one after another each time (spotlight.css). */}
-      <div className="pp-copy" key={curKey}>
+      <div className="pp-copy" key={copyKey}>
         <h2 className="pp-name">
-          {logo && !logoBad[curKey]
-            ? <img className="pp-logo" src={logo} alt={cur?.title || ''} onError={() => setLogoBad((b) => ({ ...b, [curKey]: true }))} />
-            : <span className="pp-title">{cur?.title}</span>}
+          {logo && !logoBad[copyKey]
+            ? <img className="pp-logo" src={logo} alt={copy?.title || ''} onError={() => setLogoBad((b) => ({ ...b, [copyKey]: true }))} />
+            : <span className="pp-title">{copy?.title}</span>}
         </h2>
         {facts.length > 0 && <div className="pp-facts">{facts.map((f, i) => <span key={i}>{f}</span>)}</div>}
         {glance.length > 0 && <div className="pp-callouts">{glance.map((c) => <p key={c.kind}>{c.text}</p>)}</div>}
-        {cur?.tagline && <p className="pp-tagline">{cur.tagline}</p>}
-        {cur?.overview && <p className="pp-plot">{cur.overview}</p>}
+        {copy?.tagline && <p className="pp-tagline">{copy.tagline}</p>}
+        {copy?.overview && <p className="pp-plot">{copy.overview}</p>}
         {(castLine || makerLine || genresLine) && (
           <div className="pp-credits">
             {castLine && <p><span>{t('tv.cast')}:</span> {castLine}</p>}
@@ -557,7 +633,8 @@ function TrailerScreen(p: {
         </div>
       </div>
 
-      <div className={`pp-rowwrap${p.zone === 'thumbs' ? ' is-away' : ''}`}>
+      {/* The row is cut for its posters (`--pp-n`, spotlight.css): they reach a right margin as wide as the left. */}
+      <div className={`pp-rowwrap${p.zone === 'thumbs' ? ' is-away' : ''}`} style={{ ['--pp-n' as string]: Math.max(ROW_FEWEST, spot.length) }}>
         <div className="pp-rowlabel">{p.rowLabel}</div>
         <div className="pp-rowview">
           <div
