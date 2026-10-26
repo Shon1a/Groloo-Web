@@ -901,29 +901,14 @@
      of covered by it, which looks identical because that edge is where the card is. */
   clip-path: inset(0 0 0 var(--sp-wl));
 
-  /* OFF-SCREEN ROWS STOP PAINTING THEIR POSTERS. Home stacks ~13 of these and only two or three
-     are ever on screen, but every one of them was styling, laying out and rastering its whole
-     strip on every scroll frame. `content-visibility: auto` lets the browser skip the subtree
-     entirely until it comes near the viewport, which is the cheapest large win available in this
-     file — nothing about the design changes, the work simply is not done until it would be seen.
-
-     IT IS ON THE RAIL AND NOT ON `.tv-spot`, AND THAT IS THE WHOLE CARE IN THIS RULE. Two
-     reasons, both load-bearing:
-
-       · SPATIAL NAV MEASURES GEOMETRY. TvSpatialNav finds the next focus target with
-         getBoundingClientRect and discards anything under 4px, so a skipped subtree would make
-         every row below the fold unreachable with the D-pad — the remote would simply stop
-         moving down the page. Nothing focusable lives in here: the strip's tiles are all
-         tabindex="-1" (they are a preview, not a stop) and `.tv-spot-hero` is the rail's SIBLING,
-         outside the skipped box. So the pool the nav measures is untouched.
-       · NO LAYOUT SHIFT TO GUARD AGAINST. The rail is `position: absolute; inset: 0` inside a
-         stage of fixed `--spot-h`, so its size comes from its containing block and is known
-         whether or not the contents are rendered. That is why there is no `contain-intrinsic-size`
-         here — it would be ignored, and a made-up number in it is a jump waiting to happen.
-
-     Chromium 85, comfortably inside this build's 87 floor; older engines ignore it and paint as
-     they always did. */
-  content-visibility: auto;
+  /* NO `content-visibility: auto` HERE ANY MORE. It skipped an off-screen rail's style, layout and
+     paint, and the engine only switched a skipped rail back on a rendering frame or two after it came
+     into view — on the set, and on a desktop at 20x, that is long enough for the page's glide to bring
+     a row on screen with nothing beside its card, the posters arriving in a lump afterwards. The idle
+     window that switched rails on ahead (lib/tvRowRegistry.ts) was outrun by quick presses. A rail is
+     its own layer (`will-change` below) and an off-screen layer holds no tiles, and its pictures are
+     still only asked for once the row is armed — so rendering it always costs a dozen boxes, not the
+     artwork. */
 
   /* ---- CLOSED, THE RAIL STANDS `--sp-d` TO THE LEFT (see THE CARD GROWS) -------------------------
      so the first poster after the card sits a gap past a POSTER-wide card instead of a billboard.
@@ -2651,6 +2636,10 @@
    layer back. (The column can take a transform now: the trailer, whose full-screen layer it would
    have pinned, lives on the Trailers & More page.) */
 .tv-det { animation: tvDetIn .26s ease both; }
+/* Opened behind the veil the press put up (DetailModal): that veil already faded in — the screen and
+   its own veil take over from it in place rather than fading up out of nothing a second time. */
+.tv-det.no-in,
+.tv-det.no-in .m-load-veil { animation: none; }
 @keyframes tvDetIn {
   from { opacity: 0; }
   to   { opacity: 1; }

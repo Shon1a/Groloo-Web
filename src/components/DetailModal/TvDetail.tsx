@@ -66,6 +66,8 @@ export interface TvDetailProps {
   meta?: MetaDetail;
   /** /api/meta has landed (or failed) — until then only the loading veil shows. */
   ready: boolean;
+  /** DetailModal already put the veil up on the press: this screen takes over from it without fading in again. */
+  veiled?: boolean;
   /** the title is a series (not the TV BUILD — see DetailModal's `isTv`) */
   isSeries: boolean;
   title: string;
@@ -180,6 +182,8 @@ export default function TvDetail(p: TvDetailProps) {
     srcTab, setSrcTab, signedIn, openAuth, streamsLoading, shownStreams, availableLangs,
     lang, setLang, playStream, streamTitle, pickedEp, setPickedEp,
   } = p;
+  /* Read once: a class that came off later would restart the fade it suppresses. */
+  const [noIn] = useState(!!p.veiled);
 
   /* ---- ONE PICTURE, SHOWN ONCE, AND NOT BEFORE IT IS READY ----------------------------------
    *
@@ -754,7 +758,7 @@ export default function TvDetail(p: TvDetailProps) {
 
   return (
     <div
-      className="overlay open tv-det"
+      className={`overlay open tv-det${noIn ? ' no-in' : ''}`}
       data-parked={parked ? '' : undefined}
       id="overlay"
       role="dialog"

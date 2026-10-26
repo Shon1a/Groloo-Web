@@ -89,7 +89,7 @@ export function stepRow(from: HTMLElement | null, delta: 1 | -1): HTMLElement | 
   if (to < 0) return null;
   if (to >= all.length) {
     /* Past the last row MOUNTED is not past the last row while Home is still staging them in. The rows
-     * register in a passive effect, which React runs before a synchronous render returns. */
+     * register in a layout effect, which React runs before a synchronous render returns. */
     if (delta === 1 && mountNextRow && mountNextRow()) {
       const grown = list();
       if (to < grown.length) return focusTarget(grown[to]);
@@ -143,6 +143,8 @@ export function tvRowCount(): number {
 
 /* ---- PAY FOR A ROW BEFORE IT IS NEEDED, NOT WHILE IT IS ARRIVING -----------------------------
  *
+ * HISTORY (Oct 24): the `content-visibility` half of this is gone — see the note under ART_AHEAD.
+ *
  * MEASURED, and this is the single largest remaining cost on the vertical axis. Traced on the
  * reference set, twenty deliberate vertical presses, previews OFF so nothing else could be blamed:
  *
@@ -174,50 +176,43 @@ export function tvRowCount(): number {
  * return to. */
 const AHEAD = 2;
 const BEHIND = 1;
+/* PICTURES ARE ARMED FURTHER AHEAD THAN THE OLD RAIL WINDOW. Bytes and an off-screen decode are cheap;
+ * a row that scrolls in showing grey plates because its art was asked for one row too late is not.
+ * Three rows past the remote, so a walk down at any pace finds the next rows already pictured. */
+const ART_AHEAD = AHEAD + 2;
 
-/* ---- AND IT IS THE RAIL THAT IS SWITCHED, BECAUSE THE RAIL IS WHAT CARRIES `content-visibility` ----
- *
- * This window was written onto the ROW — the `.tv-spot` section — while the stylesheet puts
- * `content-visibility: auto` on `.tv-spot-rail` inside it (tv.css explains why it must live there and
- * not on the row: the billboard, the focus target, is the rail's sibling). `content-visibility` is not
- * inherited, so `visible` on the section changed nothing at all: every rail stayed `auto`, and the
- * window this function exists to prepare was never prepared.
- *
- * MEASURED, what that meant (desktop, the event Chromium raises when a rail is skipped or rendered):
- * at launch EVERY rail was skipped, including the first row's, whose top sat 44px under the fold; it
- * was rendered 100ms into the first Down, the next row 300ms into it, and so on down the page — each
- * row's strip styled, laid out and painted, its posters decoded and rastered, in the frames of the very
- * scroll that brought it on screen. Walking back up re-rendered rows that had been skipped again behind
- * the walk. And the posters' arrival fades, started under the start-up intro while the first row was
- * skipped, were held back by the engine and ran in the first press's scroll instead.
- *
- * So the switch is made on the rail. The window — the row behind, the row the remote is on and two
- * ahead — is rendered during idle, before any of it can scroll into view; everything else is left to
- * `auto` and costs nothing. Four rails at a time, where `auto` alone settles at two or three: one or two
- * extra rows rendered off screen, which is the price of never rendering one on screen mid-scroll (and
- * far from the nine-rails-at-once arm that measured catastrophically — see tv.css). */
-const rails = new WeakMap<HTMLElement, HTMLElement | null>();
-function railOf(row: HTMLElement): HTMLElement | null {
-  let r = rails.get(row);
-  if (r === undefined || (r && !r.isConnected)) {
-    r = row.querySelector<HTMLElement>('.tv-spot-rail');
-    rails.set(row, r);
-  }
-  return r;
-}
-
+/* THE RAILS ARE NO LONGER SWITCHED HERE. This window used to flip each rail between `visible` and the
+ * stylesheet's `content-visibility: auto`; quick presses outran it and rows glided on screen with an
+ * empty strip, so the rail no longer carries `content-visibility` at all (see tv.css, `.tv-spot-rail`).
+ * What is left is the artwork: the window arms each row's pictures ahead of the remote. */
 let idleHandle = 0;
 /** The row the latest call named — read when the callback runs, not when it was scheduled. */
 let pendingRow: HTMLElement | null = null;
 /** Dispatched on a row's section when it enters the prepared window; TvSpotlight arms its art on it. */
 export const ROW_PREPARE_EVENT = 'tvrowprepare';
+/** Rows the window has armed — read by a row whose listener was not attached yet when it happened. */
+const armedRows = new WeakSet<HTMLElement>();
+export const rowArmed = (row: HTMLElement): boolean => armedRows.has(row);
+
+/* ---- A ROW THAT MOUNTS INSIDE THE WINDOW IS ARMED AT ONCE -----------------------------------------
+ * The idle callback below only runs on a focus move, and Home stages its rows one per commit — so a row
+ * mounted after the last move (every row on a return to Home, the next row a Down mounts) waited for the
+ * next idle moment before asking for its pictures. Called from the row's layout effect. */
+export function prepareOnMount(row: HTMLElement): void {
+  const all = list();
+  const me = all.indexOf(row);
+  if (me < 0) return;
+  const anchor = pendingRow && pendingRow.isConnected ? all.indexOf(pendingRow) : -1;
+  const at = Math.max(0, anchor);
+  if (me >= at - BEHIND && me <= at + ART_AHEAD) armedRows.add(row);
+}
 type IdleWindow = Window & {
   requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
   cancelIdleCallback?: (h: number) => void;
 };
 
 /**
- * Schedule the content-visibility window around `focused` (a row, or anything inside one). Safe to call
+ * Schedule the artwork window around `focused` (a row, or anything inside one). Safe to call
  * on every press: the work is coalesced into one idle callback, so a held key that fires eight times
  * pays for it once.
  */
@@ -241,18 +236,16 @@ export function prepareRowWindow(focused: HTMLElement | null): void {
     const at = all.indexOf(cur);
     if (at < 0) return;
     for (let i = 0; i < all.length; i++) {
-      const want = i >= at - BEHIND && i <= at + AHEAD ? 'visible' : '';
-      /* `.style.contentVisibility` is the inline override; '' hands the rail back to the stylesheet's
-       * `content-visibility: auto`. Read-then-write so an unchanged rail is not invalidated. */
-      const rail = railOf(all[i]);
-      if (rail && rail.style.contentVisibility !== want) rail.style.contentVisibility = want;
-      /* AND ITS ARTWORK IS ARMED HERE TOO, in the same quiet moment. A row switched its pictures on
+      /* THE ARTWORK IS ARMED HERE, in a quiet moment. A row switched its pictures on
        * from an IntersectionObserver 800px out — which fires DURING the vertical scroll, so the
        * React render that gives its tiles a `src` and the decodes behind it landed on the frames of
        * the very animation this function keeps clear. The event is a one-way latch in TvSpotlight
-       * (`visible`), so repeating it costs a no-op. One row further than the content window: its
-       * bitmaps are the slowest thing to have ready. */
-      if (i >= at - BEHIND && i <= at + AHEAD + 1) all[i].dispatchEvent(new Event(ROW_PREPARE_EVENT));
+       * (`visible`), so repeating it costs a no-op. ART_AHEAD rows ahead: bitmaps are the slowest
+       * thing to have ready. */
+      if (i >= at - BEHIND && i <= at + ART_AHEAD) {
+        armedRows.add(all[i]);
+        all[i].dispatchEvent(new Event(ROW_PREPARE_EVENT));
+      }
     }
   };
   /* The timeout matters more than the idleness: a page under continuous input may never see a true

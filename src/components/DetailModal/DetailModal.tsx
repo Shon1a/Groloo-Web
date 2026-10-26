@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useModal } from '../../stores/modal';
 import { usePlayer } from '../../stores/player';
@@ -281,7 +281,16 @@ function Recs({ meta, onOpen }: { meta?: MetaDetail; onOpen: (r: MediaItem) => v
 export default function DetailModal() {
   const t = useT();
   const genre = useGenre();
-  const target = useModal((s) => s.target);
+  const storeTarget = useModal((s) => s.target);
+  /* THE TITLE SCREEN RENDERS BEHIND THE PRESS, NOT INSIDE IT. A store update is a synchronous
+   * render, so OK used to build this whole screen inside the key event — 1.5s at 20x CPU before the
+   * press could paint, the app's worst INP by far, and every key after it queued behind. Deferred,
+   * the press paints at once and React builds the screen in slices that yield to the remote. Closing
+   * stays immediate: a null target is taken as it comes. */
+  const deferredTarget = useDeferredValue(storeTarget, null);
+  const target = storeTarget ? deferredTarget : null;
+  /** The press painted the loading veil while the screen was still rendering (see `if (!target)`). */
+  const veiled = useRef(false);
   // The icons play once as a title opens here, never again on a click (useIntro).
   const intro = useIntro(target?.id);
   const open = useModal((s) => s.open);
@@ -633,7 +642,23 @@ export default function DetailModal() {
     return () => { window.removeEventListener('keydown', onKey); clearTimeout(id); };
   }, [target, close]);
 
-  if (!target) return <div className="overlay" id="overlay" aria-hidden="true" />;
+  if (!target) {
+    /* ON THE TELEVISION THE PRESS ITSELF PUTS UP THE LOADING VEIL — the same black screen and spinner
+     * TvDetail opens on — so OK answers in its own frame while the screen renders behind it. */
+    veiled.current = IS_TV && !!storeTarget;
+    if (veiled.current) {
+      return (
+        <div className="overlay open tv-det" id="overlay" role="dialog" aria-modal="true" aria-hidden="false">
+          <div className="tv-det-art" aria-hidden="true" />
+          <div className="tv-det-scrim" aria-hidden="true" />
+          <div className="m-load-veil" role="status" aria-busy="true" aria-label={t('modal.loading_synopsis')}>
+            <span className="cat-loader" aria-hidden="true" />
+          </div>
+        </div>
+      );
+    }
+    return <div className="overlay" id="overlay" aria-hidden="true" />;
+  }
 
   const titleLogo = meta?.titleLogo;
   const title = meta?.title || target.title || '';
@@ -910,7 +935,7 @@ export default function DetailModal() {
         /* A FRESH SCREEN PER TITLE: More Like This opens another title in place, and everything
            the screen holds (the backdrop's ready flag, the page it is on, the trailer box) belongs to one. */
         key={`${target.type}:${target.id}`}
-        target={target} meta={meta} ready={ready} isSeries={isTv}
+        target={target} meta={meta} ready={ready} isSeries={isTv} veiled={veiled.current}
         title={title} titleLogo={titleLogo} rating={rating} year={year}
         genreChips={genreChips} plot={plot}
         onPlayNow={playNowTv}
