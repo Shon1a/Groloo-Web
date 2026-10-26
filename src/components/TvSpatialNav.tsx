@@ -902,12 +902,8 @@ export default function TvSpatialNav() {
          *
          * Suppressing it makes every move ours, in one direction, on one curve. */
         next.focus({ preventScroll: true });
-        /* PREPARE THE ROWS AHEAD, DURING IDLE. `content-visibility: auto` defers a row's style,
-         * layout, paint and raster until it nears the viewport — and then charges all of it to the
-         * frames in which it arrives, which are the frames of this very animation. Traced on the
-         * set, that is the entire difference between vertical (worst 183ms, GPU busy 177-272ms) and
-         * horizontal (worst 66ms, nothing over 67ms) on the same build. This schedules the window;
-         * it never does the work here. See prepareRowWindow. */
+        /* ARM THE ROWS AHEAD, DURING IDLE: their pictures are asked for before they scroll in. This
+         * schedules the window; it never does the work here. See prepareRowWindow. */
         prepareRowWindow(next);
         /* And tell the row window which row is current. Deferred past the scroll ease inside
          * setActiveRowIndex, so the React commit that changes which rows hold artwork lands after

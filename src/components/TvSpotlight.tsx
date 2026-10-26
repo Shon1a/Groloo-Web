@@ -17,7 +17,7 @@ import { retainImage, isDecoded, retainedReady } from '../lib/useImageReady';
 import { useSettings } from '../stores/settings';
 import { useHistory } from '../stores/history';
 import { previewsAllowed, previewDwellMs } from '../lib/tvPreviewPolicy';
-import { registerTvRow, rowIndexOf, prepareRowWindow, ROW_PREPARE_EVENT } from '../lib/tvRowRegistry';
+import { registerTvRow, rowIndexOf, prepareRowWindow, prepareOnMount, rowArmed, ROW_PREPARE_EVENT } from '../lib/tvRowRegistry';
 import { tileFadeAlways, HELD } from '../lib/tvMotionFlags';
 import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '../lib/tvRowWindow';
 import { usePreviewSound } from '../stores/previewSound';
@@ -1052,9 +1052,14 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
    * page. Registration is by DOM node and the register sorts by document position, so it does not
    * matter what order React mounts the rows in or that "load more" appends to a live list.
    * See lib/tvRowRegistry.ts for what the fast path does and does not claim to handle. */
-  useEffect(() => {
+  /* A layout effect, so a row mounting inside the prepared window has its rail rendered and its
+   * pictures armed before its first paint (lib/tvRowRegistry.ts `prepareOnMount`). */
+  useLayoutEffect(() => {
     const el = sectionRef.current;
-    return el ? registerTvRow(el) : undefined;
+    if (!el) return undefined;
+    const off = registerTvRow(el);
+    prepareOnMount(el);
+    return off;
   }, []);
   const trackRef = useRef<HTMLDivElement>(null);
   /** When the strip last moved — `step` reads it to tell a held key from a deliberate press.
@@ -1899,6 +1904,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
        * tiles their `src`) happens between presses instead of on a frame of the vertical scroll, which
        * is when the observer above would otherwise get there. The observer stays as the fallback. */
       el.addEventListener(ROW_PREPARE_EVENT, arm);
+      /* Armed before this listener existed — at mount, by `prepareOnMount`. */
+      if (rowArmed(el)) arm();
     };
     /* ON A SLOW LINK, NOT UNTIL THE FIRST SCREEN IS IN. Every row arming at once is ~45 pictures (each
      * row's billboard, its next card, the wordmarks) requested in the same instant as the featured
