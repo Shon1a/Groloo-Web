@@ -4,6 +4,7 @@ import { useT, useGenre } from '../i18n/i18n';
 import { imgW, rasterLogo } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
+import TrailerSoon, { TRAILER_SOON_MS } from './TrailerSoon';
 import { useImdbTrailer, useMeta, useMetaCached, useWarmDetail, apiIdOf } from '../lib/queries';
 import Glance from './glance/Glance';
 import { useSettings } from '../stores/settings';
@@ -394,6 +395,8 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
       /* Sound is the store's, as on the rows (previewSound.ts): the red button turns it on and off, and
        * the badge in the corner says which it is. */
       sound: soundOn,
+      // The rows' countdown, in the same corner (TrailerSoon).
+      holdMs: TRAILER_SOON_MS,
     },
   );
 
@@ -565,6 +568,8 @@ export default function TvHero({ items, onPlay }: TvHeroProps) {
         <span className="tv-hero-sound" aria-hidden="true">
           <span className="ic3"><GlanceIcon name={soundOn ? 'soundOn' : 'soundOff'} /></span>
         </span>
+        {/* Before the trailer plays, the badge's place says when it will: "Trailer starts in 3, 2, 1". */}
+        <TrailerSoon className="tv-hero-soon" />
 
         {/* Keyed on the index so the copy remounts and re-runs its rise-in with each change. */}
         <div className="tv-hero-copy" key={`copy-${active}`} ref={copyRef}>

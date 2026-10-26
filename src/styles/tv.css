@@ -764,7 +764,6 @@
 .tv-hero.is-focused .tv-hero-stage .gl-chips.on-art.rise { transition: opacity .34s ease .06s, transform .4s cubic-bezier(.2, .7, .2, 1); }
 .tv-hero-stage.has-trailer .gl-chips.on-art {
   transform: translateX(-2.45em);
-  max-width: calc(70% - 2.45em);
 }
 .tv-hero-sound {
   position: absolute; z-index: 4;
@@ -2207,11 +2206,11 @@
    than as part of the card's information.
 
    THE CALLOUTS MAKE ROOM FOR IT, and only sideways. When it arrives they slide left by its width and
-   gap (a transform — the compositor's to animate, nothing re-lays-out per frame) and give up the
-   same width at their left end, so they never reach further into the card than they did before:
-   that is what an earlier version of this, which simply pushed them left, got wrong — they stepped
-   into the wordmark. A pair that no longer fits whole drops its second tab, by glance.css's rule
-   that the first keeps every letter.
+   gap (a transform — the compositor's to animate, nothing re-lays-out per frame) and KEEP THEIR WHOLE
+   WIDTH. They used to give the same width up at their left end so as never to reach further into the
+   card, and a pair that no longer fitted dropped its second tab the moment a trailer started — the
+   user wants both callouts to stay (2026-10-26), so they reach 2.45em further left instead, as they do
+   for the countdown before it (`.tv-soon`).
 
    `pointer-events: none` because it is a readout, not a control — and it sits inside a <button>,
    where anything that swallowed a click would put a dead patch on the card. */
@@ -2241,10 +2240,364 @@
 .tv-spot .tv-spot-plate .gl-chips.gl-wait { visibility: hidden; }
 .tv-spot-hero.has-trailer .gl-chips.on-art {
   transform: translateX(-2.45em);
-  max-width: calc(54% - 2.45em);
 }
 @media (prefers-reduced-motion: reduce) {
   .tv-spot-sound, .tv-spot-hero .gl-chips.on-art { transition: none; }
+}
+
+/* ---- "TRAILER STARTS IN 3, 2, 1" (TrailerSoon) -----------------------------------------------------
+   The sound badge's corner before the trailer plays, on a row card and on the featured card alike: one
+   more tab at the right end of the callouts, drawn as one of them (glance.css `.gl-chip`), sized in their
+   em. `trailer-soon` is the engine's (useVideoTrailer `holdMs`): on at the mount, off at the reveal, where
+   `has-trailer` hands the corner to the badge in the same frame.
+
+   IT SLIDES IN FROM THE CARD'S EDGE AS THE CALLOUTS SLIDE LEFT, on their curve and clock, and back out
+   as they slide on to the badge's place. A fade alone overlapped them: the tab was there before they
+   had made room ("New ReleaseTrailer starts in 3"). Moving together, the gap between the two only
+   ever grows from the .5em it starts at, and the card's own clip hides the tab beyond its edge.
+
+   THE DIGITS ARE ONE CLOCK, started by that class: each pops in on its second (the app's bounce, not a
+   fade) a beat after the tab lands, and the last one holds until the picture comes, so a slow file
+   waits on "1" rather than on an empty tab. TRAILER_SOON_MS is these three seconds. */
+.tv-soon {
+  position: absolute; z-index: 4;
+  right: var(--soon-r); bottom: var(--soon-r);
+  height: 1.95em; line-height: 1.95em;
+  padding: 0 .72em;
+  border-radius: .45em;
+  background: rgba(18, 18, 18, .74);
+  color: #fff;
+  font-family: var(--font); font-weight: 600; letter-spacing: .005em;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(calc(100% + var(--soon-r)));
+  transition: transform .4s cubic-bezier(.2, .7, .2, 1), opacity .3s ease;
+  pointer-events: none;
+}
+.tv-spot-soon { --soon-r: clamp(16px, 1.25vw, 24px); font-size: clamp(12.5px, .88vw, 16.5px); }
+.tv-hero-soon { --soon-r: clamp(24px, 1.9vw, 36px); font-size: clamp(14.5px, 1.02vw, 19.5px); }
+.trailer-soon .tv-soon { opacity: 1; transform: none; transition: transform .4s cubic-bezier(.2, .7, .2, 1), opacity .2s ease; }
+/* The three digits share one grid cell, so the tab is as wide as the widest and never jumps. */
+.tv-soon-n { display: inline-grid; justify-items: center; font-variant-numeric: tabular-nums; }
+.tv-soon-n > span { grid-area: 1 / 1; opacity: 0; }
+.trailer-soon .tv-soon-n > span { animation: tvSoonTick 1s cubic-bezier(.3, .7, .4, 1) .2s both; }
+.trailer-soon .tv-soon-n > span:nth-child(2) { animation-delay: 1.2s; }
+.trailer-soon .tv-soon-n > span:nth-child(3) { animation-name: tvSoonLast; animation-delay: 2.2s; }
+@keyframes tvSoonTick {
+  0%       { opacity: 0; transform: translateY(.35em) scale(.6); }
+  14%      { opacity: 1; transform: translateY(-.05em) scale(1.16); }
+  26%      { transform: scale(.95); }
+  36%, 82% { opacity: 1; transform: none; }
+  100%     { opacity: 0; transform: translateY(-.3em) scale(.85); }
+}
+@keyframes tvSoonLast {
+  0%         { opacity: 0; transform: translateY(.35em) scale(.6); }
+  14%        { opacity: 1; transform: translateY(-.05em) scale(1.16); }
+  26%        { transform: scale(.95); }
+  36%, 100%  { opacity: 1; transform: none; }
+}
+/* The callouts make room by the tab's measured width (`--soon-w`, set by TrailerSoon as the count starts;
+   the fallback is the English tab's) and the same .5em gap.
+
+   THEY KEEP THEIR WHOLE WIDTH, as for the badge: they slide further left rather than give any of it up.
+   Giving it up dropped the second of a pair for the length of the count ("Coming Nov 4" stayed, "We
+   think you'll love this" went), and the user chose both callouts staying over the wordmark's margin —
+   on a card with a wide wordmark and two long callouts they can reach under it for these three seconds. */
+.tv-spot-hero.trailer-soon .gl-chips.on-art,
+.tv-hero-stage.trailer-soon .gl-chips.on-art {
+  transform: translateX(calc(-1 * var(--soon-w, 10em) - .5em));
+}
+@media (prefers-reduced-motion: reduce) {
+  .tv-soon, .trailer-soon .tv-soon { transition: none; }
+  .trailer-soon .tv-soon-n > span { animation-name: tvSoonFlat; animation-timing-function: linear; }
+  .trailer-soon .tv-soon-n > span:nth-child(3) { animation-name: tvSoonFlatLast; }
+}
+@keyframes tvSoonFlat { 0%, 99% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes tvSoonFlatLast { 0%, 100% { opacity: 1; } }
+
+/* ---- THE RED-BUTTON GUIDE (TvSoundHint) -------------------------------------------------------------
+   No card: the remote alone — the soft, moulded remote of the user's references (2026-10-26) — standing
+   up from the bottom edge of the screen, which cuts it off, with the words beside it on the page's
+   black. Its red key is pressed every 2.4s: it squashes and springs back, two white rings spread from
+   it, the remote's IR light blinks, and the speaker over the words answers, sound on at one press and
+   off at the next. The red key is the one solid colour on the remote: the others are dark keys with a
+   dim dot, there to say "the coloured row" and no more.
+
+   ONE CLOCK. The red key's press bottoms out at 1.1s and every 2.4s after; the rings, the IR blink and
+   the speaker (a 4.8s on/off pair) all start at 1.1s, so each answer lands on its press. The remote
+   springs up from below the screen's edge, the speaker and the lines a beat behind it — the app's
+   bounce, not a fade. Only transform and opacity move; it is up for a few seconds while the remote is
+   still. */
+.tv-shint {
+  position: fixed; z-index: 40; bottom: 0;
+  width: 32em;
+  font-size: clamp(10px, .83vw, 19px);
+  font-family: var(--font);
+  pointer-events: none;
+}
+
+/* The remote, a size up from the words (its own em is 1.2 of theirs) and long enough to run past the
+   bottom of the screen at any shape of screen. Tilted about its keys, the part that matters. */
+.tv-shint-remote {
+  position: absolute; left: 1em; top: .7em;
+  width: 9.2em; height: 26em;
+  font-size: 1.2em;
+  transform: rotate(-9deg);
+  transform-origin: 50% 20%;
+  animation: tvShintRise .9s both;
+}
+@keyframes tvShintRise {
+  0%   { transform: translateY(22em) rotate(-20deg); animation-timing-function: cubic-bezier(.2, .9, .3, 1); }
+  58%  { transform: translateY(-.45em) rotate(-6deg); animation-timing-function: cubic-bezier(.4, 0, .4, 1); }
+  80%  { transform: translateY(.12em) rotate(-10deg); }
+  100% { transform: rotate(-9deg); }
+}
+.tv-shint-body {
+  position: absolute; inset: 0;
+  padding: 1.1em 1.05em 0;
+  border-radius: 3em 3em 2em 2em;
+  background: linear-gradient(160deg, #3c3c41 0%, #26262a 22%, #19191b 62%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .05),
+    inset 0 .14em .1em rgba(255, 255, 255, .16),
+    inset .1em 0 .2em rgba(255, 255, 255, .05),
+    0 0 2.2em rgba(0, 0, 0, .75);
+  animation: tvShintNudge 2.4s .96s infinite;
+}
+/* The whole remote gives a little under the thumb as the key goes down. */
+@keyframes tvShintNudge {
+  0%        { transform: none; animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
+  6%        { transform: translateY(.16em) rotate(.7deg); animation-timing-function: cubic-bezier(.2, .9, .3, 1.3); }
+  20%       { transform: translateY(-.05em); animation-timing-function: ease-in-out; }
+  30%, 100% { transform: none; }
+}
+.tv-shint-top { display: flex; align-items: center; justify-content: space-between; }
+.tv-shint-btn {
+  display: grid; place-items: center;
+  width: 1.75em; height: 1.75em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 30%, #3d3d42, #1e1e21 70%);
+  box-shadow: 0 .14em .26em rgba(0, 0, 0, .6), inset 0 .06em .04em rgba(255, 255, 255, .14);
+}
+.tv-shint-btn svg {
+  width: .85em; height: .85em;
+  fill: none; stroke: rgba(255, 255, 255, .72); stroke-width: 2.4; stroke-linecap: round;
+}
+.tv-shint-menu { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .13em; }
+.tv-shint-menu b { display: block; width: .6em; height: .1em; border-radius: .1em; background: rgba(255, 255, 255, .65); }
+.tv-shint-ir { display: flex; gap: .26em; }
+.tv-shint-ir i { position: relative; width: .32em; height: .32em; border-radius: 50%; background: rgba(255, 255, 255, .22); }
+.tv-shint-ir i:nth-child(2)::after {
+  content: ''; position: absolute; inset: -.06em;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 .45em #fff;
+  opacity: 0;
+  animation: tvShintBlink 2.4s 1.1s infinite;
+}
+@keyframes tvShintBlink { 0% { opacity: 1; } 14%, 100% { opacity: 0; } }
+
+.tv-shint-keys { display: flex; justify-content: space-between; margin-top: 1.2em; }
+.tv-shint-k {
+  position: relative;
+  width: 1.55em; height: 1.55em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 30%, #3a3a3f, #1c1c1f 70%);
+  box-shadow: 0 .12em .22em rgba(0, 0, 0, .6), inset 0 .05em .04em rgba(255, 255, 255, .14);
+}
+.tv-shint-k::before {
+  content: ''; position: absolute; inset: .52em;
+  border-radius: 50%;
+  background: var(--dot);
+  opacity: .5;
+}
+.tv-shint-k.is-green { --dot: #3ccf6a; }
+.tv-shint-k.is-yellow { --dot: #f2c94c; }
+.tv-shint-k.is-blue { --dot: #4c8df2; }
+.tv-shint-k.is-red {
+  background: radial-gradient(circle at 36% 28%, #ff8a8a 0%, #f23b3b 42%, #b81c1c 100%);
+  box-shadow: 0 .14em .26em rgba(0, 0, 0, .55), inset 0 .07em .05em rgba(255, 255, 255, .45);
+  animation: tvShintPress 2.4s .96s infinite both;
+}
+.tv-shint-k.is-red::before { display: none; }
+/* Down, and a spring back up past where it started — a key pressed by a thumb, not a fade. */
+@keyframes tvShintPress {
+  0%        { transform: none; animation-timing-function: cubic-bezier(.5, 0, .7, .4); }
+  6%        { transform: translateY(.08em) scale(.8); animation-timing-function: cubic-bezier(.2, .9, .3, 1.4); }
+  16%       { transform: translateY(-.03em) scale(1.12); animation-timing-function: ease-in-out; }
+  24%       { transform: scale(.96); }
+  32%, 100% { transform: none; }
+}
+.tv-shint-ring {
+  position: absolute; inset: -.05em;
+  border-radius: 50%;
+  border: .14em solid rgba(255, 255, 255, .85);
+  opacity: 0;
+  animation: tvShintRing 2.4s 1.1s infinite;
+}
+.tv-shint-ring + .tv-shint-ring { animation-delay: 1.24s; }
+@keyframes tvShintRing {
+  0%        { opacity: .9; transform: scale(.9); animation-timing-function: cubic-bezier(.1, .7, .3, 1); }
+  45%, 100% { opacity: 0; transform: scale(2.6); }
+}
+
+.tv-shint-rockers { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 1.3em; }
+.tv-shint-rocker {
+  display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+  width: 1.95em; height: 5em;
+  padding: .35em 0;
+  border-radius: 1.05em;
+  background: linear-gradient(180deg, #303034, #1d1d20);
+  box-shadow: 0 .14em .26em rgba(0, 0, 0, .6), inset 0 .06em .04em rgba(255, 255, 255, .12);
+  font-style: normal; font-size: .9em; font-weight: 500; line-height: 1;
+  color: rgba(255, 255, 255, .55);
+}
+.tv-shint-chev {
+  width: .42em; height: .42em;
+  margin: .15em 0;
+  border: solid currentColor; border-width: .11em .11em 0 0;
+  transform: rotate(-45deg);
+}
+.tv-shint-chev.is-down { transform: rotate(135deg); }
+.tv-shint-home { margin-top: .8em; }
+/* The OK ring under them, half of it below the screen's edge. */
+.tv-shint-pad {
+  display: grid; place-items: center;
+  width: 6.2em; height: 6.2em;
+  margin: 1em auto 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 30%, #2d2d31, #1b1b1e 72%);
+  box-shadow: 0 .16em .3em rgba(0, 0, 0, .6), inset 0 .07em .05em rgba(255, 255, 255, .1);
+}
+.tv-shint-pad b {
+  display: grid; place-items: center;
+  width: 3.2em; height: 3.2em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 30%, #3d3d42, #1e1e21 70%);
+  box-shadow: 0 .14em .26em rgba(0, 0, 0, .6), inset 0 .06em .04em rgba(255, 255, 255, .14);
+  font-size: .85em; font-style: normal; font-weight: 700; color: rgba(255, 255, 255, .55);
+}
+
+/* The speaker, heading the words and answering each press: the cross goes and two waves pop out from
+   the cone, then back. */
+.tv-shint-badge {
+  position: absolute; top: 1.4em; left: 14.6em;
+  display: grid; place-items: center;
+  width: 2.5em; height: 2.5em;
+  border-radius: .7em;
+  background: rgba(255, 255, 255, .07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+  animation: tvShintPop .5s .3s both;
+}
+@keyframes tvShintPop {
+  0%   { opacity: 0; transform: scale(.4); animation-timing-function: cubic-bezier(.2, .9, .3, 1.5); }
+  100% { opacity: 1; transform: none; }
+}
+.tv-shint-spk { width: 1.55em; height: 1.55em; overflow: visible; }
+.tv-shint-cone { fill: #ececf2; }
+.tv-shint-x path, .tv-shint-w1, .tv-shint-w2 { fill: none; stroke-width: 2.1; stroke-linecap: round; }
+.tv-shint-x path { stroke: #ec1a74; }
+.tv-shint-w1, .tv-shint-w2 { stroke: #ececf2; }
+.tv-shint-x, .tv-shint-w1, .tv-shint-w2 { transform-box: fill-box; }
+.tv-shint-x { transform-origin: center; animation: tvShintX 4.8s 1.1s infinite both; }
+.tv-shint-w1, .tv-shint-w2 { transform-origin: left center; opacity: 0; animation: tvShintWave 4.8s 1.1s infinite both; }
+.tv-shint-w2 { animation-name: tvShintWave2; }
+@keyframes tvShintX {
+  0%        { opacity: 1; transform: none; animation-timing-function: ease-in; }
+  5%        { opacity: 0; transform: scale(.2) rotate(45deg); }
+  50%       { opacity: 0; transform: scale(.2) rotate(45deg); animation-timing-function: cubic-bezier(.2, .9, .3, 1.5); }
+  58%, 100% { opacity: 1; transform: none; }
+}
+@keyframes tvShintWave {
+  0%        { opacity: 0; transform: scale(.3); animation-timing-function: cubic-bezier(.2, .9, .3, 1.5); }
+  8%        { opacity: 1; transform: none; }
+  48%       { opacity: 1; transform: none; animation-timing-function: ease-in; }
+  53%, 100% { opacity: 0; transform: scale(.3); }
+}
+@keyframes tvShintWave2 {
+  0%, 3%    { opacity: 0; transform: scale(.3); animation-timing-function: cubic-bezier(.2, .9, .3, 1.5); }
+  11%       { opacity: 1; transform: none; }
+  47%       { opacity: 1; transform: none; animation-timing-function: ease-in; }
+  52%, 100% { opacity: 0; transform: scale(.3); }
+}
+
+/* The words, their title level with the red key on the remote. */
+.tv-shint-copy {
+  position: absolute; left: 14.6em; right: 0; top: 4.8em;
+  color: #fff;
+}
+.tv-shint-teach { display: flex; flex-direction: column; align-items: flex-start; gap: .5em; }
+.tv-shint-teach > * { animation: tvShintLine .5s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes tvShintLine {
+  0%   { opacity: 0; transform: translateY(.7em); }
+  100% { opacity: 1; transform: none; }
+}
+.tv-shint-kicker {
+  font-size: .74em; font-weight: 700; letter-spacing: .2em; text-transform: uppercase;
+  color: rgba(255, 255, 255, .5);
+  animation-delay: .26s;
+}
+.tv-shint-title { font-size: 1.5em; font-weight: 700; line-height: 1.2; animation-delay: .34s; }
+.tv-shint-sub { font-size: .95em; font-weight: 500; color: rgba(255, 255, 255, .6); animation-delay: .42s; }
+/* The red key, in the sentence — pressed on the remote's clock. */
+.tv-shint-key {
+  display: inline-block; vertical-align: -.12em;
+  width: 1.5em; height: .95em;
+  margin: 0 .28em;
+  border-radius: .3em;
+  background: radial-gradient(circle at 36% 28%, #ff8a8a 0%, #f23b3b 42%, #b81c1c 100%);
+  box-shadow: inset 0 .06em .04em rgba(255, 255, 255, .45), 0 .08em .16em rgba(0, 0, 0, .5);
+  animation: tvShintPress 2.4s .96s infinite both;
+}
+
+/* RED REALLY PRESSED: the lesson goes up and away, the answer pops in where it was, the speaker shows
+   what the sound now is and the demo stops pressing. */
+.tv-shint.is-done .tv-shint-teach { animation: tvShintAway .26s cubic-bezier(.4, 0, .6, 1) both; }
+@keyframes tvShintAway { to { opacity: 0; transform: translateY(-.6em); } }
+.tv-shint-done {
+  position: absolute; left: 0; right: 0; top: 50%;
+  margin-top: -.6em;
+  font-size: 2em; font-weight: 800; line-height: 1.2;
+  animation: tvShintDone .55s .22s both;
+}
+@keyframes tvShintDone {
+  0%        { opacity: 0; transform: translateY(.5em) scale(.7); animation-timing-function: cubic-bezier(.2, .9, .3, 1.4); }
+  60%, 100% { opacity: 1; transform: none; }
+}
+.tv-shint.is-done .tv-shint-k.is-red,
+.tv-shint.is-done .tv-shint-key,
+.tv-shint.is-done .tv-shint-ring,
+.tv-shint.is-done .tv-shint-ir i::after { animation: none; }
+.tv-shint.is-done .tv-shint-badge { animation: tvShintBump .5s cubic-bezier(.2, .9, .3, 1.4) both; }
+@keyframes tvShintBump { 0% { transform: none; } 40% { transform: scale(1.25); } 100% { transform: none; } }
+.tv-shint.is-on .tv-shint-x,
+.tv-shint.is-off .tv-shint-w1,
+.tv-shint.is-off .tv-shint-w2 { animation: tvShintGo .18s both; }
+.tv-shint.is-on .tv-shint-w1,
+.tv-shint.is-on .tv-shint-w2,
+.tv-shint.is-off .tv-shint-x { animation: tvShintCome .45s cubic-bezier(.2, .9, .3, 1.5) both; }
+.tv-shint.is-on .tv-shint-w2 { animation-delay: .07s; }
+@keyframes tvShintGo { to { opacity: 0; transform: scale(.3); } }
+@keyframes tvShintCome { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: none; } }
+
+/* Going: the remote ducks back down below the screen's edge, the words fade after it. */
+.tv-shint.is-out .tv-shint-remote { animation: tvShintSink .3s both; }
+@keyframes tvShintSink {
+  0%   { transform: rotate(-9deg); animation-timing-function: cubic-bezier(.3, 0, .5, 1); }
+  22%  { transform: translateY(-.35em) rotate(-8deg); animation-timing-function: cubic-bezier(.5, 0, .9, .4); }
+  100% { transform: translateY(22em) rotate(-16deg); }
+}
+.tv-shint.is-out .tv-shint-copy,
+.tv-shint.is-out .tv-shint-badge { animation: tvShintOut .3s cubic-bezier(.4, 0, .7, .2) both; }
+@keyframes tvShintOut {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateY(.8em) scale(.92); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-shint * { animation: none !important; }
+  .tv-shint.is-on .tv-shint-x, .tv-shint.is-done .tv-shint-teach { opacity: 0; }
+  .tv-shint.is-on .tv-shint-w1, .tv-shint.is-on .tv-shint-w2 { opacity: 1; }
 }
 
 /* ---- RESUME PROGRESS (Continue Watching) --------------------------------------------------

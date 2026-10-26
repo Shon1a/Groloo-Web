@@ -5,6 +5,8 @@ import { imgW, artW, artPosition } from '../lib/img';
 import { heroBgPosition, heroFallbackGradient } from '../lib/hero';
 import { tvRowCards } from '../lib/tvRowSize';
 import { useVideoTrailer, INTRO_SKIP } from './DetailModal/useVideoTrailer';
+import TrailerSoon, { TRAILER_SOON_MS } from './TrailerSoon';
+import { previewOnScreen } from '../lib/tvSoundHint';
 import { useMeta, useMetaMany, usePrefetchMeta, useImdbTrailer, usePrefetchImdbTrailer, useAwards, useWarmDetail, apiIdOf } from '../lib/queries';
 import { useGlanceResolver } from './glance/useGlance';
 import { GlanceIcon } from './glance/GlanceIcons';
@@ -1421,6 +1423,10 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
       /* Sound is the store's, not the engine's — see previewSound.ts. The engine still starts
        * every file muted for the autoplay policy and applies this the moment it is playing. */
       sound: soundOn,
+      // "Trailer starts in 3, 2, 1" beside the callouts, then the trailer (TrailerSoon).
+      holdMs: TRAILER_SOON_MS,
+      // A new viewer is shown what red does, beside the playing trailer (TvSoundHint).
+      onShown: (on) => previewOnScreen(heroBtnRef.current, on),
     },
   );
 
@@ -2807,6 +2813,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
               <span className="tv-spot-sound" aria-hidden="true">
                 {soundOn ? IcSoundOn : IcSoundOff}
               </span>
+              {/* Where the badge will be, before the trailer plays: "Trailer starts in 3, 2, 1". */}
+              <TrailerSoon className="tv-spot-soon" />
             </div>
           </div>
           {/* THE POSTER THE CLOSED ROW SHOWS — the picture and wordmark the strip's tile would show for

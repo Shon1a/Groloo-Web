@@ -191,6 +191,15 @@ const SEED: Record<string, string> = {
   'tv.resume': 'Resume',
   'tv.official_trailer': 'Official Trailer',
   'tv.watch_trailer': 'Watch the trailer: {title}',
+  // The tab beside a TV card's callouts before its preview plays; {n} is the digit counting 3, 2, 1.
+  'tv.trailer_soon': 'Trailer starts in {n}',
+  // The red-button guide beside a playing billboard trailer; {key} is drawn as the remote's red key.
+  'tv.sound_hint_kicker': 'Trailer sound',
+  'tv.sound_hint_title': 'Press {key} for sound',
+  'tv.sound_hint_sub': 'Press it again to mute',
+  'tv.sound_hint_on': 'Sound on',
+  'tv.sound_hint_off': 'Sound off',
+  'tv.red_button': 'the red button',
   'tv.more_like_this': 'More Like This',
   // The title screen's menu and its pages (Netflix's "Episodes & More" layout).
   'tv.episodes_more': 'Episodes & More',

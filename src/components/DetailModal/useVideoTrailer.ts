@@ -255,6 +255,13 @@ export interface VideoTrailerOptions {
   /** A new value starts the trailer over even when `src` is the same string — post-play hands the
    *  stage from one title to the next, and two titles can share a trailer file. */
   restartKey?: string;
+  /** Hold the start back this many ms from the element's mount — the TV's "Trailer starts in 3, 2, 1"
+   *  (TrailerSoon). The file loads meanwhile but does not play, and `trailer-soon` sits on the hero
+   *  from the mount until the reveal. */
+  holdMs?: number;
+  /** Told `true` at the reveal and `false` when a revealed trailer goes — the TV's red-button guide
+   *  (lib/tvSoundHint.ts) hangs off it. */
+  onShown?: (shown: boolean) => void;
 }
 
 /* ---- A VOLUME RAMP -------------------------------------------------------------------------------
@@ -296,6 +303,7 @@ export function useVideoTrailer(
   const restartKey = opts?.restartKey;
   const revealAt = opts?.revealAt ?? REVEAL_AT;
   const startAt = opts?.startAt ?? 0;
+  const holdMs = opts?.holdMs ?? 0;
   const [muted, setMuted] = useState(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const muteFnRef = useRef<((m: boolean) => void) | null>(null);
@@ -305,6 +313,8 @@ export function useVideoTrailer(
   titleRef.current = title;
   const onFailRef = useRef(opts?.onFail);
   onFailRef.current = opts?.onFail;
+  const onShownRef = useRef(opts?.onShown);
+  onShownRef.current = opts?.onShown;
   /* Held in a ref, not read from `opts` inside the effect: the renditions arrive in a fresh
    * object on every render, and the effect deliberately runs only when `src` changes (anything
    * else would restart the video). The ref keeps the two in step without widening the deps. */
@@ -337,7 +347,7 @@ export function useVideoTrailer(
     // the intent, which `start` applies once the file is actually running.
     setMuted(!soundRef.current);
     muteFnRef.current = null;
-    hero?.classList.remove('has-trailer');
+    hero?.classList.remove('has-trailer', 'trailer-soon');
     videoRef.current = null;
     if (!src || !slot) return;
 
@@ -349,6 +359,7 @@ export function useVideoTrailer(
 
     let el: HTMLVideoElement | null = null;
     let revealTimer = 0;
+    let holdTimer = 0;
     let done = false;   // teardown is reachable from several events; only run it once
 
     /* Set when this mount is using the ONE shared element rather than one of its own. Read by both
@@ -410,8 +421,12 @@ export function useVideoTrailer(
       if (!usedShared) {
         v.muted = true; v.defaultMuted = true; v.setAttribute('muted', '');
         v.playsInline = true; v.setAttribute('playsinline', '');
-        v.autoplay = true;
       }
+      /* THE COUNTDOWN (`holdMs`): the file loads from here but plays only once the hold is up — an
+       * autoplaying element would start under the count. Set on the shared element too, every time. */
+      v.autoplay = !holdMs;
+      const playAt = performance.now() + holdMs;
+      if (holdMs) hero?.classList.add('trailer-soon');
       /* 'metadata' ONLY FOR A SEEK DEEP ENOUGH TO WASTE IT. `auto` starts pulling the file from
        * byte one the moment the src is set; when we are about to jump a third of the way in, all
        * of that is thrown away, so fetching the index first and letting the seek issue the range
@@ -484,6 +499,7 @@ export function useVideoTrailer(
         if (revealTimer) { window.clearTimeout(revealTimer); revealTimer = 0; }
         if (videoRef.current !== v) return;
         v.classList.add('on');
+        hero?.classList.remove('trailer-soon');
         hero?.classList.add('has-trailer');
         /* SOUND ARRIVES WITH THE PICTURE, and this line is the whole of that. It used to be
          * applied the moment play() resolved, which is seconds earlier: the reveal deliberately
@@ -495,6 +511,7 @@ export function useVideoTrailer(
           v.muted = false;
           rampVolume(v, 1, fadeSoundRef.current);
         } else muteFnRef.current?.(!soundRef.current);
+        onShownRef.current?.(true);
       };
 
       /* Played through once, then gone — the same rule as the embed. A row left resting must not
@@ -504,6 +521,7 @@ export function useVideoTrailer(
         done = true;
         stopWatch();
         if (revealTimer) { window.clearTimeout(revealTimer); revealTimer = 0; }
+        if (holdTimer) { window.clearTimeout(holdTimer); holdTimer = 0; }
         v.removeEventListener('timeupdate', onTime);
         v.removeEventListener('seeking', onSeeking);
         v.removeEventListener('ended', teardown);
@@ -522,7 +540,8 @@ export function useVideoTrailer(
           v.remove();
         }
         if (videoRef.current === v) videoRef.current = null;
-        hero?.classList.remove('has-trailer');
+        hero?.classList.remove('has-trailer', 'trailer-soon');
+        if (revealed.current) onShownRef.current?.(false);
       };
 
       function fail() {
@@ -623,13 +642,21 @@ export function useVideoTrailer(
         // ancient policy); treat a rejection as this engine failing rather than a dead billboard.
         // Muted autoplay is permitted everywhere, but a set can still refuse; a rejection is this
         // engine failing. Sound is NOT applied here — it waits for the reveal, see `show`.
-        const p = v.play();
-        if (p && typeof p.catch === 'function') p.catch(() => fail());
+        const play = () => {
+          holdTimer = 0;
+          if (done) return;
+          const p = v.play();
+          if (p && typeof p.catch === 'function') p.catch(() => fail());
+        };
+        // Seeked already, so the countdown is spent buffering the second the preview opens on.
+        const wait = playAt - performance.now();
+        if (wait > 0) holdTimer = window.setTimeout(play, wait);
+        else play();
       };
       if (v.readyState >= 1) start();
       else v.addEventListener('loadedmetadata', start, { once: true });
 
-      revealTimer = window.setTimeout(show, REVEAL_FALLBACK);
+      revealTimer = window.setTimeout(show, holdMs + REVEAL_FALLBACK);
     }, mountDelay);
 
     return () => {
@@ -641,6 +668,7 @@ export function useVideoTrailer(
       done = true;
       window.clearTimeout(mountTimer);
       if (revealTimer) window.clearTimeout(revealTimer);
+      if (holdTimer) window.clearTimeout(holdTimer);
       resizeObs?.disconnect(); resizeObs = null;
       if (el) {
         /* SPLIT IN TWO, AND THE SPLIT IS THE POINT. This cleanup runs inside the React commit for
@@ -668,7 +696,8 @@ export function useVideoTrailer(
         }
       }
       videoRef.current = null;
-      hero?.classList.remove('has-trailer');
+      hero?.classList.remove('has-trailer', 'trailer-soon');
+      if (revealed.current) onShownRef.current?.(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, restartKey]);
