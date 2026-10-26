@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useHome } from '../../lib/queries';
-import { markShown, wake } from '../../lib/idle';
+import { markShown, setWakeOk, wake } from '../../lib/idle';
 import { registerBackHandler, BACK_LAYER } from '../../lib/tvKeys';
-import SlideShow from './SlideShow';
+import { openItem, useModal } from '../../stores/modal';
+import { usePlayer } from '../../stores/player';
+import SlideShow, { type SlidesApi } from './SlideShow';
 import { slideArt, warmPicture } from './slideArt';
 import { useMoreList, type SpotItem } from './spotData';
 
@@ -64,6 +66,21 @@ export default function IdleSlideshow({ leaving }: { leaving: boolean }) {
     return registerBackHandler(() => { wake(); return true; }, BACK_LAYER.screensaver);
   }, [up, leaving]);
 
+  /* OK opens the title on screen as it wakes it — the way OK on post-play's slideshow does, closing a
+   * film paused under the screensaver the same way. */
+  const slides = useRef<SlidesApi | null>(null);
+  const onSlidesApi = useCallback((api: SlidesApi | null) => { slides.current = api; }, []);
+  useEffect(() => {
+    if (!up || leaving) return;
+    setWakeOk(() => {
+      const it = slides.current?.current();
+      if (!it) return;
+      useModal.getState().open(openItem(it));
+      usePlayer.getState().close();
+    });
+    return () => setWakeOk(null);
+  }, [up, leaving]);
+
   // A wheel over the slideshow must not scroll the page behind it while it fades away.
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -78,7 +95,7 @@ export default function IdleSlideshow({ leaving }: { leaving: boolean }) {
     <div ref={rootRef} className={`idle-show pp-host${up ? (leaving ? ' is-leaving' : ' is-on') : ''}`} aria-hidden="true">
       {list && pictured && (
         <div className={`pp-root${IS_TV ? ' tv' : ' web'}`}>
-          <SlideShow items={list} held={false} />
+          <SlideShow items={list} held={false} onApi={onSlidesApi} />
         </div>
       )}
     </div>

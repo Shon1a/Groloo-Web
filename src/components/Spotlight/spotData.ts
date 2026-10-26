@@ -17,9 +17,9 @@ import type { Airing, MediaItem, MetaDetail } from '../../lib/types';
  *           and been shown ten more thrillers has seen the point already. Artwork only, so one
  *           /api/cards request dresses all of them.
  *
- * Titles with a trailer go first: the stage is a trailer stage, and a title without one is a still
- * picture where the viewer was promised motion. A title with none still takes a place when there
- * are not ten that do. */
+ * Only titles with a trailer: the stage is a trailer stage, and a title without one is a still
+ * picture where the viewer was promised motion (the user, Oct 26: "there are movies or series which
+ * don't have trailer" — they used to fill the places the trailers left). */
 
 export interface SpotItem extends MediaItem {
   trailer?: ImdbTrailer | null;
@@ -36,10 +36,10 @@ export interface SpotItem extends MediaItem {
   creators?: string[];
 }
 
-/* Ten trailers, from twenty candidates: some titles have no trailer, and those go to the back; some
- * have only a poor one, and those are left out (`sharpTrailer`). */
+/* Ten trailers, from twenty-four candidates: some titles have no trailer, and some only a poor one
+ * (`sharpTrailer`), and both are left out — half of a film's recommendations, for an older film. */
 const SPOT = 10;
-const CANDIDATES = 20;
+const CANDIDATES = 24;
 /** The year trailers started to be made in HD — see `sharpTrailer`. */
 const HD_TRAILERS_FROM = 2005;
 const MORE = 16;
@@ -102,7 +102,7 @@ function useSettled(ready: boolean, key: string): boolean {
   return ready || late;
 }
 
-/** Candidates in, ten described and trailer-resolved titles out (trailers first). */
+/** Candidates in, up to ten described titles with a trailer out. */
 export function useSpotList(cands: MediaItem[], enabled: boolean): { spot: SpotItem[]; settled: boolean } {
   /* De-duplicated before it reaches useQueries, which warns (and double-subscribes) on repeated
    * keys — two candidates can share an id, and every title without an IMDb id shares `undefined`. */
@@ -125,9 +125,7 @@ export function useSpotList(cands: MediaItem[], enabled: boolean): { spot: SpotI
   const spot = useMemo(() => {
     if (!settled) return [];
     const all = list.map((c, i) => describe(c, metas[i]?.data, trailerOf(imdbs[i])?.data));
-    const withT = all.filter((s) => s.trailer?.url && sharpTrailer(s.trailer, s.year));
-    const without = all.filter((s) => !s.trailer?.url && (s.backdrop || s.poster));
-    return [...withT, ...without].slice(0, SPOT);
+    return all.filter((s) => s.trailer?.url && sharpTrailer(s.trailer, s.year)).slice(0, SPOT);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settled, key, stamp]);
   return { spot, settled };
@@ -195,15 +193,17 @@ export function usePostPlayData(media: { id: string | number; type?: string; imd
   const recs = useMemo(() => (finished?.recommendations || []) as MediaItem[], [finished]);
   const { picks } = usePicks(12, true);
   const home = useHomeCached();
-  /* Recommendations first. A title TMDB has none for (a new release, an add-on's own title) still
-   * gets a post-play — built from the viewer's picks, then from what is popular this week. */
+  /* Recommendations first, then the viewer's picks, then what is popular this week — ALWAYS topped up
+   * to the candidates, not only when TMDB has fewer than ten: twelve recommendations for Inception left
+   * six with a trailer good enough to show. A title TMDB has none for (a new release, an add-on's own
+   * title) gets a post-play from the other two. */
   const cands = useMemo(() => {
     const out: MediaItem[] = [];
     const seen = new Set<string>(media ? [keyOf({ id: apiId ?? media.id, type: media.type })] : []);
     const add = (m: MediaItem) => { const k = keyOf(m); if (!seen.has(k)) { seen.add(k); out.push(m); } };
     recs.forEach(add);
-    if (out.length < SPOT) picks.forEach((p) => add(p.item));
-    if (out.length < SPOT) homePool(home).slice(0, 12).forEach(add);
+    if (out.length < CANDIDATES) picks.forEach((p) => add(p.item));
+    if (out.length < CANDIDATES) homePool(home).slice(0, 12).forEach(add);
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recs, picks.length, home, apiId]);

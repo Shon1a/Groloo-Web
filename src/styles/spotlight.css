@@ -17,6 +17,12 @@
   .vp-overlay.pp-on .vp-gestures,.vp-overlay.pp-on .vp-silent,.vp-overlay.pp-on .vp-eprail{display:none!important}
   .vp-overlay.pp-on{cursor:default}
 
+  /* NOTHING UNDER IT IS DRAWN. The app's page stays rendered under the player — its rows, their layers —
+     and every frame a press makes here paid for it as well (measured: 219 → 167ms a press at 6x with it
+     hidden). Visibility rather than display or content-visibility: the page keeps its layout and its
+     scroll, and comes back as it was. SpotlightStage puts `pp-up` on <html> while it is up. */
+  html.pp-up .shell{visibility:hidden}
+
   /* ---- THE ROOT: a black page over the paused film ------------------------------------------ */
   .pp-root{position:absolute;inset:0;z-index:5;overflow:hidden;background:#000;font-family:var(--font);color:#fff;
     animation:ppFade .45s ease both}
@@ -44,6 +50,10 @@
   .pp-stage-art.on{opacity:1;animation:ppPush 26s linear both}
   /* The slow push-in a still picture gets — it is what keeps a screen with no trailer alive. */
   @keyframes ppPush{from{transform:scale(1)}to{transform:scale(1.08)}}
+  /* The remote's move over a picture (SpotlightStage `under`): the new one fades in over the old at the
+     pace it fades in over a trailer (SWITCH_FADE_MS), the old held fully up beneath it, still pushing in. */
+  .pp-stage-art.on.is-cut{animation:ppFade .35s ease,ppPush 26s linear both}
+  .pp-stage-art.under{z-index:-1;opacity:1;transition:none;animation:ppPush 26s linear both}
   /* …and holds where it is once a trailer covers it: the picture is invisible, and a layer scaling
      under the video was a second picture moving for nobody. */
   .pp-stage.has-trailer .pp-stage-art{opacity:0;transition-duration:1s;animation-play-state:paused}
@@ -129,13 +139,18 @@
   .pp-thumbs.is-here .pp-thumb.sel .pp-tip,.pp-root.web .pp-thumb:hover .pp-tip{opacity:1;transform:translate(-50%,0) scale(1)}
   .pp-root.web .pp-thumb:hover{background:rgba(255,255,255,.12)}
 
-  /* ---- THE POSTERS: one row along the foot, running off the right of the screen --------------
+  /* ---- THE POSTERS: one row along the foot, as wide as the margins leave -------------------------
      The search page's tiles (tv.css `.tv-sg-tile`): portrait art at 0.7 with the wordmark at its foot,
-     and one white box for the whole row, gliding to the poster the remote is on. The row slides along
-     under the remote (SpotlightStage writes its transform). Box and slide run on the search page's
-     clock, 480ms on (.25,.7,.5,1), so a move that slides lands the box and its poster together. */
+     and one white box for the whole row, gliding to the poster the remote is on. CUT TO FIT (the user,
+     Oct 26: "fill row to end of screen right side, should be symmetrical"): the posters share the
+     89.6u between a left margin and an equal right one, `--pp-n` of them (SpotlightStage: one per title,
+     never fewer than eight places — fewer would stand taller than the room under the words). A row with
+     more than fits slides along under the remote (SpotlightStage writes its transform). Box and slide run
+     on the search page's clock, 480ms on (.25,.7,.5,1), so a move that slides lands the box and its
+     poster together. */
   .pp-rowwrap{position:absolute;z-index:2;left:calc(var(--ppx) + 5.2*var(--u));right:0;bottom:calc(var(--ppy) + 3*var(--u));
-    --pp-tw:calc(8.6*var(--u));--pp-th:calc(12.29*var(--u));--pp-gap:calc(1*var(--u));--pp-ring:max(3px,calc(.19*var(--u)));
+    --pp-gap:calc(1*var(--u));--pp-tw:calc((89.6*var(--u) - (var(--pp-n,9) - 1)*var(--pp-gap))/var(--pp-n,9));
+    --pp-th:calc(var(--pp-tw)/.7);--pp-ring:max(3px,calc(.19*var(--u)));
     animation:ppRise .8s var(--pp-ease) .3s backwards}
   .pp-rowlabel{margin-bottom:calc(.8*var(--u));font-size:calc(max(12px,1.2*var(--u)));font-weight:700;letter-spacing:.01em;
     color:rgba(255,255,255,.92)}
