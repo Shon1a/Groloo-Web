@@ -57,6 +57,7 @@ import VideoPlayerGate from './components/VideoPlayer/VideoPlayerGate';
 import IdleSlideshowGate from './components/Spotlight/IdleSlideshowGate';
 import AuthModal from './components/AuthModal';
 import TvAuthModal from './components/TvAuthModal';
+import TvSoundHint from './components/TvSoundHint';
 import LinkTvModal from './components/LinkTvModal';
 import ReportModal from './components/ReportModal';
 
@@ -182,6 +183,8 @@ export default function App() {
           last, it would swallow every click meant for the sign-in form in front of it. */}
       {!IS_TV && <LinkTvModal />}
       {IS_TV ? <TvAuthModal /> : <AuthModal />}
+      {/* The red-button guide beside a new viewer's first billboard trailers (lib/tvSoundHint.ts). */}
+      {IS_TV && <TvSoundHint />}
       {/* The screensaver: over everything above (its own z-index, so its place here is not one of
           the DOM-order constraints described there), after ten idle minutes. */}
       <IdleSlideshowGate />
