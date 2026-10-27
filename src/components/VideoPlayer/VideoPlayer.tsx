@@ -94,7 +94,8 @@ const NO_LANG = ['', 'und', 'mul', 'zxx', 'mis'];
 function audioName(a: { name?: string; lang?: string; label?: string; language?: string }, _i: number): string {
   const tag = (a.lang || a.language || '').toLowerCase().replace(/_/g, '-').split('-')[0].trim();
   const code = NO_LANG.includes(tag) ? '' : normalizeSubLang(tag).code;
-  const own = (a.name || a.label || '').trim();
+  // rips number their tracks ("[1] Catalan", "1. German"); the number tells the viewer nothing
+  const own = (a.name || a.label || '').trim().replace(/^(\[\d+\]|\(\d+\)|#?\d+[.)]?)\s+/, '');
   if (own && !NO_LANG.includes(own.toLowerCase()) && own.toLowerCase() !== tag && !/^audio ?\d*$/i.test(own)) return own;
   return code ? langName(code) : '';
 }
