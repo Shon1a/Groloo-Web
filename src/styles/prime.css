@@ -72,8 +72,8 @@ body.pv-page .tv-det-art::after {
    OK leaves the picture where it is. The title screen draws the same picture in the same box with
    the same fade, and fades it in (200ms) over this page's — the same pixels, so nothing changes there
    but the rows and the panel giving way. The black around it is cut around the box: black under the
-   box too would dim the picture mid-fade. While the screen loads, this page stays in view: the
-   spinner comes only if that takes longer than 400ms. */
+   box too would dim the picture mid-fade. While the screen loads, this page stays in view, with no
+   spinner however long that takes (the user's call, Oct 29) — the page takes no keys meanwhile. */
 body.pv-page .tv-det:not([data-parked]) { background: transparent; }
 body.pv-page .tv-det:not([data-parked])::before {
   content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
@@ -83,7 +83,7 @@ body.pv-page .tv-det:not([data-parked])::before {
   animation: pvTitleIn 200ms linear both;
 }
 body.pv-page .tv-det:has(> .m-load-veil)::before { display: none; }
-body.pv-page .tv-det .m-load-veil { background: transparent; animation: pvTitleIn 200ms linear 400ms both; }
+body.pv-page .tv-det .m-load-veil { display: none; }
 body.pv-page .tv-det-art {
   left: calc(620 * 100vw / 1920); right: auto;
   width: calc(1300 * 100vw / 1920); height: calc(731 * 100vw / 1920);
