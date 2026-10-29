@@ -1,0 +1,203 @@
+/* PRIME TEST page (routes/PrimeTest.tsx). Every size is a TV pixel at 1920x1080, measured off the
+   reference capture, times --p (the page sets it from the viewport). Colours are the reference's,
+   sampled from the same frames, and scoped to this page. */
+
+.pv {
+  --bg: rgb(0, 2, 11);
+  --bg0: rgba(0, 2, 11, 0);
+  --green: rgb(121, 236, 190);
+  position: relative;
+  height: 100vh;
+  margin-top: calc(var(--tv-topbar-pad, 0px) * -1);
+  overflow: hidden;
+  background: var(--bg);
+  color: #fff;
+  outline: none;
+}
+
+/* The bar is gone in the frame the remote leaves the billboard, and fades back over the 200ms move up. */
+body.pv-page .tv-topnav { transition: opacity 200ms linear; }
+body.pv-rows .tv-topnav { opacity: 0; transition: none; }
+
+/* ---- the background ---- */
+.pv-hero-art, .pv-row-art { position: absolute; overflow: hidden; will-change: opacity; }
+.pv-hero-art { inset: 0; }
+.pv-row-art {
+  left: calc(620 * var(--p)); top: 0;
+  width: calc(1300 * var(--p)); height: calc(731 * var(--p));
+  opacity: 0;
+}
+.pv-hero-art img, .pv-row-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+.pv-row-art img:not([src]) { display: none; }
+.pv-hero-art::after, .pv-row-art::after { content: ''; position: absolute; inset: 0; }
+.pv-hero-art::after {
+  background:
+    linear-gradient(90deg, rgba(0, 2, 11, .85) 0%, rgba(0, 2, 11, .55) 30%, var(--bg0) 60%),
+    linear-gradient(0deg, var(--bg) 0%, var(--bg0) 28%),
+    rgba(0, 2, 11, .4);
+}
+.pv-row-art::after {
+  background:
+    linear-gradient(90deg, var(--bg) 8%, var(--bg0) 38%),
+    linear-gradient(0deg, var(--bg) 0%, var(--bg0) 32%);
+}
+
+/* ---- the billboard copy ---- */
+.pv-hero-copy {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: flex-start;
+  padding: calc(362 * var(--p)) 0 0 calc(140 * var(--p));
+  transition: transform 200ms linear, opacity 200ms linear;
+  will-change: transform, opacity;
+}
+.pv.is-rows .pv-hero-copy { opacity: 0; transition: transform 200ms linear, opacity 100ms linear; }
+
+.pv-logo-box { display: flex; align-items: flex-end; width: calc(500 * var(--p)); height: calc(75 * var(--p)); }
+.pv-logo { max-width: 100%; max-height: 100%; object-fit: contain; object-position: left bottom; }
+.pv-logo-text { font-size: calc(56 * var(--p)); font-weight: 800; line-height: 1; }
+
+.pv-status { margin: 0; font-size: calc(24 * var(--p)); line-height: calc(28 * var(--p)); font-weight: 700; color: var(--green); }
+.pv-hero-copy .pv-status { margin-top: calc(30 * var(--p)); }
+.pv-hero-synopsis {
+  margin: calc(19 * var(--p)) 0 0; width: calc(700 * var(--p));
+  font-size: calc(24 * var(--p)); line-height: calc(37 * var(--p));
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+
+.pv-btn {
+  display: flex; align-items: center; gap: calc(12 * var(--p));
+  box-sizing: border-box; width: calc(240 * var(--p)); height: calc(55 * var(--p)); padding: 0 calc(18 * var(--p));
+  border-radius: calc(7 * var(--p));
+  font-size: calc(24 * var(--p)); line-height: calc(28 * var(--p)); white-space: nowrap;
+}
+.pv-btn svg { flex: none; width: calc(26 * var(--p)); height: calc(26 * var(--p)); fill: none; stroke: currentColor; stroke-width: 2; }
+.pv-btn-more { margin-top: calc(22 * var(--p)); border: calc(2 * var(--p)) solid rgba(255, 255, 255, .16); }
+.pv-btn-play { margin-top: calc(14 * var(--p)); background: rgba(255, 255, 255, .19); }
+.pv-btn-play.is-two { height: calc(85 * var(--p)); }
+.pv-btn-play svg { fill: currentColor; stroke: none; }
+.pv:focus[data-btn="0"] .pv-btn-more,
+.pv:focus[data-btn="1"] .pv-btn-play { background: rgb(243, 240, 244); border-color: rgb(243, 240, 244); color: rgb(15, 23, 30); }
+
+.pv-check { display: flex; align-items: center; gap: calc(10 * var(--p)); font-size: calc(19 * var(--p)); line-height: calc(24 * var(--p)); }
+.pv-hero-copy .pv-check { margin-top: calc(23 * var(--p)); }
+.pv-check svg { width: calc(19 * var(--p)); height: calc(19 * var(--p)); }
+.pv-check circle { fill: rgb(26, 152, 255); }
+.pv-check path { fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.pv-badge {
+  position: absolute; left: calc(1748 * var(--p)); top: calc(774 * var(--p));
+  height: calc(35 * var(--p)); padding: 0 calc(10 * var(--p));
+  display: flex; align-items: center;
+  border-radius: calc(6 * var(--p)); background: rgba(255, 255, 255, .14);
+  font-size: calc(19 * var(--p)); font-weight: 700;
+}
+
+/* ---- the focused title's panel (bottom-anchored: the line under the synopsis stays put) ---- */
+.pv-info {
+  position: absolute; left: calc(140 * var(--p)); bottom: calc(601 * var(--p)); width: calc(900 * var(--p));
+  display: flex; flex-direction: column; align-items: flex-start;
+  opacity: 0;
+  will-change: opacity, transform;
+}
+.pv-title {
+  margin: 0; max-width: 100%;
+  font-size: calc(48 * var(--p)); line-height: calc(56 * var(--p)); font-weight: 700;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.pv-info .pv-status { margin-top: calc(4 * var(--p)); }
+.pv-meta {
+  display: flex; align-items: center; gap: calc(22 * var(--p));
+  margin: calc(18 * var(--p)) 0 0;
+  font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p)); color: rgba(255, 255, 255, .85);
+}
+.pv-meta > span:empty { display: none; }
+.pv-stars { display: flex; gap: calc(4 * var(--p)); font-size: calc(22 * var(--p)); }
+.pv-stars i { font-style: normal; color: rgba(255, 255, 255, .3); }
+.pv-stars i.on { color: #fff; }
+.pv-stars i.half { background: linear-gradient(90deg, #fff 50%, rgba(255, 255, 255, .3) 50%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.pv-synopsis {
+  margin: calc(19 * var(--p)) 0 0; width: calc(820 * var(--p));
+  font-size: calc(24 * var(--p)); line-height: calc(31 * var(--p)); color: rgba(255, 255, 255, .92);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.pv-info .pv-check { margin-top: calc(25 * var(--p)); }
+
+/* ---- rows ---- */
+.pv-track {
+  position: absolute; left: 0; right: 0; top: 0;
+  transition: transform 200ms linear;
+  will-change: transform;
+}
+.pv-row { height: calc(283 * var(--p)); }
+.pv-row.is-poster { height: calc(642 * var(--p)); }
+.pv-row.is-top10 { height: calc(256 * var(--p)); }
+/* A row is dimmed through its title and its strip, each a layer of its own, never through the row:
+   an opacity over two layers is drawn into an offscreen surface first, every frame of every move. */
+.pv-row.is-dim > * { opacity: .5; }
+.pv-row.is-gone > * { opacity: 0; }
+.pv-row-title {
+  box-sizing: border-box; height: calc(45 * var(--p)); margin: 0; padding-left: calc(140 * var(--p));
+  font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p)); font-weight: 700;
+  transition: opacity 100ms linear;
+  will-change: opacity;
+}
+/* EACH STRIP IS ONE LAYER, and two things here keep it so (measured: 35 extra layers without them).
+   The strip is as wide as its tiles: a tile that hangs past the strip's own box, 37px from the last one,
+   was cut out as a layer of its own. And nothing in it is positioned or stacked: the Top 10 numerals
+   are in the flow, tucked under their tile by paint order, not by z-index. */
+.pv-strip {
+  display: flex; width: max-content; gap: calc(32 * var(--p)); padding-left: calc(140 * var(--p));
+  transition: transform 400ms ease, opacity 100ms linear;
+  will-change: transform, opacity;
+}
+.is-poster .pv-strip { gap: calc(37 * var(--p)); }
+.pv-item { flex: none; display: flex; }
+.pv-tile {
+  flex: none;
+  width: calc(384 * var(--p)); height: calc(216 * var(--p));
+  border-radius: calc(7 * var(--p));
+  background: rgb(26, 33, 41);
+}
+.is-poster .pv-tile { height: calc(575 * var(--p)); }
+.pv-tile-art { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+
+/* Top 10: a block numeral tucked behind each smaller tile (from Amazon's own mockup). It is cut where its
+   tile starts and where its slot starts, so it never overlaps a tile — the look of being tucked under
+   both, while the tiles stay in the strip's one layer (a numeral overlapping its tile split all 20 out). */
+.is-top10 .pv-strip { gap: 0; }
+.is-top10 .pv-item { width: calc(476 * var(--p)); justify-content: flex-end; align-items: flex-end; }
+.is-top10 .pv-tile { width: calc(337 * var(--p)); height: calc(189 * var(--p)); }
+.pv-num {
+  flex: none; display: flex; justify-content: flex-end;
+  width: calc(139 * var(--p)); margin-bottom: calc(-22 * var(--p));
+  overflow-x: clip; overflow-y: visible;
+  font-size: calc(200 * var(--p)); font-weight: 900; line-height: 1; letter-spacing: -0.06em;
+  color: #575c63;
+}
+.pv-num > span { margin-right: calc(-11 * var(--p)); }
+.pv-item.is-focus .pv-num { color: #e9ebee; }
+
+/* The ring stands on the focus line; the focused tile is always pinned under it. Placed from JS. */
+.pv-ring {
+  position: absolute; z-index: 3; pointer-events: none;
+  box-sizing: border-box;
+  border: calc(3 * var(--p)) solid rgb(240, 240, 245); border-radius: calc(12 * var(--p));
+  opacity: 0;
+  will-change: opacity;
+}
+.pv:focus .pv-ring.on { opacity: 1; }
+
+/* ---- the three icons on the left ---- */
+.pv-side {
+  position: absolute; z-index: 4; left: calc(47 * var(--p)); top: calc(462 * var(--p));
+  display: flex; flex-direction: column; gap: calc(17.5 * var(--p));
+}
+.pv-side-btn {
+  display: grid; place-items: center;
+  width: calc(40 * var(--p)); height: calc(40 * var(--p)); border-radius: 50%;
+  color: rgba(255, 255, 255, .85);
+}
+.pv-side-btn svg { width: calc(27 * var(--p)); height: calc(27 * var(--p)); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pv:focus[data-side="0"] .pv-side-btn:nth-child(1),
+.pv:focus[data-side="1"] .pv-side-btn:nth-child(2),
+.pv:focus[data-side="2"] .pv-side-btn:nth-child(3) { background: rgb(243, 240, 244); color: rgb(15, 23, 30); }

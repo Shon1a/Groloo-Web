@@ -23,6 +23,8 @@ const SEED: Record<string, string> = {
   'nav.my_list': 'My List',
   'nav.search': 'Search',
   'nav.anime': 'Anime',
+  // TV bar: the Prime-layout test page.
+  'nav.prime_test': 'Prime',
   // Plural: it labels the rail item for /categories, which lists many. It read
   // "Category" among Movies/Anime/Settings, and was the only key in this group that
   // diverged from en-base — every sibling above restates it. Not a width workaround
