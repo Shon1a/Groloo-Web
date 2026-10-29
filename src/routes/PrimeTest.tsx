@@ -82,6 +82,11 @@ const HERO_ART_AT = 370;
 const SETTLE_MS = H_MS + 50;
 /* Row pictures are fetched, decoded and put on this many tiles at a time — about a screenful. */
 const PICS_AT_ONCE = 5;
+/* The width of a tile's picture rendition (w500). */
+const PIC_W = 500;
+/* Real screen pixels per CSS pixel. Not devicePixelRatio alone: the webOS app's WAM reports 2 while the
+   set draws 1080p, which its resolution media query does report (1dppx). */
+const SCREEN_PX = window.matchMedia?.('(resolution: 1dppx)').matches ? 1 : window.devicePixelRatio || 1;
 /* A remote repeats a held key every ~30-50ms; this long without one means it was let go, for the
    sets that drop a keyup. */
 const REPEAT_GONE_MS = 150;
@@ -104,10 +109,10 @@ const Check = () => (
 );
 
 /* A row never re-renders on a press or for its pictures — only when its data changes. A tile is its
- * picture alone: no wordmark over it. The picture's address waits in `data-src`; the page puts it on
- * the tile once it has downloaded, and only while the remote is still (below). A tile's picture is w500
- * for a tile 384 wide: the edge's w780 WebP cost 4.5x the decoding on the first walk down (837ms
- * against 184ms, measured) for pixels the tile cannot show. */
+ * picture alone: no wordmark over it. The picture's address waits in `data-src`; the page draws it into
+ * the tile's canvas once, and only while the remote is still (below). A tile's picture is w500 for a
+ * tile 384 wide: the edge's w780 WebP cost 4.5x the decoding (837ms against 184ms on a first walk
+ * down, measured) for pixels the tile cannot show. */
 const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
   row: PvRow;
   i: number;
@@ -121,7 +126,7 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
           <div key={m.id} className="pv-item">
             {row.kind === 'top10' && <span className="pv-num"><span>{c + 1}</span></span>}
             <div className="pv-tile">
-              <img className="pv-tile-art" data-src={row.kind === 'poster' ? imgW(m.poster, 'w500') : imgW(m.backdrop, 'w500')} alt="" decoding="async" />
+              <canvas className="pv-tile-art" data-src={row.kind === 'poster' ? imgW(m.poster, 'w500') : imgW(m.backdrop, 'w500')} />
             </div>
           </div>
         ))}
@@ -414,62 +419,100 @@ export default function PrimeTest() {
      task inside that move; now none, and 3ms). Nothing is fetched or put on a tile while anything
      moves. Once the remote has been still SETTLE_MS they come nearest first — what is on screen at the
      focus, then the rows below and above, then further along — a few at a time, each tile taking its
-     picture only once it has downloaded, checking in between that the remote is still still. A press
-     stops it where it is and the next rest picks it up; a run past rows that have no pictures yet
-     shows their empty tiles, as the reference does.
-     NOT DECODED AHEAD: an Image().decode() is not the decode a tile draws with — the first walk down
-     decoded exactly as much with it as without. A row's pictures decode the first time it comes on
-     screen, once (the walks after that decode nothing); w500 keeps that small (below). */
+     picture only once it is decoded, checking in between that the remote is still still. A press stops
+     it where it is and the next rest picks it up; a run past rows that have no pictures yet shows their
+     empty tiles, as the reference does.
+     DECODED ONCE, AND KEPT. An <img> leaves its decoded pixels to the browser, which keeps them in a
+     cache with a budget: on a TV-sized one (PC at --force-gpu-mem-discardable-limit-mb=16) the second
+     walk down decoded 42 of the first walk's 78 pictures again. A tile holds its own pixels instead: the
+     picture is decoded off the main thread at the tile's size (createImageBitmap) and drawn into its
+     canvas once — after that the browser only ever copies it to the screen, never decodes it again
+     (the user's call, Oct 29: once a picture is here it costs nothing). The canvas is CPU-backed
+     (`willReadFrequently`), so it is painted into its strip's layer as the picture was, not made a GPU
+     layer of its own. That holds ~330KB per tile at 1080p, ~100MB for the page while it is open. */
   useEffect(() => {
     if (!rows.length) return;
     let dead = false;
     let running = false;
     let cancel = () => {};
+    /* Decoded, but a press came before it could be drawn: drawn at the next rest. */
+    const ready = new Map<HTMLCanvasElement, { url: string; bmp: ImageBitmap | null }>();
     const still = () => !dead && quietFor() >= SETTLE_MS;
-    const fetched = (url: string) => new Promise<void>((done) => {
-      const im = new Image();
-      im.onload = im.onerror = () => done();
-      im.src = url;
-    });
+    const pixels = async (url: string, w: number, h: number): Promise<ImageBitmap | null> => {
+      const size: ImageBitmapOptions = { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' };
+      try {
+        const res = await fetch(url);
+        if (res.ok) return await createImageBitmap(await res.blob(), size);
+      } catch { /* a host that will not let it be read: through a picture element instead */ }
+      return new Promise((done) => {
+        const im = new Image();
+        im.onload = () => { createImageBitmap(im, size).then(done, () => done(null)); };
+        im.onerror = () => done(null);
+        im.src = url;
+      });
+    };
+    const draw = (cv: HTMLCanvasElement) => {
+      const got = ready.get(cv);
+      ready.delete(cv);
+      if (!got || got.url !== cv.dataset.src) { got?.bmp?.close(); return; }
+      cv.dataset.on = got.url;
+      if (!got.bmp) return;
+      cv.width = got.bmp.width;
+      cv.height = got.bmp.height;
+      cv.getContext('2d', { willReadFrequently: true })?.drawImage(got.bmp, 0, 0);
+      got.bmp.close();
+    };
     /* The tiles still without their picture, in groups of PICS_AT_ONCE, nearest first: a group is
        `d` rows from the focus (below before above) and `k` screenfuls along its row from where that
-       row's focus is. */
+       row's focus is. Each comes with the size its canvas is drawn at: the tile in real screen pixels,
+       never more than the w500 picture has. */
     const plan = () => {
       const s = st.current;
       const f = s.mode === 'rows' ? s.row : 0;
-      const groups: { at: number; d: number; imgs: HTMLImageElement[] }[] = [];
-      rows.forEach((_, r) => {
-        const tiles = rowEls.current[r]?.querySelectorAll<HTMLImageElement>('.pv-tile-art');
+      const groups: { at: number; d: number; tiles: { cv: HTMLCanvasElement; w: number; h: number }[] }[] = [];
+      rows.forEach((row, r) => {
+        const tiles = rowEls.current[r]?.querySelectorAll<HTMLCanvasElement>('.pv-tile-art');
         if (!tiles) return;
+        const g = GEO[row.kind];
+        const scale = Math.min(p * SCREEN_PX, PIC_W / g.w);
+        const w = Math.round(g.w * scale);
+        const h = Math.round(g.h * scale);
         const col = s.cols[r] ?? 0;
         const d = r >= f ? r - f : f - r + 0.5;
-        const byK = new Map<number, HTMLImageElement[]>();
-        tiles.forEach((im, c) => {
-          if (!im.dataset.src || im.getAttribute('src') === im.dataset.src) return;
+        const byK = new Map<number, { cv: HTMLCanvasElement; w: number; h: number }[]>();
+        tiles.forEach((cv, c) => {
+          if (!cv.dataset.src || cv.dataset.on === cv.dataset.src) return;
           const off = c < col ? col - c : Math.max(0, c - col - (PICS_AT_ONCE - 1));
           const k = Math.ceil(off / PICS_AT_ONCE);
-          byK.set(k, [...(byK.get(k) ?? []), im]);
+          byK.set(k, [...(byK.get(k) ?? []), { cv, w, h }]);
         });
-        byK.forEach((imgs, k) => groups.push({ at: d + k, d, imgs }));
+        byK.forEach((t, k) => groups.push({ at: d + k, d, tiles: t }));
       });
-      return groups.sort((a, b) => a.at - b.at || a.d - b.d).map((g) => g.imgs);
+      return groups.sort((a, b) => a.at - b.at || a.d - b.d).map((gr) => gr.tiles);
     };
     const pump = async () => {
       if (running) return;
       running = true;
-      for (const imgs of plan()) {
-        const urls = imgs.map((im) => im.dataset.src!);
-        await Promise.all(urls.map(fetched));
+      for (const tiles of plan()) {
+        await Promise.all(tiles.filter((t) => !ready.has(t.cv)).map(async ({ cv, w, h }) => {
+          const url = cv.dataset.src!;
+          const bmp = await pixels(url, w, h);
+          if (dead) bmp?.close(); else ready.set(cv, { url, bmp });
+        }));
         if (!still()) break;
-        imgs.forEach((im, n) => { im.src = urls[n]; });
+        tiles.forEach((t) => draw(t.cv));
       }
       running = false;
       if (!dead && plan().length) arm();
     };
     const arm = () => { cancel(); cancel = whenQuiet(() => { void pump(); }, SETTLE_MS, true); };
     arm();
-    return () => { dead = true; cancel(); };
-  }, [rows]);
+    return () => {
+      dead = true;
+      cancel();
+      ready.forEach((got) => got.bmp?.close());
+    };
+  }, [rows, p]);
 
   /* Down from the bar lands on the page root, which holds focus for the whole page. */
   useEffect(() => setPageEntry(() => rootRef.current), []);
