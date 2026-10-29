@@ -44,6 +44,10 @@ const Categories = import.meta.env.MODE === 'tv'
   ? (() => null)
   : lazy(() => import('./routes/Categories'));
 const Library = lazy(() => import('./routes/Library'));
+/* The Prime-layout TEST page — TV only, on the bar between Anime and My Space. */
+const PrimeTest = import.meta.env.MODE === 'tv'
+  ? lazy(() => import('./routes/PrimeTest'))
+  : (() => null);
 /* Add-ons and Settings have no routes of their own any more: they are panes of My Space, which
  * loads them lazily itself (see routes/Library.tsx). */
 const LinkRoute = lazy(() => import('./routes/Link'));
@@ -141,6 +145,7 @@ export default function App() {
           <Route path="movies" element={<Browse cat="trending_movie" topLevel />} />
           <Route path="anime" element={<Browse cat="trending_anime" topLevel />} />
           <Route path="browse/:cat" element={<Browse />} />
+          <Route path="prime" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest /></Suspense> : <Navigate to="/" replace />} />
           {/* library / add-ons / settings */}
           <Route path="library" element={<Suspense fallback={routeFallback}><Library /></Suspense>} />
           {/* Kept as addresses so a bookmark or a stale history entry still lands somewhere real:

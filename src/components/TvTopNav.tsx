@@ -81,6 +81,7 @@ const PREFETCH: Record<string, () => Promise<unknown>> = {
   /* My Space renders Add-ons and Settings as sections, each a lazy chunk of its own
      (routes/Library.tsx) — fetched with the page rather than one round trip behind it. */
   '/library': () => Promise.all([import('../routes/Library'), import('../routes/Addons'), import('../routes/Settings')]),
+  '/prime': () => import('../routes/PrimeTest'),
 };
 
 const ITEMS = [
@@ -88,6 +89,8 @@ const ITEMS = [
   { to: '/tv', key: 'nav.series' },
   { to: '/movies', key: 'nav.movies' },
   { to: '/anime', key: 'nav.anime' },
+  // TEST: the Prime Video home layout (routes/PrimeTest.tsx).
+  { to: '/prime', key: 'nav.prime_test' },
 ] as const;
 /* Every page the bar switches between — what a hop REPLACES rather than pushes (see `go`). */
 const BAR: string[] = ['/explore', ...ITEMS.map((it) => it.to), '/library'];
