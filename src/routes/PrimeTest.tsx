@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useHome } from '../lib/queries';
+import { useHome, useWarmDetail } from '../lib/queries';
 import { useT } from '../i18n/i18n';
 import { HOME_ROWS } from '../lib/home';
 import { imgW } from '../lib/img';
@@ -24,8 +23,12 @@ import '../styles/prime.css';
  *   · Left/Right: CSS `ease`, 400ms (fits the capture to under 1%). The focused tile stays in the
  *     first slot under a ring that never moves; the row slides under it. Held, it is NOT a stream:
  *     whole 400ms steps, each starting as the last one ends.
- *   · The title panel: out over 200ms on any move, the new title in over 180ms from 240ms — so a held
- *     key keeps it empty (vertical) or blinking per step (horizontal), as the reference does.
+ *   · The title panel (fades measured linearly, median of ten presses): on any move it fades out over
+ *     200ms, sliding 32.5px WITH the rows and easing in; 205ms after the press the new title fades in
+ *     over 210ms, sliding 30px in from where the rows come from and easing out hard — so a held key
+ *     keeps it empty (vertical) or blinking per step (horizontal), as the reference does. Arriving from
+ *     the billboard or a poster carousel, it comes in the same way at once. The title arrives with the
+ *     rest (one late title in the capture was its picture decoding).
  *   · The background picture: dims to black 330ms after a move (150ms), and the new one fades in
  *     (200ms) only once the remote has rested 400ms.
  *   · Out of the billboard: the bar is gone in one frame, the billboard copy fades in 100ms while it
@@ -40,7 +43,7 @@ import '../styles/prime.css';
 
 type Kind = 'tile' | 'poster' | 'top10';
 type PvRow = { key: string; title: string; kind: Kind; items: MediaItem[] };
-type Mode = 'hero' | 'rows' | 'side';
+type Mode = 'hero' | 'rows';
 
 /* x is where the focused tile's picture starts (a Top 10 tile sits right of its numeral). */
 const GEO: Record<Kind, { w: number; h: number; pitch: number; x: number }> = {
@@ -56,11 +59,19 @@ const ROW_CAP = 20;
 
 const V_MS = 200;
 const H_MS = 400;
-const TEXT_OUT_MS = 200;
-const TEXT_SWAP_MS = 240;
-const TEXT_IN_MS = 180;
-const ENTER_DELAY_MS = 100;
-const ENTER_MS = 130;
+/* The title panel. Out: fades linearly and slides away WITH the rows, easing in. In: from the side the
+   rows come from, easing out — a sideways press slides it sideways, Up/Down slides it vertically. */
+const OUT_MS = 200;
+const OUT_PX = 32.5;
+const OUT_EASE = 'cubic-bezier(.2, 0, .5, 0)';
+const IN_AT = 207;
+const IN_MS = 210;
+const IN_SLIDE_MS = 200;
+const IN_PX = 30;
+const IN_EASE = 'cubic-bezier(.3, 1, .4, 1)';
+/* After a tap, the next title is written into the hidden panel this late — past the press's own frame,
+   so drawing it never holds up the start of the move. */
+const WRITE_AT = 50;
 const ART_OUT_AT = 330;
 const ART_OUT_MS = 150;
 const ART_IN_MS = 200;
@@ -117,9 +128,9 @@ const PvRowView = memo(function PvRowView({ row, i, drawn, setRowEl }: {
 
 export default function PrimeTest() {
   const t = useT();
-  const nav = useNavigate();
   const { data } = useHome();
   const openModal = useModal((s) => s.open);
+  const warm = useWarmDetail();
 
   const hero = useMemo(() => (data?.hero?.results ?? []).find((m) => m.backdrop), [data?.hero?.results]);
   const rows = useMemo(() => {
@@ -152,20 +163,28 @@ export default function PrimeTest() {
   const heroCopyRef = useRef<HTMLDivElement>(null);
   const heroArtRef = useRef<HTMLDivElement>(null);
   const rowArtRefs = useRef<(HTMLDivElement | null)[]>([null, null]);
-  const infoRef = useRef<HTMLDivElement>(null);
+  const infoRefs = useRef<(HTMLDivElement | null)[]>([null, null]);
   const rowEls = useRef<(HTMLDivElement | null)[]>([]);
   const setRowEl = useCallback((i: number, el: HTMLDivElement | null) => { rowEls.current[i] = el; }, []);
   const focusEl = useRef<Element | null>(null);
 
-  const st = useRef({ mode: 'hero' as Mode, back: 'hero' as Mode, btn: 1, side: 0, row: 0, cols: [] as number[] });
+  const st = useRef({ mode: 'hero' as Mode, btn: 1, row: 0, cols: [] as number[] });
   /* What is on screen now, to tell what a press changed. */
   const shown = useRef({ inRows: false, row: -1, col: -1, kind: '' as Kind | '', item: null as MediaItem | null });
-  const timers = useRef({ text: 0, ring: 0, rest: 0, artOut: 0, artIn: 0 });
+  const timers = useRef({ text: 0, write: 0, ring: 0, rest: 0, artOut: 0, artIn: 0 });
+  /* Whether the press being applied is a held key's step. */
+  const pressHeld = useRef(false);
 
-  /* ---- THE TITLE PANEL. Text is written straight into its nodes: no render on a press. ---- */
-  const writeInfo = useCallback((m: MediaItem, row: PvRow, col: number) => {
-    const el = infoRef.current;
-    if (!el) return;
+  /* ---- THE TITLE PANEL. Text is written straight into its nodes: no render on a press. Two panels
+     take turns: while the one on screen fades out, the next title is written into the hidden one, so
+     it is drawn before it has to appear. `keys`: the title each holds; `inAt`: when the front one
+     comes (or came) in; `pending`: what the next in shows. ---- */
+  const info = useRef({ front: 0, keys: ['', ''], inAt: 0, pending: null as null | { i: number; m: MediaItem; row: PvRow; col: number } });
+  const writeInfo = useCallback((i: number, m: MediaItem, row: PvRow, col: number) => {
+    const el = infoRefs.current[i];
+    const key = `${row.key}:${col}`;
+    if (!el || info.current.keys[i] === key) return;
+    info.current.keys[i] = key;
     const q = (s: string) => el.querySelector<HTMLElement>(s)!;
     const status = statusOf(m, row, col);
     q('.pv-status').textContent = status;
@@ -185,30 +204,59 @@ export default function PrimeTest() {
     el.style.opacity = String(to);
   };
 
-  const infoTo = useCallback((how: 'enter' | 'move' | 'hide', m?: MediaItem, row?: PvRow, col = 0) => {
-    const el = infoRef.current;
-    if (!el) return;
-    window.clearTimeout(timers.current.text);
-    if (how === 'hide' || !m || !row) { el.style.transform = ''; fade(el, 0, 0); return; }
-    if (how === 'enter') {
-      writeInfo(m, row, col);
-      el.style.transition = 'none';
-      el.style.opacity = '0';
-      el.style.transform = 'translate3d(0, 20px, 0)';
-      requestAnimationFrame(() => {
-        el.style.transition = `opacity ${ENTER_MS}ms linear ${ENTER_DELAY_MS - 16}ms, transform ${ENTER_MS}ms linear ${ENTER_DELAY_MS - 16}ms`;
-        el.style.opacity = '1';
-        el.style.transform = 'translate3d(0, 0, 0)';
-      });
+  const fillInfo = useCallback(() => {
+    const pd = info.current.pending;
+    if (pd) writeInfo(pd.i, pd.m, pd.row, pd.col);
+  }, [writeInfo]);
+
+  /* `dx, dy`: which way the rows moved (-1 left/up, 1 right/down, per axis). `held`: a held Down/Up
+     steps again before the title would come in, so its text is only written once the key is let go. */
+  const infoTo = useCallback((how: 'enter' | 'move' | 'hide', m?: MediaItem, row?: PvRow, col = 0, dx = 0, dy = 0, held = false) => {
+    const I = info.current;
+    const els = infoRefs.current as HTMLDivElement[];
+    const tm = timers.current;
+    if (!els[0] || !els[1]) return;
+    window.clearTimeout(tm.text);
+    window.clearTimeout(tm.write);
+    I.pending = null;
+    if (how === 'hide' || !m || !row) {
+      els.forEach((el) => { el.style.transition = 'none'; el.style.opacity = '0'; });
       return;
     }
-    el.style.transform = '';
-    fade(el, 0, TEXT_OUT_MS);
-    timers.current.text = window.setTimeout(() => {
-      writeInfo(m, row, col);
-      fade(el, 1, TEXT_IN_MS);
-    }, TEXT_SWAP_MS);
-  }, [writeInfo]);
+    const at = (x: number, y: number) => `translate3d(${x * p}px, ${y * p}px, 0)`;
+    const now = performance.now();
+    let i = I.front;
+    if (how === 'enter') {
+      if (I.keys[1 - i] === `${row.key}:${col}`) i = 1 - i;
+    } else if (now >= I.inAt) {
+      /* The front panel is on screen or coming in: it leaves with the rows and the other takes over.
+         (Before its in, it is still hidden and simply takes the new title instead.) */
+      const out = els[i];
+      out.style.transition = `opacity ${OUT_MS}ms linear, transform ${OUT_MS}ms ${OUT_EASE}`;
+      out.style.opacity = '0';
+      out.style.transform = at(dx * OUT_PX, dy * OUT_PX);
+      i = 1 - i;
+    }
+    const el = els[i];
+    I.front = i;
+    el.style.transition = 'none';
+    el.style.opacity = '0';
+    el.style.transform = at(-dx * IN_PX, -dy * IN_PX);
+    if (how === 'enter') writeInfo(i, m, row, col);
+    /* The starting place is committed first; the in is then set in the same frame as the out, delayed,
+       so the gap between them is exact. */
+    void getComputedStyle(el).opacity;
+    const delay = how === 'enter' ? 0 : IN_AT;
+    el.style.transition = `opacity ${IN_MS}ms linear ${delay}ms, transform ${IN_SLIDE_MS}ms ${IN_EASE} ${delay}ms`;
+    el.style.opacity = '1';
+    el.style.transform = at(0, 0);
+    I.inAt = now + delay;
+    if (how === 'enter') return;
+    I.pending = { i, m, row, col };
+    if (!(held && dy)) tm.write = window.setTimeout(fillInfo, WRITE_AT);
+    /* A set that drops the keyup after a hold: the text, at the latest as it shows. */
+    tm.text = window.setTimeout(fillInfo, IN_AT);
+  }, [p, writeInfo, fillInfo]);
 
   /* ---- THE BACKGROUND PICTURE: the billboard's, or the focused title's in the box top-right. ---- */
   const art = useRef({ want: '' as string, shown: 'hero' as string, layer: -1, visible: true, outEnd: 0, token: 0, lastChange: 0 });
@@ -265,7 +313,7 @@ export default function PrimeTest() {
     const track = trackRef.current;
     if (!root || !track || !rows.length) return;
     const px = (n: number) => Math.round(n * p);
-    const inRows = s.mode === 'rows' || (s.mode === 'side' && s.back === 'rows');
+    const inRows = s.mode === 'rows';
     const row = rows[s.row];
     const g = GEO[row.kind];
     const col = s.cols[s.row] ?? 0;
@@ -274,9 +322,7 @@ export default function PrimeTest() {
     root.classList.toggle('is-rows', inRows);
     document.body.classList.toggle('pv-rows', inRows);
     const btn = s.mode === 'hero' ? String(s.btn) : '';
-    const side = s.mode === 'side' ? String(s.side) : '';
     if (root.dataset.btn !== btn) root.dataset.btn = btn;
-    if (root.dataset.side !== side) root.dataset.side = side;
 
     /* The page scrolls as one: the rows, and the billboard copy riding on them. */
     const heroY = HERO_ROW_TOP - (rowTops[0] + TITLE_H);
@@ -305,7 +351,7 @@ export default function PrimeTest() {
        focused row is of another kind, or the remote has just come down out of the billboard. */
     const ring = ringRef.current;
     if (ring) {
-      const ringOn = s.mode === 'rows';
+      const ringOn = inRows;
       const sameKind = was.inRows && was.kind === row.kind;
       window.clearTimeout(timers.current.ring);
       if (!ringOn) ring.classList.remove('on');
@@ -324,16 +370,31 @@ export default function PrimeTest() {
     if (moved) {
       if (!inRows) infoTo('hide');
       else if (row.kind === 'poster') infoTo('hide');
-      else if (!was.inRows) infoTo('enter', item, row, col);
-      else infoTo('move', item, row, col);
+      /* The rows move against the press: Right slides them left, Down slides them up. */
+      else if (!was.inRows || was.kind === 'poster') infoTo('enter', item, row, col, 0, !was.inRows || s.row > was.row ? -1 : 1);
+      else if (s.row !== was.row) infoTo('move', item, row, col, 0, s.row > was.row ? -1 : 1, pressHeld.current);
+      else infoTo('move', item, row, col, col > was.col ? -1 : 1, 0, pressHeld.current);
       artTo(!inRows ? 'hero' : row.kind === 'poster' ? '' : imgW(item.backdrop, 'w1280'));
     }
     shown.current = { inRows, row: s.row, col, kind: inRows ? row.kind : '', item: inRows ? item : null };
 
-    /* The rows below get their pictures once everything has stopped moving. */
+    /* The rows below get their pictures once everything has stopped moving, and the title the remote
+       rests on gets its title screen ready (detail, backdrop, wordmark) — so OK opens it at once, on
+       the picture already here. */
+    const rested = inRows ? item : hero;
+    /* Where the panel is hidden — the billboard, a poster carousel — the titles a press could bring in
+       are written ahead into the two panels, so that press only has to show one. */
+    const ahead = !inRows ? [0] : row.kind === 'poster' ? [s.row - 1, s.row + 1] : [];
     window.clearTimeout(timers.current.rest);
-    timers.current.rest = window.setTimeout(() => setReach((n) => Math.max(n, s.row + 2)), SETTLE_MS);
-  }, [rows, rowTops, p, infoTo, artTo]);
+    timers.current.rest = window.setTimeout(() => {
+      setReach((n) => Math.max(n, s.row + 2));
+      warm(rested, undefined, () => (shown.current.inRows ? shown.current.item : hero) === rested);
+      ahead.forEach((r, i) => {
+        const c = s.cols[r] ?? 0;
+        if (rows[r] && rows[r].kind !== 'poster' && !info.current.keys.includes(`${rows[r].key}:${c}`)) writeInfo(i, rows[r].items[c], rows[r], c);
+      });
+    }, SETTLE_MS);
+  }, [rows, rowTops, p, infoTo, writeInfo, artTo, hero, warm]);
 
   useLayoutEffect(() => { apply(); }, [apply]);
   useEffect(() => {
@@ -362,7 +423,7 @@ export default function PrimeTest() {
 
   /* ---- ONE STEP OF THE REMOTE ---- */
   const lastStep = useRef(0);
-  const step = (dir: 'up' | 'down' | 'left' | 'right') => {
+  const step = (dir: 'up' | 'down' | 'left' | 'right', held = false) => {
     const s = st.current;
     if (s.mode === 'hero') {
       if (dir === 'up') {
@@ -370,7 +431,7 @@ export default function PrimeTest() {
         else { barItemHere()?.focus({ preventScroll: true }); return; }
       } else if (dir === 'down') {
         if (s.btn === 0) s.btn = 1; else s.mode = 'rows';
-      } else if (dir === 'left') { s.back = 'hero'; s.mode = 'side'; } else return;
+      } else return;
     } else if (s.mode === 'rows') {
       const col = s.cols[s.row] ?? 0;
       if (dir === 'up') {
@@ -378,16 +439,13 @@ export default function PrimeTest() {
       } else if (dir === 'down') {
         if (s.row < rows.length - 1) s.row += 1; else return;
       } else if (dir === 'left') {
-        if (col === 0) { s.back = 'rows'; s.mode = 'side'; } else s.cols[s.row] = col - 1;
+        if (col === 0) return;
+        s.cols[s.row] = col - 1;
       } else if (col < rows[s.row].items.length - 1) s.cols[s.row] = col + 1;
-      else return;
-    } else {
-      if (dir === 'up') s.side = Math.max(0, s.side - 1);
-      else if (dir === 'down') s.side = Math.min(2, s.side + 1);
-      else if (dir === 'right') s.mode = s.back;
       else return;
     }
     lastStep.current = performance.now();
+    pressHeld.current = held;
     apply();
   };
 
@@ -401,7 +459,7 @@ export default function PrimeTest() {
     const h = held.current;
     h.timer = 0;
     if (!h.key || performance.now() - h.lastRepeat > REPEAT_GONE_MS) return;
-    step(DIRS[h.key]);
+    step(DIRS[h.key], true);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -413,8 +471,7 @@ export default function PrimeTest() {
     if (!rows.length) return;
     if (e.key === 'Enter') {
       if (s.mode === 'hero') { if (hero) openModal(openItem(hero)); }
-      else if (s.mode === 'rows') openModal(openItem(rows[s.row].items[s.cols[s.row] ?? 0]));
-      else nav(['/explore', '/movies', '/library'][s.side]);
+      else openModal(openItem(rows[s.row].items[s.cols[s.row] ?? 0]));
       return;
     }
     const h = held.current;
@@ -430,7 +487,7 @@ export default function PrimeTest() {
     h.key = e.key;
     h.lastRepeat = now;
     const left = stepMs(dir) - (now - lastStep.current);
-    if (left <= 0) step(dir);
+    if (left <= 0) step(dir, true);
     else if (!h.timer) h.timer = window.setTimeout(chain, left);
   };
   const onKeyUp = (e: KeyboardEvent) => {
@@ -439,13 +496,8 @@ export default function PrimeTest() {
     h.key = '';
     window.clearTimeout(h.timer);
     h.timer = 0;
+    fillInfo();
   };
-
-  const sideIcons = [
-    <svg key="s" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>,
-    <svg key="g" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.2" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2" /></svg>,
-    <svg key="b" viewBox="0 0 24 24"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z" /></svg>,
-  ];
 
   return (
     <div
@@ -497,19 +549,21 @@ export default function PrimeTest() {
         )}
       </div>
 
-      {/* THE FOCUSED TITLE'S PANEL — bottom-anchored, filled in by writeInfo. */}
-      <div className="pv-info" ref={infoRef}>
-        <p className="pv-title" />
-        <p className="pv-status" />
-        <p className="pv-meta">
-          <span className="pv-stars">{[0, 1, 2, 3, 4].map((i) => <i key={i}>★</i>)}</span>
-          <span className="pv-votes" />
-          <span className="pv-year" />
-          <span className="pv-genre" />
-        </p>
-        <p className="pv-synopsis" />
-        <Check />
-      </div>
+      {/* THE FOCUSED TITLE'S PANEL, twice (they take turns) — bottom-anchored, filled in by writeInfo. */}
+      {[0, 1].map((n) => (
+        <div key={n} className="pv-info" ref={(el) => { infoRefs.current[n] = el; }}>
+          <p className="pv-title" />
+          <p className="pv-status" />
+          <p className="pv-meta">
+            <span className="pv-stars">{[0, 1, 2, 3, 4].map((i) => <i key={i}>★</i>)}</span>
+            <span className="pv-votes" />
+            <span className="pv-year" />
+            <span className="pv-genre" />
+          </p>
+          <p className="pv-synopsis" />
+          <Check />
+        </div>
+      ))}
 
       <div className="pv-track" ref={trackRef}>
         {rows.map((r, i) => <PvRowView key={r.key} row={r} i={i} drawn={i <= reach} setRowEl={setRowEl} />)}
@@ -517,10 +571,6 @@ export default function PrimeTest() {
 
       {/* The focus ring stands still: the focused tile is always pinned under it. */}
       <div className="pv-ring" ref={ringRef} />
-
-      <div className="pv-side">
-        {sideIcons.map((ic, i) => <span key={i} className="pv-side-btn">{ic}</span>)}
-      </div>
     </div>
   );
 }
