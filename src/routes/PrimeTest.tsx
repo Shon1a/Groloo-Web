@@ -5,6 +5,7 @@ import { HOME_ROWS } from '../lib/home';
 import { imgW } from '../lib/img';
 import { barItemHere, setPageEntry } from '../lib/tvBar';
 import { registerBackHandler } from '../lib/tvKeys';
+import { quietFor, whenQuiet } from '../lib/tvQuiet';
 import { useModal, openItem } from '../stores/modal';
 import { usePlayer } from '../stores/player';
 import type { MediaItem } from '../lib/types';
@@ -38,8 +39,8 @@ import '../styles/prime.css';
  *
  * THE REMOTE NEVER MOVES DOM FOCUS HERE. The page root holds focus and owns its arrows (stopped
  * before TvSpatialNav's window listener — no candidate measuring, no rects). A press writes a couple
- * of transforms, classes and text nodes; React renders only when the remote has rested and a row
- * needs more pictures. */
+ * of transforms, classes and text nodes; React does not render, and no picture arrives, while
+ * anything moves. */
 
 type Kind = 'tile' | 'poster' | 'top10';
 type PvRow = { key: string; title: string; kind: Kind; items: MediaItem[] };
@@ -79,6 +80,8 @@ const ART_REST_MS = 400;
 const HERO_ART_AT = 370;
 /* Past the longest move a press starts: React work waits for this, so it never lands mid-move. */
 const SETTLE_MS = H_MS + 50;
+/* Row pictures are fetched, decoded and put on this many tiles at a time — about a screenful. */
+const PICS_AT_ONCE = 5;
 /* A remote repeats a held key every ~30-50ms; this long without one means it was let go, for the
    sets that drop a keyup. */
 const REPEAT_GONE_MS = 150;
@@ -100,13 +103,14 @@ const Check = () => (
   </span>
 );
 
-/* A row never re-renders on a press — only when its data changes, or the remote first comes near it and it
- * gets its pictures (the whole row at once, so a walk along it never renders). A tile is its picture
- * alone: no wordmark over it. */
-const PvRowView = memo(function PvRowView({ row, i, drawn, setRowEl }: {
+/* A row never re-renders on a press or for its pictures — only when its data changes. A tile is its
+ * picture alone: no wordmark over it. The picture's address waits in `data-src`; the page puts it on
+ * the tile once it has downloaded, and only while the remote is still (below). A tile's picture is w500
+ * for a tile 384 wide: the edge's w780 WebP cost 4.5x the decoding on the first walk down (837ms
+ * against 184ms, measured) for pixels the tile cannot show. */
+const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
   row: PvRow;
   i: number;
-  drawn: boolean;
   setRowEl: (i: number, el: HTMLDivElement | null) => void;
 }) {
   return (
@@ -117,7 +121,7 @@ const PvRowView = memo(function PvRowView({ row, i, drawn, setRowEl }: {
           <div key={m.id} className="pv-item">
             {row.kind === 'top10' && <span className="pv-num"><span>{c + 1}</span></span>}
             <div className="pv-tile">
-              {drawn && <img className="pv-tile-art" src={row.kind === 'poster' ? imgW(m.poster, 'w500') : imgW(m.backdrop, 'w780')} alt="" decoding="async" />}
+              <img className="pv-tile-art" data-src={row.kind === 'poster' ? imgW(m.poster, 'w500') : imgW(m.backdrop, 'w500')} alt="" decoding="async" />
             </div>
           </div>
         ))}
@@ -155,7 +159,6 @@ export default function PrimeTest() {
   }, [rows]);
 
   const [p] = useState(() => window.innerWidth / 1920);
-  const [reach, setReach] = useState(1);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -378,16 +381,14 @@ export default function PrimeTest() {
     }
     shown.current = { inRows, row: s.row, col, kind: inRows ? row.kind : '', item: inRows ? item : null };
 
-    /* The rows below get their pictures once everything has stopped moving, and the title the remote
-       rests on gets its title screen ready (detail, backdrop, wordmark) — so OK opens it at once, on
-       the picture already here. */
+    /* Once everything has stopped moving, the title the remote rests on gets its title screen ready
+       (detail, backdrop, wordmark) — so OK opens it at once, on the picture already here. */
     const rested = inRows ? item : hero;
     /* Where the panel is hidden — the billboard, a poster carousel — the titles a press could bring in
        are written ahead into the two panels, so that press only has to show one. */
     const ahead = !inRows ? [0] : row.kind === 'poster' ? [s.row - 1, s.row + 1] : [];
     window.clearTimeout(timers.current.rest);
     timers.current.rest = window.setTimeout(() => {
-      setReach((n) => Math.max(n, s.row + 2));
       warm(rested, undefined, () => (shown.current.inRows ? shown.current.item : hero) === rested);
       ahead.forEach((r, i) => {
         const c = s.cols[r] ?? 0;
@@ -405,6 +406,70 @@ export default function PrimeTest() {
       Object.values(tm).forEach((id) => window.clearTimeout(id));
     };
   }, []);
+
+  /* ---- THE ROWS' PICTURES ARRIVE ONLY WHILE THE REMOTE IS STILL ----
+     A picture arriving costs its strip a paint, a decode and a raster. They used to be put on whole
+     rows at once the moment the remote rested, so a run to the bottom set off two hundred of them, and
+     they landed in the run back up (measured: ~210 decodes, ~730ms of decoding and a 44ms main-thread
+     task inside that move; now none, and 3ms). Nothing is fetched or put on a tile while anything
+     moves. Once the remote has been still SETTLE_MS they come nearest first — what is on screen at the
+     focus, then the rows below and above, then further along — a few at a time, each tile taking its
+     picture only once it has downloaded, checking in between that the remote is still still. A press
+     stops it where it is and the next rest picks it up; a run past rows that have no pictures yet
+     shows their empty tiles, as the reference does.
+     NOT DECODED AHEAD: an Image().decode() is not the decode a tile draws with — the first walk down
+     decoded exactly as much with it as without. A row's pictures decode the first time it comes on
+     screen, once (the walks after that decode nothing); w500 keeps that small (below). */
+  useEffect(() => {
+    if (!rows.length) return;
+    let dead = false;
+    let running = false;
+    let cancel = () => {};
+    const still = () => !dead && quietFor() >= SETTLE_MS;
+    const fetched = (url: string) => new Promise<void>((done) => {
+      const im = new Image();
+      im.onload = im.onerror = () => done();
+      im.src = url;
+    });
+    /* The tiles still without their picture, in groups of PICS_AT_ONCE, nearest first: a group is
+       `d` rows from the focus (below before above) and `k` screenfuls along its row from where that
+       row's focus is. */
+    const plan = () => {
+      const s = st.current;
+      const f = s.mode === 'rows' ? s.row : 0;
+      const groups: { at: number; d: number; imgs: HTMLImageElement[] }[] = [];
+      rows.forEach((_, r) => {
+        const tiles = rowEls.current[r]?.querySelectorAll<HTMLImageElement>('.pv-tile-art');
+        if (!tiles) return;
+        const col = s.cols[r] ?? 0;
+        const d = r >= f ? r - f : f - r + 0.5;
+        const byK = new Map<number, HTMLImageElement[]>();
+        tiles.forEach((im, c) => {
+          if (!im.dataset.src || im.getAttribute('src') === im.dataset.src) return;
+          const off = c < col ? col - c : Math.max(0, c - col - (PICS_AT_ONCE - 1));
+          const k = Math.ceil(off / PICS_AT_ONCE);
+          byK.set(k, [...(byK.get(k) ?? []), im]);
+        });
+        byK.forEach((imgs, k) => groups.push({ at: d + k, d, imgs }));
+      });
+      return groups.sort((a, b) => a.at - b.at || a.d - b.d).map((g) => g.imgs);
+    };
+    const pump = async () => {
+      if (running) return;
+      running = true;
+      for (const imgs of plan()) {
+        const urls = imgs.map((im) => im.dataset.src!);
+        await Promise.all(urls.map(fetched));
+        if (!still()) break;
+        imgs.forEach((im, n) => { im.src = urls[n]; });
+      }
+      running = false;
+      if (!dead && plan().length) arm();
+    };
+    const arm = () => { cancel(); cancel = whenQuiet(() => { void pump(); }, SETTLE_MS, true); };
+    arm();
+    return () => { dead = true; cancel(); };
+  }, [rows]);
 
   /* Down from the bar lands on the page root, which holds focus for the whole page. */
   useEffect(() => setPageEntry(() => rootRef.current), []);
@@ -566,7 +631,7 @@ export default function PrimeTest() {
       ))}
 
       <div className="pv-track" ref={trackRef}>
-        {rows.map((r, i) => <PvRowView key={r.key} row={r} i={i} drawn={i <= reach} setRowEl={setRowEl} />)}
+        {rows.map((r, i) => <PvRowView key={r.key} row={r} i={i} setRowEl={setRowEl} />)}
       </div>
 
       {/* The focus ring stands still: the focused tile is always pinned under it. */}
