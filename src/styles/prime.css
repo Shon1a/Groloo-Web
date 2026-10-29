@@ -1,10 +1,11 @@
 /* PRIME TEST page (routes/PrimeTest.tsx). Every size is a TV pixel at 1920x1080, measured off the
    reference capture, times --p (the page sets it from the viewport). Colours are the reference's,
-   sampled from the same frames, and scoped to this page. */
+   sampled from the same frames, and scoped to this page — except the background, black where the
+   reference is a dark blue (the user's call, Oct 29). */
 
 .pv {
-  --bg: rgb(0, 2, 11);
-  --bg0: rgba(0, 2, 11, 0);
+  --bg: #000;
+  --bg0: rgba(0, 0, 0, 0);
   --green: rgb(121, 236, 190);
   position: relative;
   height: 100vh;
@@ -32,15 +33,64 @@ body.pv-rows .tv-topnav { opacity: 0; transition: none; }
 .pv-hero-art::after, .pv-row-art::after { content: ''; position: absolute; inset: 0; }
 .pv-hero-art::after {
   background:
-    linear-gradient(90deg, rgba(0, 2, 11, .85) 0%, rgba(0, 2, 11, .55) 30%, var(--bg0) 60%),
+    linear-gradient(90deg, rgba(0, 0, 0, .85) 0%, rgba(0, 0, 0, .55) 30%, var(--bg0) 60%),
     linear-gradient(0deg, var(--bg) 0%, var(--bg0) 28%),
-    rgba(0, 2, 11, .4);
+    rgba(0, 0, 0, .4);
 }
-.pv-row-art::after {
+/* The title screen opened from here draws its picture with this same fade (below). Not the reference's
+   straight ramps: those showed a band where the black ends and a hard bottom edge. A smootherstep
+   instead, as stops — it leaves the black and reaches the picture with no corner at either end — run
+   long, so both edges stay dark well into the picture (the user's call, Oct 29: darker, smoother).
+   It costs ~0.2ms of GPU per picture change, the same as none: it is drawn with the picture, once. */
+.pv-row-art::after,
+body.pv-page .tv-det-art::after {
+  inset: 0;
   background:
-    linear-gradient(90deg, var(--bg) 8%, var(--bg0) 38%),
-    linear-gradient(0deg, var(--bg) 0%, var(--bg0) 32%);
+    linear-gradient(90deg,
+      #000 0%,
+      rgba(0, 0, 0, .98) 7%,
+      rgba(0, 0, 0, .9) 14%,
+      rgba(0, 0, 0, .73) 21%,
+      rgba(0, 0, 0, .5) 28%,
+      rgba(0, 0, 0, .27) 35%,
+      rgba(0, 0, 0, .1) 42%,
+      rgba(0, 0, 0, .02) 49%,
+      rgba(0, 0, 0, 0) 56%),
+    linear-gradient(0deg,
+      #000 0%,
+      rgba(0, 0, 0, .98) 6%,
+      rgba(0, 0, 0, .9) 12%,
+      rgba(0, 0, 0, .73) 18%,
+      rgba(0, 0, 0, .5) 24%,
+      rgba(0, 0, 0, .27) 30%,
+      rgba(0, 0, 0, .1) 36%,
+      rgba(0, 0, 0, .02) 42%,
+      rgba(0, 0, 0, 0) 48%);
 }
+
+/* ---- THE TITLE SCREEN OPENED FROM HERE (TvDetail, over this page) ----
+   OK leaves the picture where it is. The title screen draws the same picture in the same box with
+   the same fade, and fades it in (200ms) over this page's — the same pixels, so nothing changes there
+   but the rows and the panel giving way. The black around it is cut around the box: black under the
+   box too would dim the picture mid-fade. While the screen loads, this page stays in view: the
+   spinner comes only if that takes longer than 400ms. */
+body.pv-page .tv-det:not([data-parked]) { background: transparent; }
+body.pv-page .tv-det:not([data-parked])::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(#000, #000) left top / calc(620 * 100vw / 1920) 100% no-repeat,
+    linear-gradient(#000, #000) left bottom / 100% calc(100% - 731 * 100vw / 1920) no-repeat;
+  animation: pvTitleIn 200ms linear both;
+}
+body.pv-page .tv-det:has(> .m-load-veil)::before { display: none; }
+body.pv-page .tv-det .m-load-veil { background: transparent; animation: pvTitleIn 200ms linear 400ms both; }
+body.pv-page .tv-det-art {
+  left: calc(620 * 100vw / 1920); right: auto;
+  width: calc(1300 * 100vw / 1920); height: calc(731 * 100vw / 1920);
+}
+body.pv-page .tv-det-art.rdy { animation: pvTitleIn 200ms linear both; }
+body.pv-page .tv-det-art img { object-position: center top; }
+@keyframes pvTitleIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---- the billboard copy ---- */
 .pv-hero-copy {
@@ -186,18 +236,3 @@ body.pv-rows .tv-topnav { opacity: 0; transition: none; }
   will-change: opacity;
 }
 .pv:focus .pv-ring.on { opacity: 1; }
-
-/* ---- the three icons on the left ---- */
-.pv-side {
-  position: absolute; z-index: 4; left: calc(47 * var(--p)); top: calc(462 * var(--p));
-  display: flex; flex-direction: column; gap: calc(17.5 * var(--p));
-}
-.pv-side-btn {
-  display: grid; place-items: center;
-  width: calc(40 * var(--p)); height: calc(40 * var(--p)); border-radius: 50%;
-  color: rgba(255, 255, 255, .85);
-}
-.pv-side-btn svg { width: calc(27 * var(--p)); height: calc(27 * var(--p)); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.pv:focus[data-side="0"] .pv-side-btn:nth-child(1),
-.pv:focus[data-side="1"] .pv-side-btn:nth-child(2),
-.pv:focus[data-side="2"] .pv-side-btn:nth-child(3) { background: rgb(243, 240, 244); color: rgb(15, 23, 30); }
