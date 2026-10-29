@@ -206,7 +206,8 @@ body.pv-page .tv-det-art img { object-position: center top; }
   flex: none;
   width: calc(384 * var(--p)); height: calc(216 * var(--p));
   border-radius: calc(7 * var(--p));
-  background: rgb(26, 33, 41);
+  /* A tile before its picture: Prime Video's own placeholder grey (its web stylesheet, Oct 29). */
+  background: #33373d;
 }
 .is-poster .pv-tile { height: calc(575 * var(--p)); }
 .pv-tile-art { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
