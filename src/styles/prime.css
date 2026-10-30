@@ -28,6 +28,22 @@ body.pv-page .tv-topnav { transition: opacity 120ms linear 170ms; }
 body.pv-page .tv-topnav:focus-within { transition: opacity 60ms linear; }
 body.pv-deep .tv-topnav { opacity: 0; transition: opacity 75ms linear; }
 
+/* ---- THE PAGE BEFORE ITS PICTURES (PrimeTest's SKELETON): Prime Video's own shapes and grey, off a
+   still of the emulator, over the page until it shows itself. Then the shapes fade (380ms, linear) as
+   the page fades in under them (380ms, ease-in-out, 25ms later). Hidden, the page is kept rastered
+   (will-change), so its first frame costs nothing; shown, it is no effect of its own. The shapes' left
+   ends fade into the screen's edge (black at 0, clear at 144) as they glide in. ---- */
+.pv-show { opacity: 0; will-change: opacity; }
+.pv.is-shown .pv-show { opacity: 1; will-change: auto; transition: opacity 380ms ease-in-out 25ms; }
+.pv-skel { position: absolute; inset: 0; pointer-events: none; will-change: opacity; }
+.pv.is-shown .pv-skel { opacity: 0; transition: opacity 380ms linear; }
+.pv-skel::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, var(--bg), transparent calc(144 * var(--p)));
+}
+.pv-skel-glide { position: absolute; inset: 0; will-change: transform; }
+.pv-sk { position: absolute; background: rgb(24, 27, 34); }
+
 /* ---- the background ---- */
 .pv-row-art {
   position: absolute; overflow: hidden; will-change: opacity;

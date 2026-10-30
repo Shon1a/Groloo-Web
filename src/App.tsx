@@ -16,6 +16,7 @@ import { slowLink } from './lib/slowLink';
 import AppShell from './layout/AppShell';
 import Home from './routes/Home';
 import Browse from './routes/Browse';
+import { PrimeTestPage } from './routes/primeTestPage';
 
 /* WHAT LOADS UP FRONT, AND WHAT WAITS. Home, Browse and the AppShell are eager: they are
  * the first paint on nearly every visit, and code-splitting them would only add a loading
@@ -44,10 +45,8 @@ const Categories = import.meta.env.MODE === 'tv'
   ? (() => null)
   : lazy(() => import('./routes/Categories'));
 const Library = lazy(() => import('./routes/Library'));
-/* The Prime-layout TEST page — TV only, on the bar between Anime and My Space. */
-const PrimeTest = import.meta.env.MODE === 'tv'
-  ? lazy(() => import('./routes/PrimeTest'))
-  : (() => null);
+/* The Prime-layout TEST page — TV only, on the bar between Anime and My Space (routes/primeTestPage.ts). */
+const PrimeTest = PrimeTestPage ?? (() => null);
 /* Add-ons and Settings have no routes of their own any more: they are panes of My Space, which
  * loads them lazily itself (see routes/Library.tsx). */
 const LinkRoute = lazy(() => import('./routes/Link'));
