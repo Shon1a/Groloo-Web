@@ -80,14 +80,8 @@ const ART_REST_MS = 400;
 const HERO_ART_AT = 370;
 /* Past the longest move a press starts: React work waits for this, so it never lands mid-move. */
 const SETTLE_MS = H_MS + 50;
-/* Row pictures are decoded this many at a time — about a screenful — and put on each tile the moment
-   its own is ready. */
+/* Row pictures are fetched, decoded and put on this many tiles at a time — about a screenful. */
 const PICS_AT_ONCE = 5;
-/* Meanwhile the next this many are downloading: bytes only, so a decode never waits on the network. */
-const FETCH_AHEAD = 10;
-/* The first of those downloads start once a vertical move is over, before the rest the decodes wait
-   for (SETTLE_MS): bytes arriving draw nothing. */
-const BYTES_AT = V_MS + 50;
 /* The width of a tile's picture rendition (w500). */
 const PIC_W = 500;
 /* Real screen pixels per CSS pixel. Not devicePixelRatio alone: the webOS app's WAM reports 2 while the
@@ -422,17 +416,12 @@ export default function PrimeTest() {
      A picture arriving costs its strip a paint, a decode and a raster. They used to be put on whole
      rows at once the moment the remote rested, so a run to the bottom set off two hundred of them, and
      they landed in the run back up (measured: ~210 decodes, ~730ms of decoding and a 44ms main-thread
-     task inside that move; now none, and 3ms). Nothing is put on a tile while anything moves, and
-     nothing is downloaded while the rows do: the bytes for what is on screen start as a vertical move
-     ends (BYTES_AT). Once the remote has been still SETTLE_MS the pictures come nearest first — what
-     is on screen, then the rows below and above, then further along — a few decoding at a time with
-     the next ones' bytes already downloading, each tile taking its picture the moment its own is
-     decoded, and only while the remote is still still. (They used to come five at a time, each five
-     waiting for the five before, so the row below waited on the network behind tiles off screen —
-     measured with every picture 150ms away: the screen after a press down was whole at ~1.0s, now
-     ~0.49s; after a run down ~1.0-1.3s, now ~0.5-0.6s; dropped frames while tapping unchanged.) A press
-     stops it where it is and the next rest picks it up; a run past rows that have no pictures yet
-     shows their empty tiles, as the reference does.
+     task inside that move; now none, and 3ms). Nothing is fetched or put on a tile while anything
+     moves. Once the remote has been still SETTLE_MS they come nearest first — what is on screen at the
+     focus, then the rows below and above, then further along — a few at a time, each tile taking its
+     picture only once it is decoded, checking in between that the remote is still still. A press stops
+     it where it is and the next rest picks it up; a run past rows that have no pictures yet shows their
+     empty tiles, as the reference does.
      DECODED ONCE, AND KEPT. An <img> leaves its decoded pixels to the browser, which keeps them in a
      cache with a budget: on a TV-sized one (PC at --force-gpu-mem-discardable-limit-mb=16) the second
      walk down decoded 42 of the first walk's 78 pictures again. A tile holds its own pixels instead: the
@@ -449,24 +438,12 @@ export default function PrimeTest() {
     /* Decoded, but a press came before it could be drawn: drawn at the next rest. */
     const ready = new Map<HTMLCanvasElement, { url: string; bmp: ImageBitmap | null }>();
     const still = () => !dead && quietFor() >= SETTLE_MS;
-    /* A picture's bytes, downloaded once; kept until it is decoded. */
-    const blobs = new Map<string, Promise<Blob | null>>();
-    const bytes = (url: string) => {
-      let b = blobs.get(url);
-      if (!b) {
-        b = fetch(url).then((res) => (res.ok ? res.blob() : null), () => null);
-        blobs.set(url, b);
-      }
-      return b;
-    };
     const pixels = async (url: string, w: number, h: number): Promise<ImageBitmap | null> => {
       const size: ImageBitmapOptions = { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' };
-      const blob = await bytes(url);
-      blobs.delete(url);
       try {
-        if (blob) return await createImageBitmap(blob, size);
-      } catch { /* not one this browser decodes from bytes */ }
-      /* A host that will not let it be read: through a picture element instead. */
+        const res = await fetch(url);
+        if (res.ok) return await createImageBitmap(await res.blob(), size);
+      } catch { /* a host that will not let it be read: through a picture element instead */ }
       return new Promise((done) => {
         const im = new Image();
         im.onload = () => { createImageBitmap(im, size).then(done, () => done(null)); };
@@ -485,14 +462,14 @@ export default function PrimeTest() {
       cv.getContext('2d', { willReadFrequently: true })?.drawImage(got.bmp, 0, 0);
       got.bmp.close();
     };
-    /* The tiles still without their picture, nearest first: `d` rows from the focus (below before
-       above) and `k` screenfuls along its row from where that row's focus is — at the same distance,
-       what is on screen first. Each comes with the size its canvas is drawn at: the tile in real
-       screen pixels, never more than the w500 picture has. */
+    /* The tiles still without their picture, in groups of PICS_AT_ONCE, nearest first: a group is
+       `d` rows from the focus (below before above) and `k` screenfuls along its row from where that
+       row's focus is. Each comes with the size its canvas is drawn at: the tile in real screen pixels,
+       never more than the w500 picture has. */
     const plan = () => {
       const s = st.current;
       const f = s.mode === 'rows' ? s.row : 0;
-      const todo: { cv: HTMLCanvasElement; w: number; h: number; d: number; k: number }[] = [];
+      const groups: { at: number; d: number; tiles: { cv: HTMLCanvasElement; w: number; h: number }[] }[] = [];
       rows.forEach((row, r) => {
         const tiles = rowEls.current[r]?.querySelectorAll<HTMLCanvasElement>('.pv-tile-art');
         if (!tiles) return;
@@ -502,44 +479,33 @@ export default function PrimeTest() {
         const h = Math.round(g.h * scale);
         const col = s.cols[r] ?? 0;
         const d = r >= f ? r - f : f - r + 0.5;
+        const byK = new Map<number, { cv: HTMLCanvasElement; w: number; h: number }[]>();
         tiles.forEach((cv, c) => {
           if (!cv.dataset.src || cv.dataset.on === cv.dataset.src) return;
           const off = c < col ? col - c : Math.max(0, c - col - (PICS_AT_ONCE - 1));
-          todo.push({ cv, w, h, d, k: Math.ceil(off / PICS_AT_ONCE) });
+          const k = Math.ceil(off / PICS_AT_ONCE);
+          byK.set(k, [...(byK.get(k) ?? []), { cv, w, h }]);
         });
+        byK.forEach((t, k) => groups.push({ at: d + k, d, tiles: t }));
       });
-      return todo.sort((a, b) => a.d + a.k - (b.d + b.k) || a.k - b.k || a.d - b.d);
+      return groups.sort((a, b) => a.at - b.at || a.d - b.d).map((gr) => gr.tiles);
     };
-    const fetchFrom = (todo: ReturnType<typeof plan>, at: number, n: number) =>
-      todo.slice(at, at + n).forEach((t) => { if (!ready.has(t.cv)) void bytes(t.cv.dataset.src!); });
     const pump = async () => {
       if (running) return;
       running = true;
-      const todo = plan();
-      let next = 0;
-      const lane = async () => {
-        while (next < todo.length && still()) {
-          const { cv, w, h } = todo[next++];
-          fetchFrom(todo, next, FETCH_AHEAD);
-          if (!ready.has(cv)) {
-            const url = cv.dataset.src!;
-            const bmp = await pixels(url, w, h);
-            if (dead) { bmp?.close(); return; }
-            ready.set(cv, { url, bmp });
-          }
-          if (still()) draw(cv);
-        }
-      };
-      await Promise.all(Array.from({ length: PICS_AT_ONCE }, lane));
+      for (const tiles of plan()) {
+        await Promise.all(tiles.filter((t) => !ready.has(t.cv)).map(async ({ cv, w, h }) => {
+          const url = cv.dataset.src!;
+          const bmp = await pixels(url, w, h);
+          if (dead) bmp?.close(); else ready.set(cv, { url, bmp });
+        }));
+        if (!still()) break;
+        tiles.forEach((t) => draw(t.cv));
+      }
       running = false;
       if (!dead && plan().length) arm();
     };
-    const arm = () => {
-      cancel();
-      const early = whenQuiet(() => fetchFrom(plan(), 0, PICS_AT_ONCE + FETCH_AHEAD), BYTES_AT, true);
-      const rest = whenQuiet(() => { void pump(); }, SETTLE_MS, true);
-      cancel = () => { early(); rest(); };
-    };
+    const arm = () => { cancel(); cancel = whenQuiet(() => { void pump(); }, SETTLE_MS, true); };
     arm();
     return () => {
       dead = true;
