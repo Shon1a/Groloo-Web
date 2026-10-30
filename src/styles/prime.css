@@ -197,14 +197,22 @@ body.pv-page .tv-det-art img { object-position: center top; }
 }
 
 /* ---- THE FEATURED ROW: a 1024x576 card on the focus line (x 144) for the focused title, then 384x576
-   posters from x 1200. The posters pass under the card: their strip is clipped at its right edge (x 1168),
-   the focused title's own poster standing just inside it (PrimeTest's PvRowView). ---- */
+   posters from x 1200, and the one before it ending at x 112. The posters pass under the card: two copies
+   of the strip, one clipped at its right edge (x 1168) with the focused title's poster just inside it,
+   one at its left edge (x 144) with the same poster just past it (PrimeTest's PvRowView). ---- */
 .pv-feat { position: relative; height: calc(642 * var(--p)); }
 .pv-clip {
   position: absolute; left: calc(1168 * var(--p)); right: 0; top: calc(45 * var(--p));
   height: calc(576 * var(--p)); overflow: hidden;
 }
 .pv-clip > .pv-strip { padding-left: 0; margin-left: calc(-384 * var(--p)); }
+.pv-clip.is-left { left: 0; right: auto; width: calc(144 * var(--p)); }
+.pv-clip.is-left > .pv-strip { padding-left: calc(144 * var(--p)); margin-left: 0; }
+/* The poster before the card fades into the screen's left edge: black at 0, clear where it ends (112). */
+.pv-clip.is-left::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, var(--bg), transparent calc(112 * var(--p)));
+}
 .pv-tile.is-poster { height: calc(576 * var(--p)); }
 .pv-card {
   position: absolute; left: calc(144 * var(--p)); top: calc(45 * var(--p));

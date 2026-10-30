@@ -32,13 +32,15 @@ import '../styles/prime.css';
  *     under 1%). Held, a step every ~210ms, each one re-aiming the move still running.
  *   · A row leaving upward is gone in ~60ms; a row coming into focus, or leaving it downward, changes
  *     between full and half in a sharp ease-out (~270ms, most of it in the first 50).
- *   · The title panel: at the press it fades out where it is (165ms, linear); 210ms after the press the
- *     new title fades in (200ms, linear), sliding the last 39px (32px sideways) in from where the rows
- *     come from, easing out. So a held key keeps it empty.
- *   · The picture: dims to black 300ms after a move (115ms), and the new one fades in (150ms) once the
- *     remote has rested 470ms and it is decoded.
- *   · The featured card does what the panel does, on the card: out where it is (180ms), in at 210ms
- *     (200ms), its words sliding 76px and its picture 38px. The posters pass under it.
+ *   · The title panel: at the press it fades out where it is (200ms, linear, a frame ahead of the rows);
+ *     210ms after the press the new title fades in (200ms, linear), sliding the last 39px (32px
+ *     sideways) in from where the rows come from, easing out. So a held key keeps it empty.
+ *   · The picture: dims to black 290ms after a move (190ms), and the new one fades in (190ms) once the
+ *     remote has rested 440ms and it is decoded, crossing the old one if that is still going.
+ *   · The featured card does what the panel does, on the card: out drifting with the rows (190ms,
+ *     48px), in at 185ms (200ms), its words sliding 76px and its picture 38px. The posters pass under
+ *     it; the one before it shows ~110px left of it, fading into the screen's edge. On a Right press
+ *     that one is gone at once and the poster leaving the card is cut in 115ms later, already sliding.
  *   · Into the featured row the panel goes at once and the picture fades out at once (115ms); out of it
  *     the panel comes in 55ms after the press and the picture at 110ms, with no fade. The ring goes at
  *     once both ways and comes back around its new box (150ms, 230ms after).
@@ -66,9 +68,11 @@ const ROW_CAP = 20;
 const MOVE_MS = 380;
 /* A held key steps this often, whatever the axis. */
 const HOLD_MS = 210;
-/* The title panel. Out: fades where it is. In: from the side the rows come from, easing out — a
-   sideways press slides it sideways, Up/Down slides it vertically. */
-const OUT_MS = 165;
+/* The title panel. Out: fades where it is, a frame ahead of the rows (it starts 15ms in). In: from the
+   side the rows come from, easing out — a sideways press slides it sideways, Up/Down slides it
+   vertically. */
+const OUT_MS = 200;
+const OUT_LEAD = 15;
 const IN_AT = 210;
 const IN_MS = 200;
 const IN_SLIDE_MS = 200;
@@ -77,11 +81,18 @@ const IN_PX_H = 32;
 const IN_EASE = 'cubic-bezier(.11, .14, .26, 1)';
 /* Out of the featured row there is no panel to fade first: the new one comes in this soon. */
 const IN_AT_FROM_FEAT = 55;
-/* The featured card's two faces: the old one out, and how far the new one's words and picture slide
-   in; the in itself is the panel's (IN_AT, IN_MS, IN_EASE). */
-const FACE_OUT_MS = 180;
+/* The featured card's two faces. The old one fades (190ms, linear) drifting the way the rows go, both
+   halves alike (48px over 200ms, linear); the new one's words and picture slide in this far, the
+   picture half as far, starting a little sooner than the panel's in (FACE_IN_AT; IN_MS, IN_EASE). */
+const FACE_OUT_MS = 190;
+const FACE_IN_AT = 185;
+const FACE_OUT_PX = 48;
+const FACE_OUT_SLIDE_MS = 200;
 const FACE_PX_INFO = 76;
 const FACE_PX_ART = 38;
+/* A Right press on the featured row: the poster left of the card is gone at once, and the one leaving
+   the card is cut in this late, already on its way. */
+const SLIVER_BACK_AT = 115;
 /* A panel this far into its in is still all but invisible (under 10%): a press then simply gives it the
    new title, as before its in. A hold steps right as each in starts, and so never has the two panels
    trade places on every step (measured: a quarter more main-thread frames through a held Down). */
@@ -89,12 +100,20 @@ const IN_SEEN_MS = 20;
 /* After a tap, the next title is written into the hidden panel this late — past the press's own frame,
    so drawing it never holds up the start of the move. */
 const WRITE_AT = 50;
-const ART_OUT_AT = 300;
-const ART_OUT_MS = 115;
-const ART_IN_MS = 150;
-const ART_REST_MS = 470;
-/* Out of the featured row the picture is back this soon, cut in rather than faded. */
-const ART_REST_FROM_FEAT = 110;
+/* The picture top-right: it dims 290ms after a move (190ms, linear) and the next fades in once the
+   remote has rested 440ms (190ms, linear), crossing the last if that is still going. */
+const ART_OUT_AT = 290;
+const ART_OUT_MS = 190;
+const ART_IN_MS = 190;
+const ART_REST_MS = 440;
+/* Into the featured row it goes at once, faster. */
+const ART_GONE_MS = 115;
+/* Out of the featured row the picture is back this soon (~110ms with ART_PRIME_MS), cut in rather than
+   faded. */
+const ART_REST_FROM_FEAT = 80;
+/* A new picture is drawn all but invisible (ART_PRIMED) this long before its fade starts. */
+const ART_PRIME_MS = 34;
+const ART_PRIMED = 0.01;
 /* Into or out of the featured row the ring goes at once, and comes back around its new box. */
 const RING_IN_AT = 230;
 const RING_IN_MS = 150;
@@ -195,9 +214,12 @@ const logoFailed = (e: React.SyntheticEvent<HTMLImageElement>) => {
  * it into the tile's canvas once, and only while the remote is still (below). A tile's picture is w500
  * for a tile 384 wide: the edge's w780 WebP cost 4.5x the decoding (837ms against 184ms on a first walk
  * down, measured) for pixels the tile cannot show.
- *   The featured row's posters pass under its card, which stands still on the focus line. The card has
- * no backing of its own: the strip is clipped at its right edge instead — the same to the eye, and
- * nothing black is left to cover the picture top-right when the row is above the focus. The card's two
+ *   The featured row's posters pass under its card, which stands still on the focus line, on both
+ * sides: the titles before it end 32 short of its left edge (the reference shows a sliver of the last
+ * one), the titles after it start 32 past its right. That is two copies of the strip, offset by what the
+ * card is wider than a poster, moved together — one clipped at the card's left edge, one at its right.
+ * The card has no backing of its own: the strips' clips do that — the same to the eye, and nothing
+ * black is left to cover the picture top-right when the row is above the focus. The card's two
  * faces (they take turns) are filled in by writeFace; each half — the picture and the words — is one
  * layer, dimmed through a box of its own, so a dimmed card is never drawn offscreen first. */
 const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
@@ -205,13 +227,14 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
   i: number;
   setRowEl: (i: number, el: HTMLDivElement | null) => void;
 }) {
-  const strip = (
-    <div className="pv-strip">
+  /* A twin's canvases have no address of their own: the loader draws them from their originals. */
+  const strip = (twin = false) => (
+    <div className={twin ? 'pv-strip is-twin' : 'pv-strip'}>
       {row.items.map((m) => {
         const tag = badgeOf(m);
         return (
           <div key={m.id} className={row.feat ? 'pv-tile is-poster' : 'pv-tile'}>
-            <canvas className="pv-tile-art" data-src={tileSrc(row, m)} />
+            <canvas className="pv-tile-art" data-src={twin ? undefined : tileSrc(row, m)} />
             {tag && <span className="pv-tag">{tag}</span>}
           </div>
         );
@@ -222,14 +245,15 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
     return (
       <div className="pv-row" ref={(el) => setRowEl(i, el)}>
         <h2 className="pv-row-title">{row.title}</h2>
-        {strip}
+        {strip()}
       </div>
     );
   }
   return (
     <div className="pv-row pv-feat" ref={(el) => setRowEl(i, el)}>
       <h2 className="pv-row-title">{row.title}</h2>
-      <div className="pv-clip">{strip}</div>
+      <div className="pv-clip is-left">{strip(true)}</div>
+      <div className="pv-clip">{strip()}</div>
       <div className="pv-card">
         {[0, 1].map((n) => (
           <div key={n} className="pv-face">
@@ -386,7 +410,7 @@ export default function PrimeTest() {
          (Before its in, it is still hidden and simply takes the new title instead.) Its slide stays in
          the list, so one still running carries on rather than jumping to its end. */
       const out = els[i];
-      out.style.transition = `opacity ${OUT_MS}ms linear, transform ${IN_SLIDE_MS}ms ${IN_EASE}`;
+      out.style.transition = `opacity ${OUT_MS}ms linear ${-OUT_LEAD}ms, transform ${IN_SLIDE_MS}ms ${IN_EASE}`;
       out.style.opacity = '0';
       i = 1 - i;
     }
@@ -471,8 +495,9 @@ export default function PrimeTest() {
       if (F.keys[1 - i] === `${row.key}:${col}`) i = 1 - i;
     } else if (now >= F.inAt + IN_SEEN_MS) {
       for (const el of faceParts(i)!) {
-        el.style.transition = `opacity ${FACE_OUT_MS}ms linear, transform ${IN_SLIDE_MS}ms ${IN_EASE}`;
+        el.style.transition = `opacity ${FACE_OUT_MS}ms linear, transform ${FACE_OUT_SLIDE_MS}ms linear`;
         el.style.opacity = '0';
+        el.style.transform = at(dx * FACE_OUT_PX);
       }
       i = 1 - i;
     }
@@ -485,14 +510,14 @@ export default function PrimeTest() {
     }
     if (how === 'enter') writeFace(i, m, row, col);
     void getComputedStyle(words).opacity;
-    const delay = how === 'enter' ? 0 : IN_AT;
+    const delay = how === 'enter' ? 0 : FACE_IN_AT;
     for (const el of [art, words]) {
       el.style.transition = `opacity ${IN_MS}ms linear ${delay}ms, transform ${IN_SLIDE_MS}ms ${IN_EASE} ${delay}ms`;
       el.style.opacity = '1';
       el.style.transform = at(0);
     }
     F.inAt = now + delay;
-    if (how === 'move') writeLater(() => writeFace(i, m, row, col), holding, IN_AT);
+    if (how === 'move') writeLater(() => writeFace(i, m, row, col), holding, FACE_IN_AT);
   }, [p, faceParts, writeFace, writeLater]);
 
   /* The runtime and age rating of the title on screen, when its detail lands after it was written. */
@@ -522,23 +547,25 @@ export default function PrimeTest() {
   };
 
   /* ---- THE BACKGROUND PICTURE: the focused title's, in the box top-right. Two boxes take turns.
-     `outAt`: how soon the one on screen starts to go; `rest`: how long the remote must be still before
-     the next comes in; `inMs`: its fade. ---- */
-  const art = useRef({ shown: '', layer: 1, visible: false, outEnd: 0, token: 0, lastChange: 0 });
-  const artTo = useCallback((want: string, { outAt = ART_OUT_AT, rest = ART_REST_MS, inMs = ART_IN_MS } = {}) => {
+     `outAt`: how soon the one on screen starts to go, `outMs` its fade; `rest`: how long the remote must
+     be still before the next comes in; `inMs`: its fade. The next may come in while the last is still
+     going — the two cross. ---- */
+  const art = useRef({ shown: '', layer: 1, visible: false, token: 0, lastChange: 0 });
+  const artTo = useCallback((want: string, { outAt = ART_OUT_AT, outMs = ART_OUT_MS, rest = ART_REST_MS, inMs = ART_IN_MS } = {}) => {
     const a = art.current;
     const tm = timers.current;
     a.token += 1;
     a.lastChange = performance.now();
     window.clearTimeout(tm.artIn);
-    if (a.visible && a.shown === want) { window.clearTimeout(tm.artOut); tm.artOut = 0; return; }
+    if (a.visible && a.shown === want) {
+      if (tm.artOut) { window.clearTimeout(tm.artOut); tm.artOut = 0; fade(rowArtRefs.current[a.layer], 1, 0); }
+      return;
+    }
     if (a.visible && !tm.artOut) {
-      const out = () => {
-        tm.artOut = 0;
-        fade(rowArtRefs.current[a.layer], 0, ART_OUT_MS);
-        a.visible = false;
-        a.outEnd = performance.now() + ART_OUT_MS;
-      };
+      /* The fade is set now, delayed, so it starts on time whatever the main thread is doing; the timer
+         only marks it gone. */
+      fade(rowArtRefs.current[a.layer], 0, outMs, outAt);
+      const out = () => { tm.artOut = 0; a.visible = false; };
       if (outAt) tm.artOut = window.setTimeout(out, outAt);
       else out();
     }
@@ -547,7 +574,7 @@ export default function PrimeTest() {
     const tryIn = () => {
       if (token !== a.token) return;
       const now = performance.now();
-      const ready = Math.max(a.lastChange + rest, a.visible || tm.artOut ? Infinity : a.outEnd);
+      const ready = a.visible || tm.artOut ? Infinity : a.lastChange + rest;
       if (now < ready) { tm.artIn = window.setTimeout(tryIn, ready === Infinity ? 50 : ready - now); return; }
       const next = 1 - a.layer;
       const box = rowArtRefs.current[next];
@@ -557,13 +584,28 @@ export default function PrimeTest() {
       pic.src = want;
       pic.decode().catch(() => { /* show it anyway */ }).then(() => {
         if (token !== a.token) return;
+        /* Drawn all but invisible for two frames before the fade starts: a picture's first frame on
+           screen can take a few (its upload), and the fade would start that far along. The wait is the
+           fade's delay — on the compositor, no frames of the main thread's. A cut is a 1ms fade. */
         img.src = want;
-        fade(box, 1, inMs);
+        fade(box, ART_PRIMED, 0);
+        void getComputedStyle(box).opacity;
+        fade(box, 1, Math.max(inMs, 1), ART_PRIME_MS);
         a.shown = want; a.layer = next; a.visible = true;
       });
     };
     tryIn();
   }, []);
+
+  const sliverBack = (el: HTMLElement | null | undefined) => {
+    if (!el) return;
+    el.style.transition = 'none';
+    el.style.opacity = '0';
+    void getComputedStyle(el).opacity;
+    /* 1ms, not 0s: a zero-length transition runs on the main thread, a frame of its every 16ms. */
+    el.style.transition = `opacity 1ms linear ${SLIVER_BACK_AT}ms`;
+    el.style.opacity = '';
+  };
 
   /* ---- THE RING: one box, the tile's or the featured card's. ---- */
   const ringBig = useRef<boolean | null>(null);
@@ -607,8 +649,9 @@ export default function PrimeTest() {
       el.classList.toggle('is-gone', i < s.row && !above);
       el.classList.toggle('is-dim', i > s.row || above);
     });
-    const strip = rowEls.current[s.row]?.querySelector<HTMLElement>('.pv-strip');
-    if (strip) strip.style.transform = `translate3d(${-Math.round(col * TILE.pitch * p)}px, 0, 0)`;
+    rowEls.current[s.row]?.querySelectorAll<HTMLElement>('.pv-strip').forEach((strip) => {
+      strip.style.transform = `translate3d(${-Math.round(col * TILE.pitch * p)}px, 0, 0)`;
+    });
     ringTo(feat);
 
     if (s.row !== was.row || col !== was.col) {
@@ -621,8 +664,10 @@ export default function PrimeTest() {
           infoTo('enter', item, row, col, 0, -1);
           artTo(bgSrc(item));
         }
-      } else if (feat && s.row === was.row) faceTo('move', item, row, col, dx, pressHeld.current);
-      else if (feat) { hideInfo(); artTo('', { outAt: 0 }); }
+      } else if (feat && s.row === was.row) {
+        faceTo('move', item, row, col, dx, pressHeld.current);
+        if (dx < 0) sliverBack(rowEls.current[s.row]?.querySelector<HTMLElement>('.pv-clip.is-left'));
+      } else if (feat) { hideInfo(); artTo('', { outAt: 0, outMs: ART_GONE_MS }); }
       else {
         /* Out of the featured row on a tap, the panel and picture come at once; a hold carries on as
            any hold does, so nothing comes, or is decoded, between its steps. */
@@ -683,8 +728,8 @@ export default function PrimeTest() {
      canvas once — after that the browser only ever copies it to the screen, never decodes it again
      (the user's call, Oct 29: once a picture is here it costs nothing). The canvas is CPU-backed
      (`willReadFrequently`), so it is painted into its strip's layer as the picture was, not made a GPU
-     layer of its own. That holds ~330KB per tile at 1080p (~880KB per poster), ~120MB for the page
-     while it is open. */
+     layer of its own. That holds ~330KB per tile at 1080p (~880KB per poster, twice over for the
+     featured row's two strips), ~140MB for the page while it is open. */
   useEffect(() => {
     if (!rows.length) return;
     let dead = false;
@@ -693,6 +738,15 @@ export default function PrimeTest() {
     /* Decoded, but a press came before it could be drawn: drawn at the next rest. */
     const ready = new Map<HTMLCanvasElement, { url: string; bmp: ImageBitmap | null }>();
     const still = () => !dead && quietFor() >= SETTLE_MS;
+    /* The featured row's left strip shows the same posters: each is copied from its original as that
+       one is drawn, never fetched or decoded again. */
+    const twins = new Map<HTMLCanvasElement, HTMLCanvasElement>();
+    rowEls.current.forEach((el) => {
+      const copies = el?.querySelectorAll<HTMLCanvasElement>('.pv-strip.is-twin .pv-tile-art');
+      el?.querySelectorAll<HTMLCanvasElement>('.pv-strip:not(.is-twin) .pv-tile-art').forEach((cv, c) => {
+        if (copies?.[c]) twins.set(cv, copies[c]);
+      });
+    });
     const pixels = async (url: string, w: number, h: number): Promise<ImageBitmap | null> => {
       const size: ImageBitmapOptions = { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' };
       try {
@@ -716,6 +770,12 @@ export default function PrimeTest() {
       cv.height = got.bmp.height;
       cv.getContext('2d', { willReadFrequently: true })?.drawImage(got.bmp, 0, 0);
       got.bmp.close();
+      const twin = twins.get(cv);
+      if (twin) {
+        twin.width = cv.width;
+        twin.height = cv.height;
+        twin.getContext('2d', { willReadFrequently: true })?.drawImage(cv, 0, 0);
+      }
     };
     /* The tiles still without their picture, in groups of PICS_AT_ONCE, nearest first: a group is
        `d` rows from the focus (below before above) and `k` screenfuls along its row from where that
@@ -727,7 +787,7 @@ export default function PrimeTest() {
       const s = st.current;
       const groups: { at: number; d: number; tiles: { cv: HTMLCanvasElement; w: number; h: number }[] }[] = [];
       rows.forEach((row, r) => {
-        const tiles = rowEls.current[r]?.querySelectorAll<HTMLCanvasElement>('.pv-tile-art');
+        const tiles = rowEls.current[r]?.querySelectorAll<HTMLCanvasElement>('.pv-strip:not(.is-twin) .pv-tile-art');
         if (!tiles) return;
         const h = Math.round(tileH(row) * scale);
         const col = s.cols[r] ?? 0;
