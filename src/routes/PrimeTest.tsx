@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useHome, useWarmDetail } from '../lib/queries';
+import { useQueryClient } from '@tanstack/react-query';
+import { useHome, useMetaOf, useWarmDetail } from '../lib/queries';
 import { useT } from '../i18n/i18n';
 import { HOME_ROWS } from '../lib/home';
 import { imgW } from '../lib/img';
@@ -8,82 +9,111 @@ import { registerBackHandler } from '../lib/tvKeys';
 import { quietFor, whenQuiet } from '../lib/tvQuiet';
 import { useModal, openItem } from '../stores/modal';
 import { usePlayer } from '../stores/player';
-import type { MediaItem } from '../lib/types';
+import type { MediaItem, MetaDetail } from '../lib/types';
 import '../styles/prime.css';
 
 /* PRIME TEST — a TEST PAGE, on the TV bar between Anime and My Space: the Prime Video living-room
- * home, laid out and moving the way the real app does in a 1080p60 capture of it (YouTube
- * WbGGXCXVaoM from 4:02, measured frame by frame — tile positions by template matching, row motion
- * by phase correlation, fades by the brightness of each region per frame). All numbers are TV pixels
- * at 1920x1080 and milliseconds.
+ * home as the current app draws it, laid out and moving the way it does on an Android TV emulator
+ * (Oct 30: 60fps screen recordings with the keys sent by adb, measured frame by frame — row motion by
+ * phase correlation, fades by the brightness of each region per frame, positions off still captures).
+ * All numbers are TV pixels at 1920x1080 and milliseconds.
+ *
+ * THE LAYOUT. No billboard: the page opens on the first row, with the focused title's panel above the
+ * rows and its picture top-right. The rows are 384x216 tiles 416 apart, rows 282 apart, and the focused
+ * one always sits on the same line under a ring that never moves; rows above it are gone, rows below it
+ * at half. The panel is stacked from the bottom: the title's wordmark (its name where it has none), a
+ * NEW MOVIE / NEW SERIES pill, the facts line, two lines of synopsis, the included line.
+ *   The FEATURED ROW is the exception: its focused title is a 1024x576 card on the focus line, with
+ * the wordmark, pill and facts in the card, and the rest are 384x576 posters starting 32 past it. While
+ * it holds the remote there is no panel and no picture top-right, and the row above stays, at half.
  *
  * THE MOTION, AS MEASURED
- *   · Up/Down: LINEAR, 200ms per move whatever the distance (283px row to row, 306px out of the
- *     billboard, 640px into the poster carousel). Held, the moves chain end to end — one continuous
- *     glide at a row per 200ms.
- *   · Left/Right: CSS `ease`, 400ms (fits the capture to under 1%). The focused tile stays in the
- *     first slot under a ring that never moves; the row slides under it. Held, it is NOT a stream:
- *     whole 400ms steps, each starting as the last one ends.
- *   · The title panel (fades measured linearly, median of ten presses): on any move it fades out over
- *     200ms, sliding 32.5px WITH the rows and easing in; 205ms after the press the new title fades in
- *     over 210ms, sliding 30px in from where the rows come from and easing out hard — so a held key
- *     keeps it empty (vertical) or blinking per step (horizontal), as the reference does. Arriving from
- *     the billboard or a poster carousel, it comes in the same way at once. The title arrives with the
- *     rest (one late title in the capture was its picture decoding).
- *   · The background picture: dims to black 330ms after a move (150ms), and the new one fades in
- *     (200ms) only once the remote has rested 400ms.
- *   · Out of the billboard: the bar is gone in one frame, the billboard copy fades in 100ms while it
- *     scrolls up with the rows; back up, both fade in over the 200ms move.
- *   · Rows below the focused one sit at half; rows above it are gone, except the row above a poster
- *     carousel, which stays. Those changes take 100ms. The title panel is not shown on a carousel.
+ *   · Up/Down and Left/Right move alike: cubic-bezier(.35, .1, 0, 1) over 380ms (every press fits it to
+ *     under 1%). Held, a step every ~210ms, each one re-aiming the move still running.
+ *   · A row leaving upward is gone in ~60ms; a row coming into focus, or leaving it downward, changes
+ *     between full and half in a sharp ease-out (~270ms, most of it in the first 50).
+ *   · The title panel: at the press it fades out where it is (165ms, linear); 210ms after the press the
+ *     new title fades in (200ms, linear), sliding the last 39px (32px sideways) in from where the rows
+ *     come from, easing out. So a held key keeps it empty.
+ *   · The picture: dims to black 300ms after a move (115ms), and the new one fades in (150ms) once the
+ *     remote has rested 470ms and it is decoded.
+ *   · The featured card does what the panel does, on the card: out where it is (180ms), in at 210ms
+ *     (200ms), its words sliding 76px and its picture 38px. The posters pass under it.
+ *   · Into the featured row the panel goes at once and the picture fades out at once (115ms); out of it
+ *     the panel comes in 55ms after the press and the picture at 110ms, with no fade. The ring goes at
+ *     once both ways and comes back around its new box (150ms, 230ms after).
+ *   · Up from the first row, or Back, goes to the bar. Back from further down takes the page back to the
+ *     top: the rows go at once, and 130ms later come back a row short and glide into place.
  *
  * THE REMOTE NEVER MOVES DOM FOCUS HERE. The page root holds focus and owns its arrows (stopped
  * before TvSpatialNav's window listener — no candidate measuring, no rects). A press writes a couple
  * of transforms, classes and text nodes; React does not render, and no picture arrives, while
  * anything moves. */
 
-type Kind = 'tile' | 'poster' | 'top10';
-type PvRow = { key: string; title: string; kind: Kind; items: MediaItem[] };
-type Mode = 'hero' | 'rows';
+type PvRow = { key: string; title: string; items: MediaItem[]; feat?: boolean };
 
-/* x is where the focused tile's picture starts (a Top 10 tile sits right of its numeral). */
-const GEO: Record<Kind, { w: number; h: number; pitch: number; x: number }> = {
-  tile: { w: 384, h: 216, pitch: 416, x: 140 },
-  poster: { w: 384, h: 575, pitch: 421, x: 140 },
-  top10: { w: 337, h: 189, pitch: 476, x: 279 },
-};
+/* x is where the focused tile starts. */
+const TILE = { w: 384, h: 216, pitch: 416, x: 144 };
+/* The featured row's posters (TILE wide) and its card are this tall; prime.css places them. */
+const POSTER_H = 576;
 const TITLE_H = 45;
-const ROW_GAP = 22;
-const FOCUS_BOTTOM = 827;
-const HERO_ROW_TOP = 919;
+/* Between one row's tiles and the next row's title. */
+const ROW_GAP = 21;
+const FOCUS_BOTTOM = 828;
 const ROW_CAP = 20;
 
-const V_MS = 200;
-const H_MS = 400;
-/* The title panel. Out: fades linearly and slides away WITH the rows, easing in. In: from the side the
-   rows come from, easing out — a sideways press slides it sideways, Up/Down slides it vertically. */
-const OUT_MS = 200;
-const OUT_PX = 32.5;
-const OUT_EASE = 'cubic-bezier(.2, 0, .5, 0)';
-const IN_AT = 207;
-const IN_MS = 210;
+/* The rows' one move, on both axes (prime.css has it too, as --move). */
+const MOVE_MS = 380;
+/* A held key steps this often, whatever the axis. */
+const HOLD_MS = 210;
+/* The title panel. Out: fades where it is. In: from the side the rows come from, easing out — a
+   sideways press slides it sideways, Up/Down slides it vertically. */
+const OUT_MS = 165;
+const IN_AT = 210;
+const IN_MS = 200;
 const IN_SLIDE_MS = 200;
-const IN_PX = 30;
-const IN_EASE = 'cubic-bezier(.3, 1, .4, 1)';
+const IN_PX_V = 39;
+const IN_PX_H = 32;
+const IN_EASE = 'cubic-bezier(.11, .14, .26, 1)';
+/* Out of the featured row there is no panel to fade first: the new one comes in this soon. */
+const IN_AT_FROM_FEAT = 55;
+/* The featured card's two faces: the old one out, and how far the new one's words and picture slide
+   in; the in itself is the panel's (IN_AT, IN_MS, IN_EASE). */
+const FACE_OUT_MS = 180;
+const FACE_PX_INFO = 76;
+const FACE_PX_ART = 38;
+/* A panel this far into its in is still all but invisible (under 10%): a press then simply gives it the
+   new title, as before its in. A hold steps right as each in starts, and so never has the two panels
+   trade places on every step (measured: a quarter more main-thread frames through a held Down). */
+const IN_SEEN_MS = 20;
 /* After a tap, the next title is written into the hidden panel this late — past the press's own frame,
    so drawing it never holds up the start of the move. */
 const WRITE_AT = 50;
-const ART_OUT_AT = 330;
-const ART_OUT_MS = 150;
-const ART_IN_MS = 200;
-const ART_REST_MS = 400;
-const HERO_ART_AT = 370;
-/* Past the longest move a press starts: React work waits for this, so it never lands mid-move. */
-const SETTLE_MS = H_MS + 50;
+const ART_OUT_AT = 300;
+const ART_OUT_MS = 115;
+const ART_IN_MS = 150;
+const ART_REST_MS = 470;
+/* Out of the featured row the picture is back this soon, cut in rather than faded. */
+const ART_REST_FROM_FEAT = 110;
+/* Into or out of the featured row the ring goes at once, and comes back around its new box. */
+const RING_IN_AT = 230;
+const RING_IN_MS = 150;
+const RING_EASE = 'cubic-bezier(.2, .6, .3, 1)';
+/* Back to the top: the rows are gone this long before they glide back in. */
+const AWAY_MS = 130;
+/* Past the move a press starts: React work waits for this, so it never lands mid-move. */
+const SETTLE_MS = MOVE_MS + 50;
 /* Row pictures are fetched, decoded and put on this many tiles at a time — about a screenful. */
 const PICS_AT_ONCE = 5;
 /* The width of a tile's picture rendition (w500). */
 const PIC_W = 500;
+/* The panel's wordmark, for a box 250x75. */
+const LOGO_W = 'w300';
+/* Wordmarks of the titles one press away, fetched at rest and kept decoded — this many at most. */
+const LOGOS_KEPT = 24;
+/* On the featured card, the pictures one press away are kept decoded too (its next faces', and the one
+   top-right after it, which is cut in 110ms after the press) — this many at most. */
+const PICS_KEPT = 4;
 /* Real screen pixels per CSS pixel. Not devicePixelRatio alone: the webOS app's WAM reports 2 while the
    set draws 1080p, which its resolution media query does report (1dppx). */
 const SCREEN_PX = window.matchMedia?.('(resolution: 1dppx)').matches ? 1 : window.devicePixelRatio || 1;
@@ -95,11 +125,56 @@ const DIRS: Record<string, 'up' | 'down' | 'left' | 'right'> = {
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
 };
 
-const rowHeight = (r: PvRow) => TITLE_H + GEO[r.kind].h + ROW_GAP;
-const isNew = (m: MediaItem) => !!m.released && Date.now() - Date.parse(m.released) < 45 * 864e5;
-const votes = (n?: number) => (!n ? '' : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
-const statusOf = (m: MediaItem, row: PvRow, col: number) => (row.kind === 'top10' ? `#${col + 1} in Top 10`
-  : isNew(m) ? (m.type === 'movie' ? 'New movie' : 'New episodes') : '');
+const tileH = (r: PvRow) => (r.feat ? POSTER_H : TILE.h);
+/* A row's tile picture: the backdrop with the title lettered in, as the reference's tiles are; a
+   featured row's poster. The picture behind the panel and in the featured card is the textless one. */
+const tileSrc = (r: PvRow, m: MediaItem) => imgW(r.feat ? m.poster : m.tileArt ?? m.backdrop, 'w500');
+const bgSrc = (m: MediaItem) => imgW(m.bgArt ?? m.backdrop, 'w1280');
+
+const DAY = 864e5;
+const within = (date: string | null | undefined, days: number) => {
+  const at = date ? Date.parse(date) : NaN;
+  return at <= Date.now() && Date.now() - at < days * DAY;
+};
+/* The reference's pill, on a tile and in the panel. A card knows a new film or a new show; a new season
+   or episode only the title's detail knows (glance.ts's spans). */
+const badgeOf = (m: MediaItem, d?: MetaDetail) => {
+  if (m.type === 'movie') return within(m.released, 45) ? 'New movie' : '';
+  if (within(m.released, 60)) return 'New series';
+  const last = d?.airing?.last;
+  if (last && within(last.seasonStart, 30)) return last.season > 1 ? 'New season' : 'New series';
+  return last && within(last.date, 7) ? 'New episode' : '';
+};
+const runOf = (m: MediaItem, d?: MetaDetail) => (!d ? ''
+  : m.type === 'movie' ? d.runtime || ''
+    : d.seasons ? `${d.seasons} season${d.seasons > 1 ? 's' : ''}` : '');
+/* The age as the reference writes it, an age and a plus. A board that rates by age keeps its number
+   ("12", "12A", "16" → 12+, 16+); the US letters take the ages Prime Video gives them (its maturity
+   ratings: G, TV-Y, TV-G all ages; TV-Y7, PG, TV-PG 7+; PG-13 13+; TV-14 16+; R, NC-17, TV-MA 18+). */
+const US_AGE: Record<string, string> = {
+  G: 'ALL', 'TV-G': 'ALL', 'TV-Y': 'ALL', U: 'ALL',
+  'TV-Y7': '7+', 'TV-Y7-FV': '7+', PG: '7+', 'TV-PG': '7+',
+  'PG-13': '13+', 'TV-14': '16+', R: '18+', 'NC-17': '18+', 'TV-MA': '18+',
+};
+const ageOf = (d?: MetaDetail) => {
+  const c = d?.certification?.trim().toUpperCase();
+  if (!c) return '';
+  const n = /^\d+/.exec(c)?.[0];
+  return n ? (Number(n) ? `${Number(n)}+` : 'ALL') : US_AGE[c] ?? '';
+};
+
+/* The facts only the title's detail has: its runtime (or seasons) and age rating. Written with the rest
+   when the detail is already here; otherwise when it lands, at rest — at the END of the facts line, so
+   they move nothing else, fading in. The featured card has the age alone. */
+const writeLate = (el: HTMLElement, m: MediaItem, d: MetaDetail | undefined, late: boolean) => {
+  const pairs: [string, string][] = [['.pv-run', runOf(m, d)], ['.pv-age', ageOf(d)]];
+  for (const [sel, s] of pairs) {
+    const n = el.querySelector<HTMLElement>(sel);
+    if (!n || n.textContent === s) continue;
+    n.textContent = s;
+    n.classList.toggle('is-late', late && !!s);
+  }
+};
 
 const Check = () => (
   <span className="pv-check">
@@ -108,25 +183,68 @@ const Check = () => (
   </span>
 );
 
+/* A wordmark that will not load: the name, as for a title that has none. */
+const logoFailed = (e: React.SyntheticEvent<HTMLImageElement>) => {
+  e.currentTarget.style.display = 'none';
+  (e.currentTarget.nextElementSibling as HTMLElement).style.display = '';
+};
+
 /* A row never re-renders on a press or for its pictures — only when its data changes. A tile is its
- * picture alone: no wordmark over it. The picture's address waits in `data-src`; the page draws it into
- * the tile's canvas once, and only while the remote is still (below). A tile's picture is w500 for a
- * tile 384 wide: the edge's w780 WebP cost 4.5x the decoding (837ms against 184ms on a first walk
- * down, measured) for pixels the tile cannot show. */
+ * picture and, on a new title, the pill — laid over it in one grid cell, not positioned, so nothing in
+ * the strip is cut out as a layer of its own. The picture's address waits in `data-src`; the page draws
+ * it into the tile's canvas once, and only while the remote is still (below). A tile's picture is w500
+ * for a tile 384 wide: the edge's w780 WebP cost 4.5x the decoding (837ms against 184ms on a first walk
+ * down, measured) for pixels the tile cannot show.
+ *   The featured row's posters pass under its card, which stands still on the focus line. The card has
+ * no backing of its own: the strip is clipped at its right edge instead — the same to the eye, and
+ * nothing black is left to cover the picture top-right when the row is above the focus. The card's two
+ * faces (they take turns) are filled in by writeFace; each half — the picture and the words — is one
+ * layer, dimmed through a box of its own, so a dimmed card is never drawn offscreen first. */
 const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
   row: PvRow;
   i: number;
   setRowEl: (i: number, el: HTMLDivElement | null) => void;
 }) {
+  const strip = (
+    <div className="pv-strip">
+      {row.items.map((m) => {
+        const tag = badgeOf(m);
+        return (
+          <div key={m.id} className={row.feat ? 'pv-tile is-poster' : 'pv-tile'}>
+            <canvas className="pv-tile-art" data-src={tileSrc(row, m)} />
+            {tag && <span className="pv-tag">{tag}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+  if (!row.feat) {
+    return (
+      <div className="pv-row" ref={(el) => setRowEl(i, el)}>
+        <h2 className="pv-row-title">{row.title}</h2>
+        {strip}
+      </div>
+    );
+  }
   return (
-    <div className={`pv-row is-${row.kind}`} ref={(el) => setRowEl(i, el)}>
+    <div className="pv-row pv-feat" ref={(el) => setRowEl(i, el)}>
       <h2 className="pv-row-title">{row.title}</h2>
-      <div className="pv-strip">
-        {row.items.map((m, c) => (
-          <div key={m.id} className="pv-item">
-            {row.kind === 'top10' && <span className="pv-num"><span>{c + 1}</span></span>}
-            <div className="pv-tile">
-              <canvas className="pv-tile-art" data-src={row.kind === 'poster' ? imgW(m.poster, 'w500') : imgW(m.backdrop, 'w500')} />
+      <div className="pv-clip">{strip}</div>
+      <div className="pv-card">
+        {[0, 1].map((n) => (
+          <div key={n} className="pv-face">
+            <div className="pv-dim"><div className="pv-face-art"><img alt="" decoding="async" /></div></div>
+            <div className="pv-dim">
+              <div className="pv-face-info">
+                <img className="pv-logo" alt="" decoding="async" onError={logoFailed} />
+                <p className="pv-title" />
+                <p className="pv-face-tags">
+                  <span className="pv-badge" />
+                  <span className="pv-genre" />
+                  <span className="pv-age" />
+                </p>
+                <Check />
+              </div>
             </div>
           </div>
         ))}
@@ -140,71 +258,87 @@ export default function PrimeTest() {
   const { data } = useHome();
   const openModal = useModal((s) => s.open);
   const warm = useWarmDetail();
+  const metaOf = useMetaOf();
+  const qc = useQueryClient();
 
-  const hero = useMemo(() => (data?.hero?.results ?? []).find((m) => m.backdrop), [data?.hero?.results]);
   const rows = useMemo(() => {
-    const list = (cat: string, need: 'backdrop' | 'poster' = 'backdrop') =>
-      (data?.rows?.[cat]?.results ?? []).filter((m) => m[need]).slice(0, ROW_CAP);
+    const list = (cat: string) => (data?.rows?.[cat]?.results ?? []).filter((m) => m.backdrop).slice(0, ROW_CAP);
     const out: PvRow[] = [];
-    const push = (key: string, title: string, kind: Kind, items: MediaItem[]) => { if (items.length) out.push({ key, title, kind, items }); };
-    /* The reference's order: a row of tiles under the billboard, then the poster carousel. */
-    push('trending_movie', t('sec.trending_movies'), 'tile', list('trending_movie'));
-    push('featured', t('tv.featured'), 'poster', list('top_tv', 'poster'));
-    push('top10', 'Top 10', 'top10', list('trending_tv').slice(0, 10));
+    const push = (key: string, title: string, items: MediaItem[], feat = false) => { if (items.length) out.push({ key, title, items, feat }); };
+    push('trending_movie', t('sec.trending_movies'), list('trending_movie'));
+    push('featured', t('tv.featured'), list('top_tv').filter((m) => m.poster), true);
+    push('top10', 'Top 10', list('trending_tv').slice(0, 10));
     for (const row of HOME_ROWS) {
       if (row.cat === 'trending_movie' || row.cat === 'top_tv' || row.cat === 'trending_tv') continue;
-      push(row.cat, t(row.key), 'tile', list(row.cat));
+      push(row.cat, t(row.key), list(row.cat));
     }
     return out;
   }, [data?.rows, t]);
-  /* Where each row starts in the track — from the constants, never measured. */
-  const rowTops = useMemo(() => {
+  /* Where each row starts on the track. */
+  const tops = useMemo(() => {
     let y = 0;
-    return rows.map((r) => { const top = y; y += rowHeight(r); return top; });
+    return rows.map((r) => { const top = y; y += TITLE_H + tileH(r) + ROW_GAP; return top; });
   }, [rows]);
+  const featAt = useMemo(() => rows.findIndex((r) => r.feat), [rows]);
 
   const [p] = useState(() => window.innerWidth / 1920);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
-  const heroCopyRef = useRef<HTMLDivElement>(null);
-  const heroArtRef = useRef<HTMLDivElement>(null);
   const rowArtRefs = useRef<(HTMLDivElement | null)[]>([null, null]);
   const infoRefs = useRef<(HTMLDivElement | null)[]>([null, null]);
   const rowEls = useRef<(HTMLDivElement | null)[]>([]);
   const setRowEl = useCallback((i: number, el: HTMLDivElement | null) => { rowEls.current[i] = el; }, []);
-  const focusEl = useRef<Element | null>(null);
 
-  const st = useRef({ mode: 'hero' as Mode, btn: 1, row: 0, cols: [] as number[] });
+  const st = useRef({ row: 0, cols: [] as number[] });
   /* What is on screen now, to tell what a press changed. */
-  const shown = useRef({ inRows: false, row: -1, col: -1, kind: '' as Kind | '', item: null as MediaItem | null });
-  const timers = useRef({ text: 0, write: 0, ring: 0, rest: 0, artOut: 0, artIn: 0 });
+  const shown = useRef({ row: -1, col: -1, key: '', item: null as MediaItem | null });
+  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0 });
   /* Whether the press being applied is a held key's step. */
   const pressHeld = useRef(false);
+  /* Where the track stands with row `r` on the focus line. */
+  const trackAt = useCallback((r: number) => `translate3d(0, ${Math.round((FOCUS_BOTTOM - (tops[r] + TITLE_H + tileH(rows[r]))) * p)}px, 0)`, [p, rows, tops]);
+
+  /* The next title to write into a hidden panel or card face, and writing it. */
+  const pending = useRef<null | (() => void)>(null);
+  const fillPending = useCallback(() => {
+    const f = pending.current;
+    pending.current = null;
+    f?.();
+  }, []);
 
   /* ---- THE TITLE PANEL. Text is written straight into its nodes: no render on a press. Two panels
      take turns: while the one on screen fades out, the next title is written into the hidden one, so
      it is drawn before it has to appear. `keys`: the title each holds; `inAt`: when the front one
-     comes (or came) in; `pending`: what the next in shows. ---- */
-  const info = useRef({ front: 0, keys: ['', ''], inAt: 0, pending: null as null | { i: number; m: MediaItem; row: PvRow; col: number } });
+     comes (or came) in; `hidden`: both are gone (the featured row has the remote). ---- */
+  const info = useRef({ front: 0, keys: ['', ''], inAt: 0, hidden: false });
   const writeInfo = useCallback((i: number, m: MediaItem, row: PvRow, col: number) => {
     const el = infoRefs.current[i];
     const key = `${row.key}:${col}`;
     if (!el || info.current.keys[i] === key) return;
     info.current.keys[i] = key;
     const q = (s: string) => el.querySelector<HTMLElement>(s)!;
-    const status = statusOf(m, row, col);
-    q('.pv-status').textContent = status;
-    q('.pv-status').style.display = status ? '' : 'none';
+    const d = metaOf(m);
+    const logo = q('.pv-logo') as HTMLImageElement;
+    const src = m.titleLogo ? imgW(m.titleLogo, LOGO_W) : '';
+    if (!src) logo.removeAttribute('src');
+    else if (logo.getAttribute('src') !== src) logo.src = src;
+    logo.style.display = src ? '' : 'none';
     q('.pv-title').textContent = m.title ?? '';
-    const stars = Math.round((m.rating ?? 0)) / 2;
-    q('.pv-stars').querySelectorAll('i').forEach((s, i) => { s.className = i + 1 <= stars ? 'on' : i + 0.5 === stars ? 'half' : ''; });
-    q('.pv-votes').textContent = votes(m.votes);
-    q('.pv-year').textContent = m.year ? String(m.year) : '';
+    q('.pv-title').style.display = src ? 'none' : '';
+    const badge = badgeOf(m, d);
+    const callout = row.key === 'top10' ? `#${col + 1} in Top 10` : '';
+    q('.pv-badge').textContent = badge;
+    q('.pv-badge').style.display = badge ? '' : 'none';
+    q('.pv-callout').textContent = callout;
+    q('.pv-callout').style.display = callout ? '' : 'none';
+    q('.pv-tags').style.display = badge || callout ? '' : 'none';
     q('.pv-genre').textContent = m.genre ?? '';
+    q('.pv-year').textContent = m.year ? String(m.year) : '';
+    writeLate(el, m, d, false);
     q('.pv-synopsis').textContent = m.overview ?? '';
-  }, []);
+  }, [metaOf]);
 
   const fade = (el: HTMLElement | null, to: number, ms: number, delay = 0) => {
     if (!el) return;
@@ -212,92 +346,210 @@ export default function PrimeTest() {
     el.style.opacity = String(to);
   };
 
-  const fillInfo = useCallback(() => {
-    const pd = info.current.pending;
-    if (pd) writeInfo(pd.i, pd.m, pd.row, pd.col);
-  }, [writeInfo]);
+  /* The key being held, if any (the hold logic below keeps it). */
+  const held = useRef({ key: '', lastRepeat: 0, timer: 0 });
+  const keyHeld = () => !!held.current.key && performance.now() - held.current.lastRepeat < REPEAT_GONE_MS;
 
-  /* `dx, dy`: which way the rows moved (-1 left/up, 1 right/down, per axis). `held`: a held Down/Up
-     steps again before the title would come in, so its text is only written once the key is let go. */
-  const infoTo = useCallback((how: 'enter' | 'move' | 'hide', m?: MediaItem, row?: PvRow, col = 0, dx = 0, dy = 0, held = false) => {
+  /* The next title is written WRITE_AT after a tap. `holding`: a hold steps again before the title
+     would come in, on either axis, so nothing is written — no text, no wordmark to fetch — until the
+     key is let go (onKeyUp), or, on a set that drops the keyup, as the title comes in with no repeat
+     saying the key is still down. */
+  const writeLater = useCallback((write: () => void, holding: boolean, inAt: number) => {
+    const tm = timers.current;
+    pending.current = write;
+    if (!holding) tm.write = window.setTimeout(fillPending, WRITE_AT);
+    else tm.text = window.setTimeout(() => { if (!keyHeld()) fillPending(); }, inAt);
+  }, [fillPending]);
+  const dropWrites = () => {
+    window.clearTimeout(timers.current.text);
+    window.clearTimeout(timers.current.write);
+    pending.current = null;
+  };
+
+  /* `dx, dy`: which way the rows moved (-1 left/up, 1 right/down, per axis). `inAt`: when the new title
+     comes in. */
+  const infoTo = useCallback((how: 'enter' | 'move', m: MediaItem, row: PvRow, col: number, dx = 0, dy = 0, holding = false, inAt = IN_AT) => {
     const I = info.current;
     const els = infoRefs.current as HTMLDivElement[];
-    const tm = timers.current;
     if (!els[0] || !els[1]) return;
-    window.clearTimeout(tm.text);
-    window.clearTimeout(tm.write);
-    I.pending = null;
-    if (how === 'hide' || !m || !row) {
-      els.forEach((el) => { el.style.transition = 'none'; el.style.opacity = '0'; });
-      return;
-    }
+    dropWrites();
     const at = (x: number, y: number) => `translate3d(${x * p}px, ${y * p}px, 0)`;
     const now = performance.now();
+    const key = `${row.key}:${col}`;
     let i = I.front;
-    if (how === 'enter') {
-      if (I.keys[1 - i] === `${row.key}:${col}`) i = 1 - i;
-    } else if (now >= I.inAt) {
-      /* The front panel is on screen or coming in: it leaves with the rows and the other takes over.
-         (Before its in, it is still hidden and simply takes the new title instead.) */
+    if (how === 'enter' || I.hidden) {
+      /* Nothing on screen: the panel already holding this title, if either does, comes in. (Out of the
+         featured row, both were written at rest with the titles above and below it.) */
+      if (I.keys[i] !== key && I.keys[1 - i] === key) i = 1 - i;
+    } else if (now >= I.inAt + IN_SEEN_MS) {
+      /* The front panel is on screen or coming in: it fades where it is and the other takes over.
+         (Before its in, it is still hidden and simply takes the new title instead.) Its slide stays in
+         the list, so one still running carries on rather than jumping to its end. */
       const out = els[i];
-      out.style.transition = `opacity ${OUT_MS}ms linear, transform ${OUT_MS}ms ${OUT_EASE}`;
+      out.style.transition = `opacity ${OUT_MS}ms linear, transform ${IN_SLIDE_MS}ms ${IN_EASE}`;
       out.style.opacity = '0';
-      out.style.transform = at(dx * OUT_PX, dy * OUT_PX);
       i = 1 - i;
     }
     const el = els[i];
     I.front = i;
+    I.hidden = false;
     el.style.transition = 'none';
     el.style.opacity = '0';
-    el.style.transform = at(-dx * IN_PX, -dy * IN_PX);
+    el.style.transform = at(-dx * IN_PX_H, -dy * IN_PX_V);
     if (how === 'enter') writeInfo(i, m, row, col);
     /* The starting place is committed first; the in is then set in the same frame as the out, delayed,
        so the gap between them is exact. */
     void getComputedStyle(el).opacity;
-    const delay = how === 'enter' ? 0 : IN_AT;
+    const delay = how === 'enter' ? 0 : inAt;
     el.style.transition = `opacity ${IN_MS}ms linear ${delay}ms, transform ${IN_SLIDE_MS}ms ${IN_EASE} ${delay}ms`;
     el.style.opacity = '1';
     el.style.transform = at(0, 0);
     I.inAt = now + delay;
-    if (how === 'enter') return;
-    I.pending = { i, m, row, col };
-    if (!(held && dy)) tm.write = window.setTimeout(fillInfo, WRITE_AT);
-    /* A set that drops the keyup after a hold: the text, at the latest as it shows. */
-    tm.text = window.setTimeout(fillInfo, IN_AT);
-  }, [p, writeInfo, fillInfo]);
+    if (how === 'move' && I.keys[i] !== key) writeLater(() => writeInfo(i, m, row, col), holding, inAt);
+  }, [p, writeInfo, writeLater]);
 
-  /* ---- THE BACKGROUND PICTURE: the billboard's, or the focused title's in the box top-right. ---- */
-  const art = useRef({ want: '' as string, shown: 'hero' as string, layer: -1, visible: true, outEnd: 0, token: 0, lastChange: 0 });
-  const artLayer = (layer: number) => (layer < 0 ? heroArtRef.current : rowArtRefs.current[layer]);
-  const artTo = useCallback((want: string) => {
+  /* Into the featured row: the panel is gone at once. */
+  const hideInfo = () => {
+    dropWrites();
+    infoRefs.current.forEach((el) => fade(el, 0, 0));
+    info.current.inAt = 0;
+    info.current.hidden = true;
+  };
+
+  /* ---- THE FEATURED CARD: the focused title of the featured row, in the card on the focus line. Two
+     faces take turns, as the panels do. Each face is two layers, its picture and its words, moved and
+     faded alike. ---- */
+  const face = useRef({ front: 0, keys: ['', ''], inAt: 0 });
+  const faceParts = useCallback((i: number) => {
+    const f = rowEls.current[featAt]?.querySelectorAll<HTMLElement>('.pv-face')[i];
+    return f ? [f.querySelector<HTMLElement>('.pv-face-art')!, f.querySelector<HTMLElement>('.pv-face-info')!] as const : null;
+  }, [featAt]);
+  const writeFace = useCallback((i: number, m: MediaItem, row: PvRow, col: number) => {
+    const parts = faceParts(i);
+    const key = `${row.key}:${col}`;
+    if (!parts || face.current.keys[i] === key) return;
+    face.current.keys[i] = key;
+    const [art, words] = parts;
+    const q = (s: string) => words.querySelector<HTMLElement>(s)!;
+    const d = metaOf(m);
+    const logo = q('.pv-logo') as HTMLImageElement;
+    const src = m.titleLogo ? imgW(m.titleLogo, LOGO_W) : '';
+    if (!src) logo.removeAttribute('src');
+    else if (logo.getAttribute('src') !== src) logo.src = src;
+    logo.style.display = src ? '' : 'none';
+    q('.pv-title').textContent = m.title ?? '';
+    q('.pv-title').style.display = src ? 'none' : '';
+    const badge = badgeOf(m, d);
+    q('.pv-badge').textContent = badge;
+    q('.pv-badge').style.display = badge ? '' : 'none';
+    q('.pv-genre').textContent = m.genre ?? '';
+    writeLate(words, m, d, false);
+    /* The picture goes on once decoded; one that comes after the face has, fades in. */
+    const img = art.querySelector('img')!;
+    const url = bgSrc(m);
+    img.classList.remove('is-late');
+    img.removeAttribute('src');
+    img.dataset.want = url;
+    const pic = new Image();
+    pic.src = url;
+    pic.decode().catch(() => { /* show it anyway */ }).then(() => {
+      if (img.dataset.want !== url) return;
+      img.src = url;
+      const F = face.current;
+      if (F.front === i && performance.now() > F.inAt) img.classList.add('is-late');
+    });
+  }, [metaOf, faceParts]);
+
+  const faceTo = useCallback((how: 'enter' | 'move', m: MediaItem, row: PvRow, col: number, dx = 0, holding = false) => {
+    const F = face.current;
+    if (!faceParts(0) || !faceParts(1)) return;
+    dropWrites();
+    const at = (x: number) => `translate3d(${x * p}px, 0, 0)`;
+    const now = performance.now();
+    let i = F.front;
+    if (how === 'enter') {
+      if (F.keys[1 - i] === `${row.key}:${col}`) i = 1 - i;
+    } else if (now >= F.inAt + IN_SEEN_MS) {
+      for (const el of faceParts(i)!) {
+        el.style.transition = `opacity ${FACE_OUT_MS}ms linear, transform ${IN_SLIDE_MS}ms ${IN_EASE}`;
+        el.style.opacity = '0';
+      }
+      i = 1 - i;
+    }
+    F.front = i;
+    const [art, words] = faceParts(i)!;
+    for (const [el, px] of [[art, FACE_PX_ART], [words, FACE_PX_INFO]] as const) {
+      el.style.transition = 'none';
+      el.style.opacity = '0';
+      el.style.transform = at(-dx * px);
+    }
+    if (how === 'enter') writeFace(i, m, row, col);
+    void getComputedStyle(words).opacity;
+    const delay = how === 'enter' ? 0 : IN_AT;
+    for (const el of [art, words]) {
+      el.style.transition = `opacity ${IN_MS}ms linear ${delay}ms, transform ${IN_SLIDE_MS}ms ${IN_EASE} ${delay}ms`;
+      el.style.opacity = '1';
+      el.style.transform = at(0);
+    }
+    F.inAt = now + delay;
+    if (how === 'move') writeLater(() => writeFace(i, m, row, col), holding, IN_AT);
+  }, [p, faceParts, writeFace, writeLater]);
+
+  /* The runtime and age rating of the title on screen, when its detail lands after it was written. */
+  useEffect(() => qc.getQueryCache().subscribe((e) => {
+    if (e.type !== 'updated' || e.action.type !== 'success' || e.query.queryKey[0] !== 'meta') return;
+    const { item, key, row } = shown.current;
+    if (!item) return;
+    const onCard = row === featAt;
+    const A = onCard ? face.current : info.current;
+    const el = onCard ? faceParts(A.front)?.[1] : infoRefs.current[A.front];
+    if (!el || A.keys[A.front] !== key) return;
+    const d = metaOf(item);
+    if (d) writeLate(el, item, d, true);
+  }), [qc, metaOf, featAt, faceParts]);
+
+  /* Wordmarks for the titles one press away (and on the featured card, their pictures), fetched and
+     decoded at rest. */
+  const logosKept = useRef(new Map<string, HTMLImageElement>());
+  const picsKept = useRef(new Map<string, HTMLImageElement>());
+  const keep = (kept: Map<string, HTMLImageElement>, url: string, max: number) => {
+    if (kept.has(url)) return;
+    const im = new Image();
+    im.src = url;
+    im.decode().catch(() => { /* the panel copes */ });
+    kept.set(url, im);
+    if (kept.size > max) kept.delete(kept.keys().next().value!);
+  };
+
+  /* ---- THE BACKGROUND PICTURE: the focused title's, in the box top-right. Two boxes take turns.
+     `outAt`: how soon the one on screen starts to go; `rest`: how long the remote must be still before
+     the next comes in; `inMs`: its fade. ---- */
+  const art = useRef({ shown: '', layer: 1, visible: false, outEnd: 0, token: 0, lastChange: 0 });
+  const artTo = useCallback((want: string, { outAt = ART_OUT_AT, rest = ART_REST_MS, inMs = ART_IN_MS } = {}) => {
     const a = art.current;
     const tm = timers.current;
-    a.want = want;
     a.token += 1;
     a.lastChange = performance.now();
     window.clearTimeout(tm.artIn);
     if (a.visible && a.shown === want) { window.clearTimeout(tm.artOut); tm.artOut = 0; return; }
     if (a.visible && !tm.artOut) {
-      tm.artOut = window.setTimeout(() => {
+      const out = () => {
         tm.artOut = 0;
-        fade(artLayer(a.layer), 0, ART_OUT_MS);
+        fade(rowArtRefs.current[a.layer], 0, ART_OUT_MS);
         a.visible = false;
         a.outEnd = performance.now() + ART_OUT_MS;
-      }, ART_OUT_AT);
+      };
+      if (outAt) tm.artOut = window.setTimeout(out, outAt);
+      else out();
     }
     if (!want) return;
     const token = a.token;
     const tryIn = () => {
       if (token !== a.token) return;
       const now = performance.now();
-      const ready = Math.max(a.lastChange + (want === 'hero' ? HERO_ART_AT : ART_REST_MS), a.visible || tm.artOut ? Infinity : a.outEnd);
+      const ready = Math.max(a.lastChange + rest, a.visible || tm.artOut ? Infinity : a.outEnd);
       if (now < ready) { tm.artIn = window.setTimeout(tryIn, ready === Infinity ? 50 : ready - now); return; }
-      if (want === 'hero') {
-        fade(heroArtRef.current, 1, ART_IN_MS);
-        a.shown = 'hero'; a.layer = -1; a.visible = true;
-        return;
-      }
-      const next = a.layer === 0 ? 1 : 0;
+      const next = 1 - a.layer;
       const box = rowArtRefs.current[next];
       const img = box?.querySelector('img');
       if (!box || !img) return;
@@ -306,12 +558,30 @@ export default function PrimeTest() {
       pic.decode().catch(() => { /* show it anyway */ }).then(() => {
         if (token !== a.token) return;
         img.src = want;
-        fade(box, 1, ART_IN_MS);
+        fade(box, 1, inMs);
         a.shown = want; a.layer = next; a.visible = true;
       });
     };
     tryIn();
   }, []);
+
+  /* ---- THE RING: one box, the tile's or the featured card's. ---- */
+  const ringBig = useRef<boolean | null>(null);
+  const ringTo = (big: boolean) => {
+    const ring = ringRef.current;
+    if (!ring || ringBig.current === big) return;
+    const first = ringBig.current === null;
+    ringBig.current = big;
+    ring.classList.toggle('is-big', big);
+    if (first) return;
+    ring.style.transition = 'none';
+    ring.style.opacity = '0';
+    void getComputedStyle(ring).opacity;
+    ring.style.transition = `opacity ${RING_IN_MS}ms ${RING_EASE} ${RING_IN_AT}ms`;
+    ring.style.opacity = '';
+    window.clearTimeout(timers.current.ring);
+    timers.current.ring = window.setTimeout(() => { ring.style.transition = ''; }, RING_IN_AT + RING_IN_MS);
+  };
 
   /* ONE PRESS = THIS. Works out what changed and writes only that. */
   const apply = useCallback(() => {
@@ -320,94 +590,78 @@ export default function PrimeTest() {
     const root = rootRef.current;
     const track = trackRef.current;
     if (!root || !track || !rows.length) return;
-    const px = (n: number) => Math.round(n * p);
-    const inRows = s.mode === 'rows';
+    window.clearTimeout(timers.current.away);
+    root.classList.remove('is-away');
     const row = rows[s.row];
-    const g = GEO[row.kind];
     const col = s.cols[s.row] ?? 0;
     const item = row.items[col];
+    const feat = s.row === featAt;
+    const wasFeat = was.row === featAt;
 
-    root.classList.toggle('is-rows', inRows);
-    document.body.classList.toggle('pv-rows', inRows);
-    const btn = s.mode === 'hero' ? String(s.btn) : '';
-    if (root.dataset.btn !== btn) root.dataset.btn = btn;
-
-    /* The page scrolls as one: the rows, and the billboard copy riding on them. */
-    const heroY = HERO_ROW_TOP - (rowTops[0] + TITLE_H);
-    const y = inRows ? FOCUS_BOTTOM - (rowTops[s.row] + TITLE_H + g.h) : heroY;
-    track.style.transform = `translate3d(0, ${px(y)}px, 0)`;
-    if (heroCopyRef.current) heroCopyRef.current.style.transform = `translate3d(0, ${px(y - heroY)}px, 0)`;
-
-    /* Rows below the billboard are already dim while they are off screen, so a press only ever
-       re-fades the two or three rows that can be seen. */
+    document.body.classList.toggle('pv-deep', s.row > 0);
+    track.style.transform = trackAt(s.row);
     rowEls.current.forEach((el, i) => {
       if (!el) return;
-      const above = inRows && (i < s.row - 1 || (i === s.row - 1 && row.kind !== 'poster'));
-      el.classList.toggle('is-gone', above);
-      el.classList.toggle('is-dim', i !== (inRows ? s.row : 0) && !above);
+      /* Over the featured card there is no panel: the row above it stays, at half. */
+      const above = feat && i === s.row - 1;
+      el.classList.toggle('is-gone', i < s.row && !above);
+      el.classList.toggle('is-dim', i > s.row || above);
     });
-    const strip = rowEls.current[s.row]?.lastElementChild as HTMLElement | null;
-    if (strip) strip.style.transform = `translate3d(${-px(col * g.pitch)}px, 0, 0)`;
-    const next = inRows ? strip?.children[col] ?? null : null;
-    if (focusEl.current !== next) {
-      focusEl.current?.classList.remove('is-focus');
-      next?.classList.add('is-focus');
-      focusEl.current = next;
-    }
+    const strip = rowEls.current[s.row]?.querySelector<HTMLElement>('.pv-strip');
+    if (strip) strip.style.transform = `translate3d(${-Math.round(col * TILE.pitch * p)}px, 0, 0)`;
+    ringTo(feat);
 
-    /* The ring stands still. It only moves — hidden, and shown again when the rows land — when the
-       focused row is of another kind, or the remote has just come down out of the billboard. */
-    const ring = ringRef.current;
-    if (ring) {
-      const ringOn = inRows;
-      const sameKind = was.inRows && was.kind === row.kind;
-      window.clearTimeout(timers.current.ring);
-      if (!ringOn) ring.classList.remove('on');
-      else if (sameKind) ring.classList.add('on');
+    if (s.row !== was.row || col !== was.col) {
+      /* The rows move against the press: Right slides them left, Down slides them up. */
+      const dy = s.row > was.row ? -1 : 1;
+      const dx = col > was.col ? -1 : 1;
+      if (was.row < 0) {
+        if (featAt >= 0) faceTo('enter', rows[featAt].items[s.cols[featAt] ?? 0], rows[featAt], s.cols[featAt] ?? 0);
+        if (!feat) {
+          infoTo('enter', item, row, col, 0, -1);
+          artTo(bgSrc(item));
+        }
+      } else if (feat && s.row === was.row) faceTo('move', item, row, col, dx, pressHeld.current);
+      else if (feat) { hideInfo(); artTo('', { outAt: 0 }); }
       else {
-        ring.classList.remove('on');
-        ring.style.left = `${px(g.x - 7)}px`;
-        ring.style.top = `${px(FOCUS_BOTTOM - g.h - 7)}px`;
-        ring.style.width = `${px(g.w + 14)}px`;
-        ring.style.height = `${px(g.h + 14)}px`;
-        timers.current.ring = window.setTimeout(() => ring.classList.add('on'), V_MS);
+        /* Out of the featured row on a tap, the panel and picture come at once; a hold carries on as
+           any hold does, so nothing comes, or is decoded, between its steps. */
+        const fromFeat = wasFeat && !pressHeld.current;
+        if (s.row !== was.row) infoTo('move', item, row, col, 0, dy, pressHeld.current, fromFeat ? IN_AT_FROM_FEAT : IN_AT);
+        else infoTo('move', item, row, col, dx, 0, pressHeld.current);
+        artTo(bgSrc(item), fromFeat ? { rest: ART_REST_FROM_FEAT, inMs: 0 } : undefined);
       }
     }
-
-    const moved = inRows !== was.inRows || s.row !== was.row || col !== was.col;
-    if (moved) {
-      if (!inRows) infoTo('hide');
-      else if (row.kind === 'poster') infoTo('hide');
-      /* The rows move against the press: Right slides them left, Down slides them up. */
-      else if (!was.inRows || was.kind === 'poster') infoTo('enter', item, row, col, 0, !was.inRows || s.row > was.row ? -1 : 1);
-      else if (s.row !== was.row) infoTo('move', item, row, col, 0, s.row > was.row ? -1 : 1, pressHeld.current);
-      else infoTo('move', item, row, col, col > was.col ? -1 : 1, 0, pressHeld.current);
-      artTo(!inRows ? 'hero' : row.kind === 'poster' ? '' : imgW(item.backdrop, 'w1280'));
-    }
-    shown.current = { inRows, row: s.row, col, kind: inRows ? row.kind : '', item: inRows ? item : null };
+    shown.current = { row: s.row, col, key: `${row.key}:${col}`, item };
 
     /* Once everything has stopped moving, the title the remote rests on gets its title screen ready
-       (detail, backdrop, wordmark) — so OK opens it at once, on the picture already here. */
-    const rested = inRows ? item : hero;
-    /* Where the panel is hidden — the billboard, a poster carousel — the titles a press could bring in
-       are written ahead into the two panels, so that press only has to show one. */
-    const ahead = !inRows ? [0] : row.kind === 'poster' ? [s.row - 1, s.row + 1] : [];
+       (detail, backdrop, wordmark) — so OK opens it at once, on the picture already here — and the
+       wordmarks one press away are fetched, so the next panel comes in with its own. */
     window.clearTimeout(timers.current.rest);
     timers.current.rest = window.setTimeout(() => {
-      warm(rested, undefined, () => (shown.current.inRows ? shown.current.item : hero) === rested);
-      ahead.forEach((r, i) => {
-        const c = s.cols[r] ?? 0;
-        if (rows[r] && rows[r].kind !== 'poster' && !info.current.keys.includes(`${rows[r].key}:${c}`)) writeInfo(i, rows[r].items[c], rows[r], c);
-      });
+      warm(item, undefined, () => shown.current.item === item);
+      const near: [number, number][] = [[s.row, col + 1], [s.row, col - 1], [s.row + 1, s.cols[s.row + 1] ?? 0], [s.row - 1, s.cols[s.row - 1] ?? 0]];
+      for (const [r, c] of near) {
+        const m = rows[r]?.items[c];
+        if (m?.titleLogo) keep(logosKept.current, imgW(m.titleLogo, LOGO_W), LOGOS_KEPT);
+        if (m && feat) keep(picsKept.current, bgSrc(m), PICS_KEPT);
+      }
+      /* On the featured row both panels are hidden: each takes a title one press away, above and below. */
+      if (feat) {
+        for (const [r, n] of [[s.row - 1, 0], [s.row + 1, 1]]) {
+          const R = rows[r];
+          if (R) writeInfo(n, R.items[s.cols[r] ?? 0], R, s.cols[r] ?? 0);
+        }
+      }
     }, SETTLE_MS);
-  }, [rows, rowTops, p, infoTo, writeInfo, artTo, hero, warm]);
+  }, [rows, featAt, p, trackAt, infoTo, writeInfo, faceTo, artTo, warm]);
 
   useLayoutEffect(() => { apply(); }, [apply]);
   useEffect(() => {
     document.body.classList.add('pv-page');
     const tm = timers.current;
     return () => {
-      document.body.classList.remove('pv-page', 'pv-rows');
+      document.body.classList.remove('pv-page', 'pv-deep');
       Object.values(tm).forEach((id) => window.clearTimeout(id));
     };
   }, []);
@@ -429,7 +683,8 @@ export default function PrimeTest() {
      canvas once — after that the browser only ever copies it to the screen, never decodes it again
      (the user's call, Oct 29: once a picture is here it costs nothing). The canvas is CPU-backed
      (`willReadFrequently`), so it is painted into its strip's layer as the picture was, not made a GPU
-     layer of its own. That holds ~330KB per tile at 1080p, ~100MB for the page while it is open. */
+     layer of its own. That holds ~330KB per tile at 1080p (~880KB per poster), ~120MB for the page
+     while it is open. */
   useEffect(() => {
     if (!rows.length) return;
     let dead = false;
@@ -466,19 +721,17 @@ export default function PrimeTest() {
        `d` rows from the focus (below before above) and `k` screenfuls along its row from where that
        row's focus is. Each comes with the size its canvas is drawn at: the tile in real screen pixels,
        never more than the w500 picture has. */
+    const scale = Math.min(p * SCREEN_PX, PIC_W / TILE.w);
+    const w = Math.round(TILE.w * scale);
     const plan = () => {
       const s = st.current;
-      const f = s.mode === 'rows' ? s.row : 0;
       const groups: { at: number; d: number; tiles: { cv: HTMLCanvasElement; w: number; h: number }[] }[] = [];
       rows.forEach((row, r) => {
         const tiles = rowEls.current[r]?.querySelectorAll<HTMLCanvasElement>('.pv-tile-art');
         if (!tiles) return;
-        const g = GEO[row.kind];
-        const scale = Math.min(p * SCREEN_PX, PIC_W / g.w);
-        const w = Math.round(g.w * scale);
-        const h = Math.round(g.h * scale);
+        const h = Math.round(tileH(row) * scale);
         const col = s.cols[r] ?? 0;
-        const d = r >= f ? r - f : f - r + 0.5;
+        const d = r >= s.row ? r - s.row : s.row - r + 0.5;
         const byK = new Map<number, { cv: HTMLCanvasElement; w: number; h: number }[]>();
         tiles.forEach((cv, c) => {
           if (!cv.dataset.src || cv.dataset.on === cv.dataset.src) return;
@@ -486,7 +739,7 @@ export default function PrimeTest() {
           const k = Math.ceil(off / PICS_AT_ONCE);
           byK.set(k, [...(byK.get(k) ?? []), { cv, w, h }]);
         });
-        byK.forEach((t, k) => groups.push({ at: d + k, d, tiles: t }));
+        byK.forEach((tl, k) => groups.push({ at: d + k, d, tiles: tl }));
       });
       return groups.sort((a, b) => a.at - b.at || a.d - b.d).map((gr) => gr.tiles);
     };
@@ -494,13 +747,13 @@ export default function PrimeTest() {
       if (running) return;
       running = true;
       for (const tiles of plan()) {
-        await Promise.all(tiles.filter((t) => !ready.has(t.cv)).map(async ({ cv, w, h }) => {
+        await Promise.all(tiles.filter((tl) => !ready.has(tl.cv)).map(async ({ cv, w: tw, h: th }) => {
           const url = cv.dataset.src!;
-          const bmp = await pixels(url, w, h);
+          const bmp = await pixels(url, tw, th);
           if (dead) bmp?.close(); else ready.set(cv, { url, bmp });
         }));
         if (!still()) break;
-        tiles.forEach((t) => draw(t.cv));
+        tiles.forEach((tl) => draw(tl.cv));
       }
       running = false;
       if (!dead && plan().length) arm();
@@ -517,52 +770,55 @@ export default function PrimeTest() {
   /* Down from the bar lands on the page root, which holds focus for the whole page. */
   useEffect(() => setPageEntry(() => rootRef.current), []);
 
-  /* Back from the rows goes back up to the billboard — not while a title or the player is open over
-   * the page, whose own Back comes first. */
+  /* Back goes to the bar — from further down, by way of the top (above) — not while a title or the
+   * player is open over the page, whose own Back comes first. */
   useEffect(() => registerBackHandler(() => {
     if (useModal.getState().target || usePlayer.getState().source) return false;
+    const root = rootRef.current;
+    const track = trackRef.current;
+    if (!root || !track || document.activeElement !== root) return false;
     const s = st.current;
-    if (s.mode === 'hero') return false;
-    s.mode = 'hero';
-    s.btn = 1;
-    apply();
+    if (s.row > 0) {
+      root.classList.add('is-away');
+      track.style.transition = 'none';
+      track.style.transform = trackAt(1);
+      void track.offsetHeight;
+      track.style.transition = '';
+      s.row = 0;
+      window.clearTimeout(timers.current.away);
+      timers.current.away = window.setTimeout(apply, AWAY_MS);
+    }
+    /* The bar comes back with the remote in it — after the layout forced above, so it takes the quick
+       fade the bar has while it holds the remote, not the late one of a move up. */
+    barItemHere()?.focus({ preventScroll: true });
+    document.body.classList.remove('pv-deep');
     return true;
-  }, 100), [apply]);
+  }, 100), [apply, trackAt]);
 
   /* ---- ONE STEP OF THE REMOTE ---- */
   const lastStep = useRef(0);
   const step = (dir: 'up' | 'down' | 'left' | 'right', held = false) => {
     const s = st.current;
-    if (s.mode === 'hero') {
-      if (dir === 'up') {
-        if (s.btn === 1) s.btn = 0;
-        else { barItemHere()?.focus({ preventScroll: true }); return; }
-      } else if (dir === 'down') {
-        if (s.btn === 0) s.btn = 1; else s.mode = 'rows';
-      } else return;
-    } else if (s.mode === 'rows') {
-      const col = s.cols[s.row] ?? 0;
-      if (dir === 'up') {
-        if (s.row === 0) { s.mode = 'hero'; s.btn = 1; } else s.row -= 1;
-      } else if (dir === 'down') {
-        if (s.row < rows.length - 1) s.row += 1; else return;
-      } else if (dir === 'left') {
-        if (col === 0) return;
-        s.cols[s.row] = col - 1;
-      } else if (col < rows[s.row].items.length - 1) s.cols[s.row] = col + 1;
-      else return;
-    }
+    const col = s.cols[s.row] ?? 0;
+    if (dir === 'up') {
+      /* Up off the first row goes to the bar — on a tap; a held Up stops there. */
+      if (s.row === 0) { if (!held) barItemHere()?.focus({ preventScroll: true }); return; }
+      s.row -= 1;
+    } else if (dir === 'down') {
+      if (s.row < rows.length - 1) s.row += 1; else return;
+    } else if (dir === 'left') {
+      if (col === 0) return;
+      s.cols[s.row] = col - 1;
+    } else if (col < rows[s.row].items.length - 1) s.cols[s.row] = col + 1;
+    else return;
     lastStep.current = performance.now();
     pressHeld.current = held;
     apply();
   };
 
-  /* A TAP STEPS AT ONCE; A HOLD STEPS WHEN THE LAST MOVE ENDS. A tap during a move retargets it, as
-   * the reference does. A held key does not step on every repeat: the next move starts the moment the
-   * running one ends (200ms vertically, 400ms along a row), which is what makes a held Down one
-   * continuous glide and a held Right a run of whole steps. */
-  const held = useRef({ key: '', lastRepeat: 0, timer: 0 });
-  const stepMs = (dir: string) => (st.current.mode !== 'rows' ? V_MS : dir === 'up' || dir === 'down' ? V_MS : H_MS);
+  /* A TAP STEPS AT ONCE; A HOLD STEPS EVERY HOLD_MS. A tap during a move retargets it, and so does each
+   * step of a hold, as the reference does: a held key does not step on every repeat, but every ~210ms,
+   * each step re-aiming the 380ms move still running — so a held press is one quickening glide. */
   const chain = () => {
     const h = held.current;
     h.timer = 0;
@@ -578,8 +834,7 @@ export default function PrimeTest() {
     e.stopPropagation();
     if (!rows.length) return;
     if (e.key === 'Enter') {
-      if (s.mode === 'hero') { if (hero) openModal(openItem(hero)); }
-      else openModal(openItem(rows[s.row].items[s.cols[s.row] ?? 0]));
+      openModal(openItem(rows[s.row].items[s.cols[s.row] ?? 0]));
       return;
     }
     const h = held.current;
@@ -594,7 +849,7 @@ export default function PrimeTest() {
     }
     h.key = e.key;
     h.lastRepeat = now;
-    const left = stepMs(dir) - (now - lastStep.current);
+    const left = HOLD_MS - (now - lastStep.current);
     if (left <= 0) step(dir, true);
     else if (!h.timer) h.timer = window.setTimeout(chain, left);
   };
@@ -604,7 +859,7 @@ export default function PrimeTest() {
     h.key = '';
     window.clearTimeout(h.timer);
     h.timer = 0;
-    fillInfo();
+    fillPending();
   };
 
   return (
@@ -615,58 +870,26 @@ export default function PrimeTest() {
       style={{ ['--p' as string]: `${p}px` }}
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
-      onFocus={(e) => {
-        /* Down out of the bar lands on the billboard's first button, as on the reference. */
-        if (st.current.mode === 'hero' && (e.relatedTarget as Element | null)?.closest?.('.tv-topnav')) st.current.btn = 0;
-        apply();
-      }}
+      onFocus={() => apply()}
     >
-      {/* THE BACKGROUND: the billboard's picture full screen, and two boxes top-right that the
-          focused title's picture alternates between. */}
-      <div className="pv-hero-art" ref={heroArtRef}>
-        {hero && <img src={imgW(hero.backdrop, 'w1280')} alt="" decoding="async" />}
-      </div>
+      {/* THE BACKGROUND: two boxes top-right that the focused title's picture alternates between. */}
       {[0, 1].map((i) => (
         <div key={i} className="pv-row-art" ref={(el) => { rowArtRefs.current[i] = el; }}>
           <img alt="" decoding="async" />
         </div>
       ))}
 
-      {/* THE BILLBOARD COPY — rides up with the rows. */}
-      <div className="pv-hero-copy" ref={heroCopyRef}>
-        {hero && (
-          <>
-            <div className="pv-logo-box">
-              {hero.titleLogo
-                ? <img className="pv-logo" src={imgW(hero.titleLogo, 'w500')} alt={hero.title} />
-                : <span className="pv-logo-text">{hero.title}</span>}
-            </div>
-            <p className="pv-status">{isNew(hero) ? (hero.type === 'movie' ? 'New movie' : 'New season') : hero.genre}</p>
-            <p className="pv-hero-synopsis">{hero.overview}</p>
-            <span className="pv-btn pv-btn-more">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" /><path d="M12 11v6M12 7.5v.5" /></svg>
-              More details
-            </span>
-            <span className={`pv-btn pv-btn-play${hero.type === 'movie' ? '' : ' is-two'}`}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z" /></svg>
-              <span>{hero.type === 'movie' ? 'Watch now' : <>Episode 1<br />Watch now</>}</span>
-            </span>
-            <Check />
-            {hero.rating ? <span className="pv-badge">★ {hero.rating.toFixed(1)}</span> : null}
-          </>
-        )}
-      </div>
-
       {/* THE FOCUSED TITLE'S PANEL, twice (they take turns) — bottom-anchored, filled in by writeInfo. */}
       {[0, 1].map((n) => (
         <div key={n} className="pv-info" ref={(el) => { infoRefs.current[n] = el; }}>
+          <img className="pv-logo" alt="" decoding="async" onError={logoFailed} />
           <p className="pv-title" />
-          <p className="pv-status" />
+          <p className="pv-tags"><span className="pv-badge" /><span className="pv-callout" /></p>
           <p className="pv-meta">
-            <span className="pv-stars">{[0, 1, 2, 3, 4].map((i) => <i key={i}>★</i>)}</span>
-            <span className="pv-votes" />
-            <span className="pv-year" />
             <span className="pv-genre" />
+            <span className="pv-year" />
+            <span className="pv-run" />
+            <span className="pv-age" />
           </p>
           <p className="pv-synopsis" />
           <Check />
@@ -677,7 +900,7 @@ export default function PrimeTest() {
         {rows.map((r, i) => <PvRowView key={r.key} row={r} i={i} setRowEl={setRowEl} />)}
       </div>
 
-      {/* The focus ring stands still: the focused tile is always pinned under it. */}
+      {/* The focus ring stands still: the focused tile, or the featured card, is always pinned under it. */}
       <div className="pv-ring" ref={ringRef} />
     </div>
   );

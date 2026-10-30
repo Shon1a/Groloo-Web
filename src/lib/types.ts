@@ -47,6 +47,11 @@ export interface MediaItem {
    *  it takes effect immediately: there is no baked picture to invalidate. */
   artFocusX?: number | null;
   backdrop?: string;
+  /** TV feeds (with `titleLogo`): the backdrop with the title lettered into it, for a tile that has
+   *  no caption, and the textless one where it differs from `backdrop` (server.js bestBackdropPaths).
+   *  Absent until the server has looked at the title's backdrops, and from an older server. */
+  tileArt?: string;
+  bgArt?: string;
   /** some feeds send a language-specific title logo path */
   logo?: string;
   /** hero feed: a PNG title-logo wordmark to show instead of the text title */

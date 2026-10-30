@@ -1,12 +1,17 @@
 /* PRIME TEST page (routes/PrimeTest.tsx). Every size is a TV pixel at 1920x1080, measured off the
-   reference capture, times --p (the page sets it from the viewport). Colours are the reference's,
-   sampled from the same frames, and scoped to this page — except the background, black where the
-   reference is a dark blue (the user's call, Oct 29). */
+   reference (the Prime Video app on an Android TV emulator, Oct 30), times --p (the page sets it from
+   the viewport). Colours are the reference's, sampled from the same frames, and scoped to this page —
+   except the background, black where the reference is a dark blue (the user's call, Oct 29). */
 
 .pv {
   --bg: #000;
-  --bg0: rgba(0, 0, 0, 0);
   --green: rgb(121, 236, 190);
+  /* The rows' one move, both axes (PrimeTest's MOVE_MS). */
+  --move: 380ms cubic-bezier(.35, .1, 0, 1);
+  /* A row coming into focus or leaving it downward: most of the change in the first 50ms. */
+  --dim: 270ms cubic-bezier(0, .41, 0, 1);
+  /* A row leaving upward: gone by the fourth frame. */
+  --gone: 60ms linear;
   position: relative;
   height: 100vh;
   margin-top: calc(var(--tv-topbar-pad, 0px) * -1);
@@ -16,34 +21,32 @@
   outline: none;
 }
 
-/* The bar is gone in the frame the remote leaves the billboard, and fades back over the 200ms move up. */
-body.pv-page .tv-topnav { transition: opacity 200ms linear; }
-body.pv-rows .tv-topnav { opacity: 0; transition: none; }
+/* The bar is there on the first row and while it has the remote. It is gone in ~75ms the moment the
+   rows go further down, and comes back as the move up to the first row ends — at once when the remote
+   goes up into it (Back). */
+body.pv-page .tv-topnav { transition: opacity 120ms linear 170ms; }
+body.pv-page .tv-topnav:focus-within { transition: opacity 60ms linear; }
+body.pv-deep .tv-topnav { opacity: 0; transition: opacity 75ms linear; }
 
 /* ---- the background ---- */
-.pv-hero-art, .pv-row-art { position: absolute; overflow: hidden; will-change: opacity; }
-.pv-hero-art { inset: 0; }
 .pv-row-art {
+  position: absolute; overflow: hidden; will-change: opacity;
   left: calc(620 * var(--p)); top: 0;
   width: calc(1300 * var(--p)); height: calc(731 * var(--p));
   opacity: 0;
 }
-.pv-hero-art img, .pv-row-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+.pv-row-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
 .pv-row-art img:not([src]) { display: none; }
-.pv-hero-art::after, .pv-row-art::after { content: ''; position: absolute; inset: 0; }
-.pv-hero-art::after {
-  background:
-    linear-gradient(90deg, rgba(0, 0, 0, .85) 0%, rgba(0, 0, 0, .55) 30%, var(--bg0) 60%),
-    linear-gradient(0deg, var(--bg) 0%, var(--bg0) 28%),
-    rgba(0, 0, 0, .4);
-}
 /* The title screen opened from here draws its picture with this same fade (below). Not the reference's
    straight ramps: those showed a band where the black ends and a hard bottom edge. A smootherstep
    instead, as stops — it leaves the black and reaches the picture with no corner at either end — run
    long, so both edges stay dark well into the picture (the user's call, Oct 29: darker, smoother).
    It costs ~0.2ms of GPU per picture change, the same as none: it is drawn with the picture, once. */
 .pv-row-art::after,
+.pv-face-art::after,
 body.pv-page .tv-det-art::after {
+  content: '';
+  position: absolute;
   inset: 0;
   background:
     linear-gradient(90deg,
@@ -92,148 +95,156 @@ body.pv-page .tv-det-art.rdy { animation: pvTitleIn 200ms linear both; }
 body.pv-page .tv-det-art img { object-position: center top; }
 @keyframes pvTitleIn { from { opacity: 0; } to { opacity: 1; } }
 
-/* ---- the billboard copy ---- */
-.pv-hero-copy {
-  position: absolute; inset: 0;
-  display: flex; flex-direction: column; align-items: flex-start;
-  padding: calc(362 * var(--p)) 0 0 calc(140 * var(--p));
-  transition: transform 200ms linear, opacity 200ms linear;
-  will-change: transform, opacity;
-}
-.pv.is-rows .pv-hero-copy { opacity: 0; transition: transform 200ms linear, opacity 100ms linear; }
-
-.pv-logo-box { display: flex; align-items: flex-end; width: calc(500 * var(--p)); height: calc(75 * var(--p)); }
-.pv-logo { max-width: 100%; max-height: 100%; object-fit: contain; object-position: left bottom; }
-.pv-logo-text { font-size: calc(56 * var(--p)); font-weight: 800; line-height: 1; }
-
-.pv-status { margin: 0; font-size: calc(24 * var(--p)); line-height: calc(28 * var(--p)); font-weight: 700; color: var(--green); }
-.pv-hero-copy .pv-status { margin-top: calc(30 * var(--p)); }
-.pv-hero-synopsis {
-  margin: calc(19 * var(--p)) 0 0; width: calc(700 * var(--p));
-  font-size: calc(24 * var(--p)); line-height: calc(37 * var(--p));
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
-}
-
-.pv-btn {
-  display: flex; align-items: center; gap: calc(12 * var(--p));
-  box-sizing: border-box; width: calc(240 * var(--p)); height: calc(55 * var(--p)); padding: 0 calc(18 * var(--p));
-  border-radius: calc(7 * var(--p));
-  font-size: calc(24 * var(--p)); line-height: calc(28 * var(--p)); white-space: nowrap;
-}
-.pv-btn svg { flex: none; width: calc(26 * var(--p)); height: calc(26 * var(--p)); fill: none; stroke: currentColor; stroke-width: 2; }
-.pv-btn-more { margin-top: calc(22 * var(--p)); border: calc(2 * var(--p)) solid rgba(255, 255, 255, .16); }
-.pv-btn-play { margin-top: calc(14 * var(--p)); background: rgba(255, 255, 255, .19); }
-.pv-btn-play.is-two { height: calc(85 * var(--p)); }
-.pv-btn-play svg { fill: currentColor; stroke: none; }
-.pv:focus[data-btn="0"] .pv-btn-more,
-.pv:focus[data-btn="1"] .pv-btn-play { background: rgb(243, 240, 244); border-color: rgb(243, 240, 244); color: rgb(15, 23, 30); }
-
-.pv-check { display: flex; align-items: center; gap: calc(10 * var(--p)); font-size: calc(19 * var(--p)); line-height: calc(24 * var(--p)); }
-.pv-hero-copy .pv-check { margin-top: calc(23 * var(--p)); }
-.pv-check svg { width: calc(19 * var(--p)); height: calc(19 * var(--p)); }
-.pv-check circle { fill: rgb(26, 152, 255); }
-.pv-check path { fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
-
-.pv-badge {
-  position: absolute; left: calc(1748 * var(--p)); top: calc(774 * var(--p));
-  height: calc(35 * var(--p)); padding: 0 calc(10 * var(--p));
-  display: flex; align-items: center;
-  border-radius: calc(6 * var(--p)); background: rgba(255, 255, 255, .14);
-  font-size: calc(19 * var(--p)); font-weight: 700;
-}
-
-/* ---- the focused title's panel (bottom-anchored: the line under the synopsis stays put) ---- */
+/* ---- the focused title's panel, stacked from the bottom: whatever the wordmark's height, or a missing
+   pill, only what is above moves ---- */
 .pv-info {
-  position: absolute; left: calc(140 * var(--p)); bottom: calc(601 * var(--p)); width: calc(900 * var(--p));
+  position: absolute; left: calc(147 * var(--p)); bottom: calc(590 * var(--p)); width: calc(900 * var(--p));
   display: flex; flex-direction: column; align-items: flex-start;
   opacity: 0;
   will-change: opacity, transform;
 }
+.pv-logo { display: block; max-width: calc(250 * var(--p)); max-height: calc(75 * var(--p)); }
 .pv-title {
-  margin: 0; max-width: 100%;
-  font-size: calc(48 * var(--p)); line-height: calc(56 * var(--p)); font-weight: 700;
+  margin: 0; max-width: calc(640 * var(--p));
+  font-size: calc(58 * var(--p)); line-height: calc(66 * var(--p)); font-weight: 700;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
-.pv-info .pv-status { margin-top: calc(4 * var(--p)); }
+.pv-tags {
+  display: flex; align-items: center; gap: calc(14 * var(--p));
+  margin: calc(13 * var(--p)) 0 0; height: calc(36 * var(--p));
+}
+.pv-badge, .pv-tag {
+  box-sizing: border-box; background: rgb(241, 241, 241); color: rgb(15, 23, 30);
+  font-weight: 700; text-transform: uppercase; white-space: nowrap;
+}
+.pv-badge {
+  height: calc(36 * var(--p)); padding: 0 calc(10 * var(--p)); border-radius: calc(6 * var(--p));
+  font-size: calc(20 * var(--p)); line-height: calc(36 * var(--p));
+}
+.pv-callout { font-size: calc(22 * var(--p)); font-weight: 700; color: var(--green); }
 .pv-meta {
-  display: flex; align-items: center; gap: calc(22 * var(--p));
-  margin: calc(18 * var(--p)) 0 0;
-  font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p)); color: rgba(255, 255, 255, .85);
+  display: flex; align-items: center; gap: calc(28 * var(--p));
+  margin: calc(16 * var(--p)) 0 0; height: calc(36 * var(--p));
+  font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p)); color: rgb(179, 179, 179);
 }
-.pv-meta > span:empty { display: none; }
-.pv-stars { display: flex; gap: calc(4 * var(--p)); font-size: calc(22 * var(--p)); }
-.pv-stars i { font-style: normal; color: rgba(255, 255, 255, .3); }
-.pv-stars i.on { color: #fff; }
-.pv-stars i.half { background: linear-gradient(90deg, #fff 50%, rgba(255, 255, 255, .3) 50%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.pv-meta > :empty { display: none; }
+.pv-genre { color: rgb(241, 241, 241); }
+.pv-age {
+  height: calc(36 * var(--p)); padding: 0 calc(10 * var(--p)); border-radius: calc(6 * var(--p));
+  display: flex; align-items: center;
+  background: rgb(51, 55, 61); color: #fff; font-size: calc(20 * var(--p)); font-weight: 700;
+}
+.pv-meta .is-late { animation: pvTitleIn 200ms linear both; }
 .pv-synopsis {
-  margin: calc(19 * var(--p)) 0 0; width: calc(820 * var(--p));
-  font-size: calc(24 * var(--p)); line-height: calc(31 * var(--p)); color: rgba(255, 255, 255, .92);
+  margin: calc(16 * var(--p)) 0 0; width: calc(885 * var(--p));
+  font-size: calc(25 * var(--p)); line-height: calc(36 * var(--p)); color: rgb(240, 240, 240);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
-.pv-info .pv-check { margin-top: calc(25 * var(--p)); }
+.pv-check {
+  display: flex; align-items: center; gap: calc(13 * var(--p)); margin-top: calc(25 * var(--p));
+  font-size: calc(22 * var(--p)); line-height: calc(24 * var(--p));
+}
+.pv-check svg { width: calc(18 * var(--p)); height: calc(18 * var(--p)); }
+.pv-check circle { fill: rgb(26, 152, 255); }
+.pv-check path { fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---- rows ---- */
 .pv-track {
   position: absolute; left: 0; right: 0; top: 0;
-  transition: transform 200ms linear;
+  transition: transform var(--move);
   will-change: transform;
 }
-.pv-row { height: calc(283 * var(--p)); }
-.pv-row.is-poster { height: calc(642 * var(--p)); }
-.pv-row.is-top10 { height: calc(256 * var(--p)); }
-/* A row is dimmed through its title and its strip, each a layer of its own, never through the row:
-   an opacity over two layers is drawn into an offscreen surface first, every frame of every move. */
-.pv-row.is-dim > * { opacity: .5; }
-.pv-row.is-gone > * { opacity: 0; }
+.pv-row { height: calc(282 * var(--p)); }
+/* A row is dimmed through its title and its strip (and the featured card's boxes), each a layer of its
+   own, never through the row: an opacity over two layers is drawn into an offscreen surface first,
+   every frame of every move. */
+.pv-row.is-dim :is(.pv-row-title, .pv-strip, .pv-dim) { opacity: .5; }
+.pv-row.is-gone :is(.pv-row-title, .pv-strip, .pv-dim) { opacity: 0; }
 .pv-row-title {
-  box-sizing: border-box; height: calc(45 * var(--p)); margin: 0; padding-left: calc(140 * var(--p));
+  box-sizing: border-box; height: calc(45 * var(--p)); margin: 0;
+  padding: calc(5 * var(--p)) 0 0 calc(144 * var(--p));
   font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p)); font-weight: 700;
-  transition: opacity 100ms linear;
+  transition: opacity var(--dim);
   will-change: opacity;
 }
 /* EACH STRIP IS ONE LAYER, and two things here keep it so (measured: 35 extra layers without them).
    The strip is as wide as its tiles: a tile that hangs past the strip's own box, 37px from the last one,
-   was cut out as a layer of its own. And nothing in it is positioned or stacked: the Top 10 numerals
-   are in the flow, tucked under their tile by paint order, not by z-index. */
+   was cut out as a layer of its own. And nothing in it is positioned or stacked: a tile's pill shares
+   its picture's grid cell, laid over it by paint order, not by z-index. */
 .pv-strip {
-  display: flex; width: max-content; gap: calc(32 * var(--p)); padding-left: calc(140 * var(--p));
-  transition: transform 400ms ease, opacity 100ms linear;
+  display: flex; width: max-content; gap: calc(32 * var(--p)); padding-left: calc(144 * var(--p));
+  transition: transform var(--move), opacity var(--dim);
   will-change: transform, opacity;
 }
-.is-poster .pv-strip { gap: calc(37 * var(--p)); }
-.pv-item { flex: none; display: flex; }
+.pv-row.is-gone :is(.pv-row-title, .pv-dim) { transition: opacity var(--gone); }
+.pv-row.is-gone .pv-strip { transition: transform var(--move), opacity var(--gone); }
+/* Back to the top: the rows are gone at once, until they glide back in. */
+.pv.is-away :is(.pv-row-title, .pv-strip, .pv-dim) { opacity: 0; transition: none; }
 .pv-tile {
-  flex: none;
+  flex: none; display: grid;
   width: calc(384 * var(--p)); height: calc(216 * var(--p));
   border-radius: calc(7 * var(--p));
   /* A tile before its picture: Prime Video's own placeholder grey (its web stylesheet, Oct 29). */
   background: #33373d;
 }
-.is-poster .pv-tile { height: calc(575 * var(--p)); }
-.pv-tile-art { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
-
-/* Top 10: a block numeral tucked behind each smaller tile (from Amazon's own mockup). It is cut where its
-   tile starts and where its slot starts, so it never overlaps a tile — the look of being tucked under
-   both, while the tiles stay in the strip's one layer (a numeral overlapping its tile split all 20 out). */
-.is-top10 .pv-strip { gap: 0; }
-.is-top10 .pv-item { width: calc(476 * var(--p)); justify-content: flex-end; align-items: flex-end; }
-.is-top10 .pv-tile { width: calc(337 * var(--p)); height: calc(189 * var(--p)); }
-.pv-num {
-  flex: none; display: flex; justify-content: flex-end;
-  width: calc(139 * var(--p)); margin-bottom: calc(-22 * var(--p));
-  overflow-x: clip; overflow-y: visible;
-  font-size: calc(200 * var(--p)); font-weight: 900; line-height: 1; letter-spacing: -0.06em;
-  color: #575c63;
+.pv-tile > * { grid-area: 1 / 1; }
+.pv-tile-art { display: block; width: 100%; height: 100%; border-radius: inherit; }
+.pv-tag {
+  justify-self: end; align-self: start;
+  margin: calc(9 * var(--p)) calc(10 * var(--p)) 0 0;
+  height: calc(26 * var(--p)); padding: 0 calc(7 * var(--p)); border-radius: calc(5 * var(--p));
+  font-size: calc(18 * var(--p)); line-height: calc(26 * var(--p));
 }
-.pv-num > span { margin-right: calc(-11 * var(--p)); }
-.pv-item.is-focus .pv-num { color: #e9ebee; }
 
-/* The ring stands on the focus line; the focused tile is always pinned under it. Placed from JS. */
+/* ---- THE FEATURED ROW: a 1024x576 card on the focus line (x 144) for the focused title, then 384x576
+   posters from x 1200. The posters pass under the card: their strip is clipped at its right edge (x 1168),
+   the focused title's own poster standing just inside it (PrimeTest's PvRowView). ---- */
+.pv-feat { position: relative; height: calc(642 * var(--p)); }
+.pv-clip {
+  position: absolute; left: calc(1168 * var(--p)); right: 0; top: calc(45 * var(--p));
+  height: calc(576 * var(--p)); overflow: hidden;
+}
+.pv-clip > .pv-strip { padding-left: 0; margin-left: calc(-384 * var(--p)); }
+.pv-tile.is-poster { height: calc(576 * var(--p)); }
+.pv-card {
+  position: absolute; left: calc(144 * var(--p)); top: calc(45 * var(--p));
+  width: calc(1024 * var(--p)); height: calc(576 * var(--p));
+}
+.pv-face, .pv-dim { position: absolute; inset: 0; }
+.pv-dim { transition: opacity var(--dim); }
+.pv-face-art, .pv-face-info { opacity: 0; will-change: opacity, transform; }
+.pv-face-art { position: absolute; inset: 0; overflow: hidden; border-radius: calc(7 * var(--p)); }
+.pv-face-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.pv-face-art img:not([src]) { display: none; }
+.pv-face-art img.is-late { animation: pvTitleIn 150ms linear both; }
+/* Stacked from the bottom, as the panel is: wordmark (or name), pill + genre + age, included line. */
+.pv-face-info {
+  position: absolute; left: calc(36 * var(--p)); bottom: calc(35 * var(--p));
+  display: flex; flex-direction: column; align-items: flex-start;
+}
+.pv-face-info .pv-logo { max-width: calc(150 * var(--p)); max-height: calc(60 * var(--p)); }
+.pv-face-info .pv-title { max-width: calc(600 * var(--p)); font-size: calc(32 * var(--p)); line-height: calc(40 * var(--p)); }
+.pv-face-tags {
+  display: flex; align-items: center; gap: calc(24 * var(--p));
+  margin: calc(19 * var(--p)) 0 0; height: calc(36 * var(--p));
+  font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p));
+}
+.pv-face-tags > :empty { display: none; }
+.pv-face-tags .is-late { animation: pvTitleIn 200ms linear both; }
+.pv-face-info .pv-check { margin-top: calc(21 * var(--p)); font-size: calc(20 * var(--p)); }
+
+/* The ring stands on the focus line; the focused tile is always pinned under it. It goes with the remote
+   (100ms) and comes back once the bar has let it go (170ms, 230ms after). Around the featured card it
+   is the card's (PrimeTest's ringTo swaps it, hidden). */
 .pv-ring {
   position: absolute; z-index: 3; pointer-events: none;
+  left: calc(137 * var(--p)); top: calc(605 * var(--p));
+  width: calc(398 * var(--p)); height: calc(230 * var(--p));
   box-sizing: border-box;
   border: calc(3 * var(--p)) solid rgb(240, 240, 245); border-radius: calc(12 * var(--p));
   opacity: 0;
+  transition: opacity 100ms linear;
   will-change: opacity;
 }
-.pv:focus .pv-ring.on { opacity: 1; }
+.pv:focus .pv-ring { opacity: 1; transition: opacity 170ms linear 230ms; }
+.pv-ring.is-big { top: calc(245 * var(--p)); width: calc(1038 * var(--p)); height: calc(590 * var(--p)); }
