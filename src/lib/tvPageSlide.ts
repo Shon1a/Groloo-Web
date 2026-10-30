@@ -56,9 +56,21 @@ import { pageY, usingTransformScroll } from './tvPageScroll';
 
 const IS_TV = import.meta.env.MODE === 'tv';
 
-/* The bar's order, left to right: the search icon, the four pages, My Space. Direction is just which
- * way along this list the move goes. */
-const TABS = ['/explore', '/', '/tv', '/movies', '/anime', '/library'];
+/* The bar's order, left to right: the search icon, the four pages, the Prime test page, My Space.
+ * Direction is just which way along this list the move goes. */
+const TABS = ['/explore', '/', '/tv', '/movies', '/anime', '/prime', '/library'];
+
+/* ---- THE PRIME TEST PAGE SWITCHES AS PRIME VIDEO'S PAGES DO (routes/PrimeTest.tsx) ----------------
+ * Measured on the Prime Video app on an Android TV emulator (Oct 30, four switches along its bar): the
+ * page on screen leaves first — its rows slide 200px the way the pages go and fade, together,
+ * ease-in-out over 300ms, the picture top-right fades in ~135ms, the title panel stays — and ~220ms in
+ * it is cut, with the next page's empty shapes already there, 200px to the side, gliding home. A switch
+ * to or from the Prime page does that: the Prime page leaves its own way (registerPageExit), any other
+ * page leaving for it slides and fades whole; the Prime page then draws its arrival itself
+ * (takeArrival), so `<main>` does not slide in. */
+const PRIME = '/prime';
+/** The leaving page's rows: how far they slide (TV px of 1920), over how long, and when it is cut. */
+export const PAGE_EXIT = { px: 200, ms: 300, ease: 'ease-in-out', cutMs: 220 } as const;
 
 /** How far to the side the new page arrives, as a fraction of the screen's width (see above). */
 const SHIFT = 0.031;
@@ -80,9 +92,16 @@ let phase: Phase = 'idle';
 let commit: (() => void) | null = null;
 /* Where `commit` goes — so an arrival can tell whether it IS the page the remote is waiting on. */
 let commitTo = '';
+let commitFrom = '';
 let due = 0;
 let waitTimer = 0;
 let stranded = 0;
+let exitTimer = 0;
+/* How the page on screen leaves before a swap, if it has a way of its own: given which way the pages
+ * go (1: the next page is to the right), it starts leaving and says how long until the cut. */
+let pageExit: ((dir: number) => number) | null = null;
+/* The page the last swap went to, and which side it comes from (1: from the right). */
+let arrival = { to: '', dir: 0 };
 
 let reduced: boolean | null = null;
 function reduceMotion(): boolean {
@@ -104,15 +123,51 @@ function stopAnim(): void {
   if (anim) { anim.cancel(); anim = null; }
 }
 
+/* Where an exit left `<main>`: back where it rests. */
+function unExit(): void {
+  if (!el) return;
+  el.style.opacity = '';
+  el.style.translate = '';
+}
+
 /** AppShell hands `<main>` over on mount; `null` on unmount. */
 export function registerPageSlide(node: HTMLElement | null): void {
   if (!IS_TV) return;
   stopAnim();
   window.clearTimeout(waitTimer);
   window.clearTimeout(stranded);
+  window.clearTimeout(exitTimer);
   el = node;
   phase = 'idle';
   commit = null;
+}
+
+/** The page on screen hands over how it leaves (see `pageExit`); `null` when it goes. */
+export function registerPageExit(fn: ((dir: number) => number) | null): void {
+  pageExit = fn;
+}
+
+/** The side the page at `to` is arriving from (1: the right, -1: the left), told once; 0 when it was
+ *  not switched to along the bar. */
+export function takeArrival(to: string): number {
+  const dir = arrival.to === to ? arrival.dir : 0;
+  arrival = { to: '', dir: 0 };
+  return dir;
+}
+
+/* A page leaving for the Prime page that has no exit of its own: all of it slides and fades, as the
+ * rows there do. The resting state of the end is written first and the animation plays over it, as
+ * pageArrived's slide does; pageArrived puts it back before the next page's first paint. */
+function exitWhole(dir: number): number {
+  if (!el || reduceMotion()) return 0;
+  const x = -dir * Math.round(window.innerWidth * PAGE_EXIT.px / 1920);
+  const own = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '1px 0px');
+  el.style.opacity = '0';
+  if (own) el.style.translate = `${x}px 0px`;
+  anim = el.animate(own
+    ? [{ translate: '0px 0px', opacity: 1 }, { translate: `${x}px 0px`, opacity: 0 }]
+    : [{ opacity: 1 }, { opacity: 0 }], { duration: PAGE_EXIT.ms, easing: PAGE_EXIT.ease });
+  return PAGE_EXIT.cutMs;
 }
 
 /** Swap now, if the remote has rested long enough; otherwise check again when it will have. */
@@ -121,11 +176,20 @@ function swapWhenRested(): void {
   const left = due - performance.now();
   if (left > 0) { waitTimer = window.setTimeout(swapWhenRested, left); return; }
   const c = commit;
+  const dir = Math.sign(tabOf(commitTo) - tabOf(commitFrom));
+  arrival = { to: commitTo, dir };
   commit = null;
   phase = 'held';
-  window.clearTimeout(stranded);
-  stranded = window.setTimeout(() => { if (phase === 'held') phase = 'idle'; }, STRANDED_MS);
-  c?.();
+  const swap = () => {
+    window.clearTimeout(stranded);
+    stranded = window.setTimeout(() => { if (phase === 'held') { phase = 'idle'; unExit(); } }, STRANDED_MS);
+    c?.();
+  };
+  const prime = commitTo === PRIME || commitFrom === PRIME;
+  const cut = !prime || !dir ? 0 : pageExit ? pageExit(dir) : commitTo === PRIME ? exitWhole(dir) : 0;
+  window.clearTimeout(exitTimer);
+  if (cut) exitTimer = window.setTimeout(swap, cut);
+  else swap();
 }
 
 /**
@@ -141,7 +205,7 @@ export function slideTo(from: string, to: string, go: () => void, dwell = 0): vo
 
   if (from === to) {
     /* Too late to call the swap off — it is rendering. Queue the way back instead. */
-    if (phase === 'held') { commit = go; commitTo = to; due = performance.now() + dwell; return; }
+    if (phase === 'held') { commit = go; commitTo = to; commitFrom = from; due = performance.now() + dwell; return; }
     /* Back on the page that is on screen before the swap ran: nothing to undo, it never went anywhere. */
     window.clearTimeout(waitTimer);
     commit = null;
@@ -151,6 +215,7 @@ export function slideTo(from: string, to: string, go: () => void, dwell = 0): vo
 
   commit = go;
   commitTo = to;
+  commitFrom = from;
   due = performance.now() + dwell;
   if (phase === 'held') return;                // pageArrived sees the queued `commit` and keeps going
   if (phase !== 'in') phase = 'wait';          // a page still sliding home finishes its slide first
@@ -183,7 +248,9 @@ export function flushPageSwitch(): void {
 export function pageArrived(from: string, to: string): void {
   if (!IS_TV || !el) return;
   window.clearTimeout(stranded);
+  window.clearTimeout(exitTimer);
   stopAnim();
+  unExit();
   const a = tabOf(from);
   const b = tabOf(to);
   /* The remote moved on while this page was being dispatched: it is shown all the same (the reference
@@ -191,7 +258,8 @@ export function pageArrived(from: string, to: string): void {
    * remote rests. */
   const queued = !!commit && commitTo !== to;
   if (!queued) { commit = null; window.clearTimeout(waitTimer); }
-  if (a < 0 || b < 0 || a === b || reduceMotion()) {
+  /* To the Prime page it draws its own arrival; from it, the next page is cut in, as before. */
+  if (a < 0 || b < 0 || a === b || reduceMotion() || from === PRIME || to === PRIME) {
     el.style.transform = rest();
     phase = queued ? 'wait' : 'idle';
     return;

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import { flushPageSwitch, pageSwitchPending, slideTo } from '../lib/tvPageSlide';
+import { PrimeTestPage } from '../routes/primeTestPage';
 
 /* THE TV TOP MENU BAR — rendered ONLY in the `--mode tv` build (AppShell gates it on
  * import.meta.env.MODE). It replaces the desktop left icon rail with the modern 10-foot
@@ -81,7 +82,8 @@ const PREFETCH: Record<string, () => Promise<unknown>> = {
   /* My Space renders Add-ons and Settings as sections, each a lazy chunk of its own
      (routes/Library.tsx) — fetched with the page rather than one round trip behind it. */
   '/library': () => Promise.all([import('../routes/Library'), import('../routes/Addons'), import('../routes/Settings')]),
-  '/prime': () => import('../routes/PrimeTest'),
+  /* Kept in hand, so the switch renders it at once rather than suspending (lib/lazyNow.ts). */
+  '/prime': () => PrimeTestPage?.preload() ?? Promise.resolve(),
 };
 
 const ITEMS = [

@@ -6,6 +6,7 @@ import { HOME_ROWS } from '../lib/home';
 import { imgW } from '../lib/img';
 import { barItemHere, setPageEntry } from '../lib/tvBar';
 import { registerBackHandler } from '../lib/tvKeys';
+import { PAGE_EXIT, registerPageExit, takeArrival } from '../lib/tvPageSlide';
 import { quietFor, whenQuiet } from '../lib/tvQuiet';
 import { useModal, openItem } from '../stores/modal';
 import { usePlayer } from '../stores/player';
@@ -46,6 +47,9 @@ import '../styles/prime.css';
  *     once both ways and comes back around its new box (150ms, 230ms after).
  *   · Up from the first row, or Back, goes to the bar. Back from further down takes the page back to the
  *     top: the rows go at once, and 130ms later come back a row short and glide into place.
+ *   · Switched to along the bar, the page comes as grey shapes, gliding in from the side it is on, and
+ *     shows itself all at once when the first screen's pictures are in (THE PAGE BEFORE ITS PICTURES,
+ *     below). Switched away, its rows slide off and fade while the panel stays (lib/tvPageSlide.ts).
  *
  * THE REMOTE NEVER MOVES DOM FOCUS HERE. The page root holds focus and owns its arrows (stopped
  * before TvSpatialNav's window listener — no candidate measuring, no rects). A press writes a couple
@@ -120,6 +124,35 @@ const RING_IN_MS = 150;
 const RING_EASE = 'cubic-bezier(.2, .6, .3, 1)';
 /* Back to the top: the rows are gone this long before they glide back in. */
 const AWAY_MS = 130;
+/* THE PAGE BEFORE ITS PICTURES, as Prime Video's (four switches along its bar, Oct 30, and a still of
+   the emulator for the shapes). Switched to, the page is grey shapes — four bars where the panel goes,
+   two rows of tiles — cut in 200px to the side it comes from and gliding home a frame later
+   (cubic-bezier(0, 0, .2, 1), 233ms). Once the first screen's pictures and wordmarks are all in hand,
+   and the shapes have been up SKEL_MIN_MS (the reference's least), they fade (380ms, linear) as the
+   page fades in under them (prime.css), the text and the pictures together; the picture top-right
+   comes 185ms into that (150ms, linear). However long the pictures take, the page shows SKEL_MAX_MS
+   after its rows came, with what it has. x, y, width, height, corner. */
+const SKELETON: [number, number, number, number, number][] = [
+  [144, 253, 300, 33, 12], [144, 310, 500, 120, 16], [144, 454, 300, 33, 12], [144, 508, 246, 86, 12],
+  ...[666, 946].flatMap((y) => [0, 1, 2, 3, 4].map((k): [number, number, number, number, number] => [TILE.x + k * TILE.pitch, y, TILE.w, TILE.h, 12])),
+];
+const SKEL_SHIFT = 200;
+const SKEL_GLIDE_AT = 16;
+const SKEL_GLIDE_MS = 233;
+const SKEL_GLIDE_EASE = 'cubic-bezier(0, 0, .2, 1)';
+const SKEL_MIN_MS = 330;
+const SKEL_MAX_MS = 2500;
+/* The shapes' fade (prime.css has it too); then they are taken away. */
+const SKEL_OUT_MS = 380;
+const ART_AT_REVEAL = 185;
+const ART_REVEAL_MS = 150;
+/* How often the page looks whether its first screen is in. */
+const SKEL_POLL_MS = 32;
+/* The first screen at the top: a row's first five tiles (the fifth cut by the edge); on the featured
+   row, the two posters right of its card. */
+const onFirstScreen = (r: PvRow, c: number) => (r.feat ? c >= 1 && c <= 2 : c < 5);
+/* Switched away, the picture top-right fades this fast (the rows go as lib/tvPageSlide's PAGE_EXIT). */
+const EXIT_ART_MS = 135;
 /* Past the move a press starts: React work waits for this, so it never lands mid-move. */
 const SETTLE_MS = MOVE_MS + 50;
 /* Row pictures are fetched, decoded and put on this many tiles at a time — about a screenful. */
@@ -285,8 +318,19 @@ export default function PrimeTest() {
   const metaOf = useMetaOf();
   const qc = useQueryClient();
 
+  /* The rows are built a frame after the page's first, which is the grey shapes alone (THE PAGE BEFORE
+     ITS PICTURES): building twenty rows before it held the switch on black for ~300ms (measured, PC),
+     while the shapes glide through the build on the compositor. */
+  const [built, setBuilt] = useState(false);
+  useEffect(() => {
+    let timer = 0;
+    const frame = requestAnimationFrame(() => { timer = window.setTimeout(() => setBuilt(true)); });
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, []);
+
   const rows = useMemo(() => {
-    const list = (cat: string) => (data?.rows?.[cat]?.results ?? []).filter((m) => m.backdrop).slice(0, ROW_CAP);
+    if (!built) return [];
+    const list =(cat: string) => (data?.rows?.[cat]?.results ?? []).filter((m) => m.backdrop).slice(0, ROW_CAP);
     const out: PvRow[] = [];
     const push = (key: string, title: string, items: MediaItem[], feat = false) => { if (items.length) out.push({ key, title, items, feat }); };
     push('trending_movie', t('sec.trending_movies'), list('trending_movie'));
@@ -297,7 +341,7 @@ export default function PrimeTest() {
       push(row.cat, t(row.key), list(row.cat));
     }
     return out;
-  }, [data?.rows, t]);
+  }, [data?.rows, t, built]);
   /* Where each row starts on the track. */
   const tops = useMemo(() => {
     let y = 0;
@@ -318,7 +362,9 @@ export default function PrimeTest() {
   const st = useRef({ row: 0, cols: [] as number[] });
   /* What is on screen now, to tell what a press changed. */
   const shown = useRef({ row: -1, col: -1, key: '', item: null as MediaItem | null });
-  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0 });
+  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0, skel: 0 });
+  /* Whether the page has shown itself yet (THE PAGE BEFORE ITS PICTURES). */
+  const revealed = useRef(false);
   /* Whether the press being applied is a held key's step. */
   const pressHeld = useRef(false);
   /* Where the track stands with row `r` on the focus line. */
@@ -548,10 +594,10 @@ export default function PrimeTest() {
 
   /* ---- THE BACKGROUND PICTURE: the focused title's, in the box top-right. Two boxes take turns.
      `outAt`: how soon the one on screen starts to go, `outMs` its fade; `rest`: how long the remote must
-     be still before the next comes in; `inMs`: its fade. The next may come in while the last is still
-     going — the two cross. ---- */
+     be still before the next comes in; `inMs`: its fade, `inBy` the earliest that may start (a
+     performance.now() time). The next may come in while the last is still going — the two cross. ---- */
   const art = useRef({ shown: '', layer: 1, visible: false, token: 0, lastChange: 0 });
-  const artTo = useCallback((want: string, { outAt = ART_OUT_AT, outMs = ART_OUT_MS, rest = ART_REST_MS, inMs = ART_IN_MS } = {}) => {
+  const artTo = useCallback((want: string, { outAt = ART_OUT_AT, outMs = ART_OUT_MS, rest = ART_REST_MS, inMs = ART_IN_MS, inBy = 0 } = {}) => {
     const a = art.current;
     const tm = timers.current;
     a.token += 1;
@@ -590,7 +636,7 @@ export default function PrimeTest() {
         img.src = want;
         fade(box, ART_PRIMED, 0);
         void getComputedStyle(box).opacity;
-        fade(box, 1, Math.max(inMs, 1), ART_PRIME_MS);
+        fade(box, 1, Math.max(inMs, 1), Math.max(inBy - performance.now(), ART_PRIME_MS));
         a.shown = want; a.layer = next; a.visible = true;
       });
     };
@@ -662,7 +708,8 @@ export default function PrimeTest() {
         if (featAt >= 0) faceTo('enter', rows[featAt].items[s.cols[featAt] ?? 0], rows[featAt], s.cols[featAt] ?? 0);
         if (!feat) {
           infoTo('enter', item, row, col, 0, -1);
-          artTo(bgSrc(item));
+          /* Before the page shows itself, its picture waits to come with it (reveal). */
+          if (revealed.current) artTo(bgSrc(item));
         }
       } else if (feat && s.row === was.row) {
         faceTo('move', item, row, col, dx, pressHeld.current);
@@ -785,7 +832,7 @@ export default function PrimeTest() {
     const w = Math.round(TILE.w * scale);
     const plan = () => {
       const s = st.current;
-      const groups: { at: number; d: number; tiles: { cv: HTMLCanvasElement; w: number; h: number }[] }[] = [];
+      const groups: { at: number; d: number; k: number; tiles: { cv: HTMLCanvasElement; w: number; h: number }[] }[] = [];
       rows.forEach((row, r) => {
         const tiles = rowEls.current[r]?.querySelectorAll<HTMLCanvasElement>('.pv-strip:not(.is-twin) .pv-tile-art');
         if (!tiles) return;
@@ -799,9 +846,11 @@ export default function PrimeTest() {
           const k = Math.ceil(off / PICS_AT_ONCE);
           byK.set(k, [...(byK.get(k) ?? []), { cv, w, h }]);
         });
-        byK.forEach((tl, k) => groups.push({ at: d + k, d, tiles: tl }));
+        byK.forEach((tl, k) => groups.push({ at: d + k, d, k, tiles: tl }));
       });
-      return groups.sort((a, b) => a.at - b.at || a.d - b.d).map((gr) => gr.tiles);
+      /* At the same distance, what is on screen first: the row below's tiles before the focused row's
+         next screenful — the first screen is whole a group sooner (the page shows itself with it). */
+      return groups.sort((a, b) => a.at - b.at || a.k - b.k || a.d - b.d).map((gr) => gr.tiles);
     };
     const pump = async () => {
       if (running) return;
@@ -826,6 +875,85 @@ export default function PrimeTest() {
       ready.forEach((got) => got.bmp?.close());
     };
   }, [rows, p]);
+
+  /* ---- THE PAGE BEFORE ITS PICTURES (SKELETON above) ----
+     The page is there from its first frame but hidden (prime.css `.pv-show`, kept rastered) under its
+     grey shapes, the remote still in the bar. It shows itself — `is-shown` on the root: the shapes fade,
+     the page fades in — once its first screen is whole: the first screen's tiles drawn (the loader puts
+     them on as ever, a group at a time), the front panel's wordmark, the featured card's picture and
+     wordmark when that row is on screen, the picture top-right decoded (it then comes a little after
+     the rest, as the reference's does). At once if the remote comes down into the page first. */
+  const skelRef = useRef<HTMLDivElement>(null);
+  const openedAt = useRef(0);
+  const reveal = useCallback(() => {
+    const root = rootRef.current;
+    if (revealed.current || !root) return;
+    revealed.current = true;
+    root.classList.add('is-shown');
+    const s = st.current;
+    const row = rows[s.row];
+    const item = row?.items[s.cols[s.row] ?? 0];
+    if (item && !row.feat) artTo(bgSrc(item), { rest: 0, inMs: ART_REVEAL_MS, inBy: performance.now() + ART_AT_REVEAL });
+    timers.current.skel = window.setTimeout(() => { if (skelRef.current) skelRef.current.style.display = 'none'; }, SKEL_OUT_MS);
+  }, [rows, artTo]);
+
+  /* Switched to along the bar, the shapes glide in from the side the page comes from. */
+  useLayoutEffect(() => {
+    openedAt.current = performance.now();
+    const dir = takeArrival('/prime');
+    const glide = skelRef.current?.firstElementChild;
+    if (!dir || !glide) return;
+    glide.animate([{ transform: `translate3d(${dir * SKEL_SHIFT * p}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }],
+      { duration: SKEL_GLIDE_MS, delay: SKEL_GLIDE_AT, easing: SKEL_GLIDE_EASE, fill: 'backwards' });
+  }, [p]);
+
+  useEffect(() => {
+    if (!rows.length || revealed.current) return;
+    let timer = 0;
+    const from = performance.now();
+    const s = st.current;
+    const row = rows[s.row];
+    const pic = row.feat ? null : new Image();
+    let picIn = !pic;
+    if (pic) {
+      pic.src = bgSrc(row.items[s.cols[s.row] ?? 0]);
+      pic.decode().catch(() => { /* it comes all the same */ }).then(() => { picIn = true; });
+    }
+    const whole = () => {
+      const drawn = [0, 1].every((r) => {
+        const R = rows[r];
+        const cvs = R && rowEls.current[r]?.querySelectorAll<HTMLCanvasElement>('.pv-strip:not(.is-twin) .pv-tile-art');
+        return !cvs || [...cvs].every((cv, c) => !onFirstScreen(R, c) || cv.dataset.on === cv.dataset.src);
+      });
+      const F = featAt >= 0 && featAt <= 1 ? faceParts(face.current.front) : null;
+      const imgs = [infoRefs.current[info.current.front]?.querySelector('img'), F?.[0].querySelector('img'), F?.[1].querySelector('img')];
+      return drawn && picIn && imgs.every((im) => !im
+        || (im.dataset.want ? im.getAttribute('src') === im.dataset.want : !im.getAttribute('src') || im.complete));
+    };
+    const check = () => {
+      const now = performance.now();
+      const early = openedAt.current + SKEL_MIN_MS - now;
+      if (now - from >= SKEL_MAX_MS || (early <= 0 && whole())) { reveal(); return; }
+      timer = window.setTimeout(check, Math.max(SKEL_POLL_MS, early));
+    };
+    check();
+    return () => window.clearTimeout(timer);
+  }, [rows, featAt, faceParts, reveal]);
+
+  /* Switched away along the bar: the rows (the shapes, if the page has not shown itself yet) slide off
+     the way the pages go and fade, the picture fades faster, the panel stays — and the page is cut
+     PAGE_EXIT.cutMs in (lib/tvPageSlide.ts). Each from where it is now. */
+  useEffect(() => {
+    registerPageExit((dir) => {
+      const own = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '1px 0px');
+      const going = revealed.current ? trackRef.current : skelRef.current?.firstElementChild;
+      going?.animate([own ? { translate: `${-dir * PAGE_EXIT.px * p}px 0px`, opacity: 0 } : { opacity: 0 }],
+        { duration: PAGE_EXIT.ms, easing: PAGE_EXIT.ease, fill: 'forwards' });
+      rowArtRefs.current.forEach((el) => el?.animate([{ opacity: 0 }], { duration: EXIT_ART_MS, easing: 'linear', fill: 'forwards' }));
+      return PAGE_EXIT.cutMs;
+    });
+    return () => registerPageExit(null);
+  }, [p]);
 
   /* Down from the bar lands on the page root, which holds focus for the whole page. */
   useEffect(() => setPageEntry(() => rootRef.current), []);
@@ -930,38 +1058,53 @@ export default function PrimeTest() {
       style={{ ['--p' as string]: `${p}px` }}
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
-      onFocus={() => apply()}
+      onFocus={() => { reveal(); apply(); }}
     >
-      {/* THE BACKGROUND: two boxes top-right that the focused title's picture alternates between. */}
-      {[0, 1].map((i) => (
-        <div key={i} className="pv-row-art" ref={(el) => { rowArtRefs.current[i] = el; }}>
-          <img alt="" decoding="async" />
-        </div>
-      ))}
+      <div className="pv-show">
+        {/* THE BACKGROUND: two boxes top-right that the focused title's picture alternates between. */}
+        {[0, 1].map((i) => (
+          <div key={i} className="pv-row-art" ref={(el) => { rowArtRefs.current[i] = el; }}>
+            <img alt="" decoding="async" />
+          </div>
+        ))}
 
-      {/* THE FOCUSED TITLE'S PANEL, twice (they take turns) — bottom-anchored, filled in by writeInfo. */}
-      {[0, 1].map((n) => (
-        <div key={n} className="pv-info" ref={(el) => { infoRefs.current[n] = el; }}>
-          <img className="pv-logo" alt="" decoding="async" onError={logoFailed} />
-          <p className="pv-title" />
-          <p className="pv-tags"><span className="pv-badge" /><span className="pv-callout" /></p>
-          <p className="pv-meta">
-            <span className="pv-genre" />
-            <span className="pv-year" />
-            <span className="pv-run" />
-            <span className="pv-age" />
-          </p>
-          <p className="pv-synopsis" />
-          <Check />
-        </div>
-      ))}
+        {/* THE FOCUSED TITLE'S PANEL, twice (they take turns) — bottom-anchored, filled in by writeInfo. */}
+        {[0, 1].map((n) => (
+          <div key={n} className="pv-info" ref={(el) => { infoRefs.current[n] = el; }}>
+            <img className="pv-logo" alt="" decoding="async" onError={logoFailed} />
+            <p className="pv-title" />
+            <p className="pv-tags"><span className="pv-badge" /><span className="pv-callout" /></p>
+            <p className="pv-meta">
+              <span className="pv-genre" />
+              <span className="pv-year" />
+              <span className="pv-run" />
+              <span className="pv-age" />
+            </p>
+            <p className="pv-synopsis" />
+            <Check />
+          </div>
+        ))}
 
-      <div className="pv-track" ref={trackRef}>
-        {rows.map((r, i) => <PvRowView key={r.key} row={r} i={i} setRowEl={setRowEl} />)}
+        <div className="pv-track" ref={trackRef}>
+          {rows.map((r, i) => <PvRowView key={r.key} row={r} i={i} setRowEl={setRowEl} />)}
+        </div>
+
+        {/* The focus ring stands still: the focused tile, or the featured card, is always pinned under it. */}
+        <div className="pv-ring" ref={ringRef} />
       </div>
 
-      {/* The focus ring stands still: the focused tile, or the featured card, is always pinned under it. */}
-      <div className="pv-ring" ref={ringRef} />
+      {/* THE PAGE BEFORE ITS PICTURES: grey shapes over it until it shows itself. */}
+      <div className="pv-skel" ref={skelRef} aria-hidden="true">
+        <div className="pv-skel-glide">
+          {SKELETON.map(([x, y, w, h, r], i) => (
+            <div
+              key={i}
+              className="pv-sk"
+              style={{ left: `calc(${x} * var(--p))`, top: `calc(${y} * var(--p))`, width: `calc(${w} * var(--p))`, height: `calc(${h} * var(--p))`, borderRadius: `calc(${r} * var(--p))` }}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
