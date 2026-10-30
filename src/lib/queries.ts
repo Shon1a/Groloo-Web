@@ -200,6 +200,14 @@ export function useMetaCached(id: string | number | undefined, type?: MediaItem[
   return useQuery({ ...metaQuery(id, type, lang), enabled: false }).data;
 }
 
+/* The same, read on demand for any card, under the key useWarmDetail fills — for a page that writes
+ * a title's facts straight into the screen on a press instead of rendering (PrimeTest). */
+export function useMetaOf() {
+  const { lang } = useLang();
+  const qc = useQueryClient();
+  return useCallback((it: MediaItem) => qc.getQueryData<MetaDetail>(metaQuery(apiIdOf(it), it.type, lang).queryKey), [qc, lang]);
+}
+
 /* /api/meta for SEVERAL titles at once, under the very keys useMeta uses — so a title read here
  * is already warm when its own detail sheet opens, and one opened before is free here. For the
  * few surfaces that describe a handful of titles together (post-play, Top Picks' seeds); never
