@@ -227,9 +227,12 @@ const badgeOf = (m: MediaItem, d?: MetaDetail) => {
   if (last && within(last.seasonStart, 30)) return last.season > 1 ? 'New season' : 'New series';
   return last && within(last.date, 7) ? 'New episode' : '';
 };
-const runOf = (m: MediaItem, d?: MetaDetail) => (!d ? ''
-  : m.type === 'movie' ? d.runtime || ''
-    : d.seasons ? `${d.seasons} season${d.seasons > 1 ? 's' : ''}` : '');
+/* From the title's detail, or before it lands, from the card (the home feed carries them). */
+const runOf = (m: MediaItem, d?: MetaDetail) => {
+  const s = d ?? m;
+  return m.type === 'movie' ? s.runtime || ''
+    : s.seasons ? `${s.seasons} season${s.seasons > 1 ? 's' : ''}` : '';
+};
 /* The age as the reference writes it, an age and a plus. A board that rates by age keeps its number
    ("12", "12A", "16" → 12+, 16+); the US letters take the ages Prime Video gives them (its maturity
    ratings: G, TV-Y, TV-G all ages; TV-Y7, PG, TV-PG 7+; PG-13 13+; TV-14 16+; R, NC-17, TV-MA 18+). */
@@ -238,18 +241,19 @@ const US_AGE: Record<string, string> = {
   'TV-Y7': '7+', 'TV-Y7-FV': '7+', PG: '7+', 'TV-PG': '7+',
   'PG-13': '13+', 'TV-14': '16+', R: '18+', 'NC-17': '18+', 'TV-MA': '18+',
 };
-const ageOf = (d?: MetaDetail) => {
-  const c = d?.certification?.trim().toUpperCase();
+const ageOf = (m: MediaItem, d?: MetaDetail) => {
+  const c = (d ? d.certification : m.certification)?.trim().toUpperCase();
   if (!c) return '';
   const n = /^\d+/.exec(c)?.[0];
   return n ? (Number(n) ? `${Number(n)}+` : 'ALL') : US_AGE[c] ?? '';
 };
 
 /* The facts only the title's detail has: its runtime (or seasons) and age rating. Written with the rest
-   when the detail is already here; otherwise when it lands, at rest — at the END of the facts line, so
+   when the detail or the card has them (the home feed carries them once the server has learned them);
+   otherwise when the detail lands, at rest — at the END of the facts line, so
    they move nothing else, fading in. The featured card has the age alone. */
 const writeLate = (el: HTMLElement, m: MediaItem, d: MetaDetail | undefined, late: boolean) => {
-  const pairs: [string, string][] = [['.pv-run', runOf(m, d)], ['.pv-age', ageOf(d)]];
+  const pairs: [string, string][] = [['.pv-run', runOf(m, d)], ['.pv-age', ageOf(m, d)]];
   for (const [sel, s] of pairs) {
     const n = el.querySelector<HTMLElement>(sel);
     if (!n || n.textContent === s) continue;
@@ -912,7 +916,7 @@ export default function PrimeTest() {
        wordmarks one press away are fetched, so the next panel comes in with its own. On the featured
        card the faces one press away come first, on their own (the likeliest next press's). */
     const rest = () => {
-      warm(item, undefined, () => shown.current.item === item);
+      warm(item, undefined, () => shown.current.item === item, item.bgArt);
       const near: [number, number][] = [[s.row, col + 1], [s.row, col - 1], [s.row + 1, s.cols[s.row + 1] ?? 0], [s.row - 1, s.cols[s.row - 1] ?? 0]];
       for (const [r, c] of near) {
         const m = rows[r]?.items[c];
@@ -1383,7 +1387,8 @@ export default function PrimeTest() {
     if (!rows.length || leaving.current.id !== '') return;
     if (e.key === 'Enter') {
       const it = rows[s.row].items[s.cols[s.row] ?? 0];
-      openModal({ ...openItem(it), pv: openTitle(it) });
+      /* The title screen opens on the picture shown here, not on another of the title's backdrops. */
+      openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
       return;
     }
     const h = held.current;

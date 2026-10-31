@@ -73,6 +73,12 @@ export interface MediaItem {
    *  any label — "porn", "tv-channel", "other"). `type` is normalised to movie/series for the
    *  UI; meta and stream requests have to go out under this one or the add-on answers nothing. */
   addonType?: string;
+  /** TV home rows (with `titleLogo`): the facts /api/meta has under the same names, once the
+   *  server has learned them (server.js attachFacts) — a film's runtime, a series' seasons, the
+   *  age rating — so the Prime page writes them with the rest of its panel. */
+  runtime?: string;
+  seasons?: number;
+  certification?: string | null;
   [k: string]: unknown;
 }
 
