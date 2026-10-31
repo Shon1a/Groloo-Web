@@ -51,15 +51,15 @@ body.pv-deep .tv-topnav { opacity: 0; transition: opacity 75ms linear; }
   width: calc(1300 * var(--p)); height: calc(731 * var(--p));
   opacity: 0;
 }
-.pv-row-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
-.pv-row-art img:not([src]) { display: none; }
+.pv-row-art canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 /* The title screen opened from here draws its picture with this same fade (below). Not the reference's
    straight ramps: those showed a band where the black ends and a hard bottom edge. A smootherstep
    instead, as stops — it leaves the black and reaches the picture with no corner at either end — run
    long, so both edges stay dark well into the picture (the user's call, Oct 29: darker, smoother).
-   It costs ~0.2ms of GPU per picture change, the same as none: it is drawn with the picture, once. */
-.pv-row-art::after,
-.pv-face-art::after,
+   Here it is a layer of its own over both boxes (and one over the featured card's faces), drawn once:
+   black over black where no picture shows, so it never needs to come and go with them. */
+.pv-art-fade,
+.pv-card-fade,
 body.pv-page .tv-det-art::after {
   content: '';
   position: absolute;
@@ -85,6 +85,10 @@ body.pv-page .tv-det-art::after {
       rgba(0, 0, 0, .1) 36%,
       rgba(0, 0, 0, .02) 42%,
       rgba(0, 0, 0, 0) 48%);
+}
+.pv-art-fade {
+  inset: auto; left: calc(620 * var(--p)); top: 0;
+  width: calc(1300 * var(--p)); height: calc(731 * var(--p));
 }
 
 /* ---- THE TITLE SCREEN OPENED FROM HERE (TvDetail, over this page) ----
@@ -222,7 +226,9 @@ body.pv-page .tv-det-art img { object-position: center top; }
   height: calc(576 * var(--p)); overflow: hidden;
 }
 .pv-clip > .pv-strip { padding-left: 0; margin-left: calc(-384 * var(--p)); }
-.pv-clip.is-left { left: 0; right: auto; width: calc(144 * var(--p)); }
+/* Its opacity is the compositor's (PrimeTest's sliverBack): changed on the paint, the edge fade below was
+   drawn again with it. */
+.pv-clip.is-left { left: 0; right: auto; width: calc(144 * var(--p)); will-change: opacity; }
 .pv-clip.is-left > .pv-strip { padding-left: calc(144 * var(--p)); margin-left: 0; }
 /* The poster before the card fades into the screen's left edge: black at 0, clear where it ends (112). */
 .pv-clip.is-left::after {
@@ -234,13 +240,17 @@ body.pv-page .tv-det-art img { object-position: center top; }
   position: absolute; left: calc(144 * var(--p)); top: calc(45 * var(--p));
   width: calc(1024 * var(--p)); height: calc(576 * var(--p));
 }
-.pv-face, .pv-dim { position: absolute; inset: 0; }
-.pv-dim { transition: opacity var(--dim); }
+.pv-dim { position: absolute; inset: 0; transition: opacity var(--dim); }
 .pv-face-art, .pv-face-info { opacity: 0; will-change: opacity, transform; }
-.pv-face-art { position: absolute; inset: 0; overflow: hidden; border-radius: calc(7 * var(--p)); }
-.pv-face-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.pv-face-art img:not([src]) { display: none; }
-.pv-face-art img.is-late { animation: pvTitleIn 150ms linear both; }
+.pv-face-art { position: absolute; inset: 0; }
+/* The card's pictures are drawn with their corners rounded (PrimeTest's drawPic). The fade over them is
+   one layer for all three, drawn once: black over a picture at half (the row dimmed) is the same as the
+   two at half together, so it is never dimmed — only gone with the row. */
+.pv-face-pic { display: block; width: 100%; height: 100%; }
+.pv-card-fade { will-change: opacity; transition: opacity var(--dim); }
+.pv-row.is-gone .pv-card-fade { opacity: 0; transition: opacity var(--gone); }
+.pv.is-away .pv-card-fade { opacity: 0; transition: none; }
+.pv-face-pic.is-late { animation: pvTitleIn 150ms linear both; }
 /* Stacked from the bottom, as the panel is: wordmark (or name), pill + genre + age, included line. */
 .pv-face-info {
   position: absolute; left: calc(36 * var(--p)); bottom: calc(35 * var(--p));
@@ -259,7 +269,7 @@ body.pv-page .tv-det-art img { object-position: center top; }
 
 /* The ring stands on the focus line; the focused tile is always pinned under it. It goes with the remote
    (100ms) and comes back once the bar has let it go (170ms, 230ms after). Around the featured card it
-   is the card's (PrimeTest's ringTo swaps it, hidden). */
+   is the card's, a second ring (PrimeTest's ringTo swaps them; the one not in use is-off). */
 .pv-ring {
   position: absolute; z-index: 3; pointer-events: none;
   left: calc(137 * var(--p)); top: calc(605 * var(--p));
@@ -272,3 +282,4 @@ body.pv-page .tv-det-art img { object-position: center top; }
 }
 .pv:focus .pv-ring { opacity: 1; transition: opacity 170ms linear 230ms; }
 .pv-ring.is-big { top: calc(245 * var(--p)); width: calc(1038 * var(--p)); height: calc(590 * var(--p)); }
+.pv:focus .pv-ring.is-off, .pv-ring.is-off { opacity: 0; }
