@@ -8,7 +8,7 @@ import { barItemHere, setPageEntry } from '../lib/tvBar';
 import { registerBackHandler } from '../lib/tvKeys';
 import { PAGE_EXIT, registerPageExit, takeArrival } from '../lib/tvPageSlide';
 import { quietFor, whenQuiet } from '../lib/tvQuiet';
-import { useModal, openItem } from '../stores/modal';
+import { useModal, openItem, type PvHead } from '../stores/modal';
 import { usePlayer } from '../stores/player';
 import type { MediaItem, MetaDetail } from '../lib/types';
 import '../styles/prime.css';
@@ -130,21 +130,21 @@ const RING_IN_MS = 150;
 const RING_EASE = 'cubic-bezier(.2, .6, .3, 1)';
 /* Back to the top: the rows are gone this long before they glide back in. */
 const AWAY_MS = 130;
-/* OK: THE TITLE SCREEN COMES AS PRIME VIDEO'S DOES (the user's recording of the emulator, Oct 31, two
-   titles, 30fps, positions read frame by frame and eased to fit). At the press the rows sink 87px and
-   the panel's words 227px (233ms, easing in), faded by 170ms; the wordmark rises to where the title
-   screen's stands (233ms) and is left there under it; the title screen's column comes up 450ms after
-   the press (prime.css). Back cuts the wordmark home and fades the rest in (170ms). */
+/* OK: THE TITLE SCREEN COMES OUT OF THE PANEL (the user's recordings, Oct 31: Prime Video's rows and
+   rise, read frame by frame and eased to fit; then the user's own call — the panel stays, only the
+   buttons come from below). At the press the rows sink 87px (233ms, easing in), faded by 170ms, and
+   the panel rises whole to where the title screen's column starts (HEAD_Y, 233ms), on its own left
+   edge. Its synopsis then opens to the whole one (EXPAND_MS), and the title screen takes over the same
+   block, adding the cast under it and its buttons from below (prime.css). Back cuts the wordmark home
+   and fades the rest in (170ms). */
 const OPEN_MS = 233;
 const OPEN_FADE_MS = 170;
 const OPEN_ROWS_PX = 87;
-const OPEN_WORDS_PX = 227;
 const OPEN_EASE = 'cubic-bezier(.25, 0, .55, .25)';
-const OPEN_LOGO_EASE = 'cubic-bezier(.15, 0, .65, .85)';
-const OPEN_BLOCK_AT = 450;
+const OPEN_RISE_EASE = 'cubic-bezier(.15, 0, .65, .85)';
+const HEAD_Y = 84;
+const EXPAND_MS = 200;
 const BACK_FADE_MS = 170;
-/* The title screen's wordmark fades in this long (tv.css `.title-logo`): the one left here goes with it. */
-const TITLE_LOGO_FADE_MS = 450;
 /* THE PAGE BEFORE ITS PICTURES, as Prime Video's (four switches along its bar, Oct 30, and a still of
    the emulator for the shapes). Switched to, the page is grey shapes — four bars where the panel goes,
    two rows of tiles — cut in 200px to the side it comes from and gliding home a frame later
@@ -258,25 +258,16 @@ const writeLate = (el: HTMLElement, m: MediaItem, d: MetaDetail | undefined, lat
   }
 };
 
-const Check = () => (
-  <span className="pv-check">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" /><path d="m7 12.5 3.2 3.2L17 9" /></svg>
-    Included with Groloo
-  </span>
-);
+/* A panel's facts, as written (writeInfo, writeLate). */
+const factsOf = (el: HTMLElement): PvHead['facts'] =>
+  (['genre', 'year', 'run', 'age'] as const).map((key) => ({ key, text: el.querySelector(`.pv-${key}`)?.textContent ?? '' }));
 
-/* Where the title screen's wordmark stands, drawn, for a picture nw x nh — before the title screen is
-   there to ask: its column's corner (tv.css `.tv-det` --u, `.tv-dm` padding), and app.css
-   `#mTitle .title-logo`: 7vw high between 40 and 72px, at most 360px (and its column) wide, contained
-   in that box, left and centred. */
-const titleLogoAt = (nw: number, nh: number) => {
-  const vw = window.innerWidth;
-  const u = Math.min(vw / 100, window.innerHeight * 1.7778 / 100);
-  const boxH = Math.min(Math.max(40, vw * 0.07), 72);
-  const w = Math.min(boxH * nw / nh, 360, 42 * u, vw - 12.4 * u);
-  const h = w * nh / nw;
-  return { x: 6.2 * u, y: 4.4 * u + (boxH - h) / 2, w, h };
-};
+/* What OK set going here (PrimeTest's openTitle), for Back to put back: the title open, what moves, what
+   faded, the panel that rose, its synopsis as it was before it opened, and over the featured card the
+   title that panel held. */
+const notLeaving = () => ({
+  id: '' as string | number, anims: [] as Animation[], faded: [] as Element[], panel: null as HTMLElement | null, syn: '', held: '',
+});
 
 /* A picture's pixels, decoded off the main thread, to be drawn into a canvas once — at the size it is
    drawn, or (`w` left out) its own. The resize is NOT off the main thread: the engine does it as it hands
@@ -409,7 +400,6 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
                 <span className="pv-genre" />
                 <span className="pv-age" />
               </p>
-              <Check />
             </div>
           </div>
         ))}
@@ -470,7 +460,7 @@ export default function PrimeTest() {
   const st = useRef({ row: 0, cols: [] as number[] });
   /* What is on screen now, to tell what a press changed. */
   const shown = useRef({ row: -1, col: -1, key: '', item: null as MediaItem | null });
-  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0, skel: 0, land: 0, block: 0, hand: 0 });
+  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0, skel: 0, land: 0, hand: 0 });
   /* Whether the page has shown itself yet (THE PAGE BEFORE ITS PICTURES). */
   const revealed = useRef(false);
   /* Whether the press being applied is a held key's step. */
@@ -703,11 +693,19 @@ export default function PrimeTest() {
     if (how === 'move' && F.keys[i] !== key) writeLater(() => writeFace(i, m, row, col), holding, FACE_IN_AT);
   }, [p, faceParts, writeFace, writeLater]);
 
-  /* The runtime and age rating of the title on screen, when its detail lands after it was written. */
+  /* The runtime and age rating of the title on screen, when its detail lands after it was written — and
+     in the title screen opened from it, which draws its panel (openTitle). */
   useEffect(() => qc.getQueryCache().subscribe((e) => {
     if (e.type !== 'updated' || e.action.type !== 'success' || e.query.queryKey[0] !== 'meta') return;
     const { item, key, row } = shown.current;
     if (!item) return;
+    const L = leaving.current;
+    const late = L.panel && L.id === item.id ? metaOf(item) : undefined;
+    if (L.panel && late) {
+      writeLate(L.panel, item, late, true);
+      const facts = factsOf(L.panel);
+      useModal.setState((m) => (m.target?.pv && m.target.id === L.id ? { target: { ...m.target, pv: { ...m.target.pv, facts } } } : m));
+    }
     const onCard = row === featAt;
     const A = onCard ? face.current : info.current;
     const el = onCard ? faceParts(A.front)?.[1] : infoRefs.current[A.front];
@@ -957,10 +955,13 @@ export default function PrimeTest() {
     document.body.classList.add('pv-page');
     const tm = timers.current;
     return () => {
-      document.body.classList.remove('pv-page', 'pv-deep', 'pv-titled', 'pv-opening', 'pv-landed', 'pv-flown');
+      document.body.classList.remove('pv-page', 'pv-deep', 'pv-titled', 'pv-landed');
+      ['--p', '--pv-head-x', '--pv-head-y'].forEach((v) => document.body.style.removeProperty(v));
       Object.values(tm).forEach((id) => window.clearTimeout(id));
     };
   }, []);
+  /* The title screen opened from here draws the panel at this page's scale (prime.css). */
+  useEffect(() => { document.body.style.setProperty('--p', `${p}px`); }, [p]);
 
   /* ---- THE ROWS' PICTURES ARRIVE ONLY WHILE THE REMOTE IS STILL ----
      A picture arriving costs its strip a paint, a decode and a raster. They used to be put on whole
@@ -1171,35 +1172,84 @@ export default function PrimeTest() {
     return true;
   }, 100), [apply, trackAt]);
 
-  /* ---- OK: THE TITLE SCREEN (TvDetail, over this page) comes as Prime Video's does (OPEN_MS). What is
-     on screen goes at the press, whether or not the title screen is ready — no spinner however long it
-     takes (the user's call, Oct 29), and the page takes no keys till it is closed: the rows and the ring
-     sink and fade, the panel's words sink further, and the wordmark rises to where the title screen's
-     will stand and is left there, under it, till that one has come in over it. The title screen's
-     column keeps its own clock (prime.css): body.pv-opening till OPEN_BLOCK_AT, .pv-landed once the
-     wordmark is home, .pv-flown if there was one to send, .pv-titled while a title is open. ---- */
-  const leaving = useRef({ id: '' as string | number, anims: [] as Animation[], faded: [] as Element[], cut: [] as HTMLElement[], logo: null as HTMLElement | null });
-  /* The wordmark left here goes once the title screen's stands over it — its column in, its picture
-     loaded (or its name, where it has none) — fading as that one fades in. */
+  /* ---- OK: THE TITLE SCREEN (TvDetail, over this page) comes out of the panel (OPEN_MS). What is on
+     screen goes at the press, whether or not the title screen is ready — no spinner however long it
+     takes (the user's call, Oct 29) — and the page takes no keys till it is closed. The rows and the
+     ring sink and fade. The panel holding the title — written at the press if that came before it, and
+     over the featured card, where none shows, given it then — rises whole to where the title screen's
+     column starts (from the card it fades in there instead), and its synopsis opens to the whole one.
+     The title screen draws the same block in the same place (TvDetail's `pv` head) and takes over
+     from it in one frame: body.pv-landed, which brings in its cast and its buttons (prime.css).
+     .pv-titled while a title is open. ---- */
+  const leaving = useRef(notLeaving());
+  /* The panel's synopsis, two lines, opened to the whole (six at most, prime.css): split where its
+     third line starts, the two lines kept as they stand and the rest under them — fading in, or not,
+     where the panel is not on screen yet. */
+  const openSynopsis = (panel: HTMLElement, fadeIn: boolean) => {
+    const L = leaving.current;
+    const syn = panel.querySelector<HTMLElement>('.pv-synopsis');
+    const node = syn?.firstChild;
+    if (!syn || !node || node.nodeType !== Node.TEXT_NODE) return;
+    const text = node.textContent ?? '';
+    L.syn = text;
+    syn.classList.add('is-open');
+    const third = syn.getBoundingClientRect().top + 1.5 * parseFloat(getComputedStyle(syn).lineHeight);
+    const r = document.createRange();
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      r.setStart(node, mid);
+      r.setEnd(node, mid + 1);
+      if (r.getBoundingClientRect().top >= third) hi = mid;
+      else lo = mid + 1;
+    }
+    if (lo >= text.length) return;
+    const first = document.createElement('span');
+    first.textContent = text.slice(0, lo);
+    const more = document.createElement('span');
+    more.className = 'pv-more';
+    more.textContent = text.slice(lo);
+    syn.replaceChildren(first, more);
+    if (fadeIn) L.anims.push(more.animate([{ opacity: 0 }, { opacity: 1 }], { duration: EXPAND_MS, easing: 'linear' }));
+  };
+  /* Once the title screen's block is there, its wordmark decoded, it takes over in one frame. */
   const handOver = () => {
     const L = leaving.current;
-    const title = document.querySelector('.tv-dm.is-in .tv-det-title');
-    if (!title || (title.classList.contains('has-logo') && !title.querySelector('.title-logo.rdy'))) {
+    if (useModal.getState().target?.id !== L.id) return;
+    const head = document.querySelector<HTMLElement>('.tv-dm.is-pv .pv-head');
+    if (!head) {
       timers.current.hand = window.setTimeout(handOver, 50);
       return;
     }
-    const out = L.logo?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: TITLE_LOGO_FADE_MS, easing: 'linear', fill: 'forwards' });
-    if (out) L.anims.push(out);
+    const take = () => {
+      if (leaving.current !== L) return;
+      document.body.classList.add('pv-landed');
+      if (L.panel) L.panel.style.visibility = 'hidden';
+    };
+    const img = head.querySelector('img');
+    if (img) img.decode().then(take, take);
+    else take();
   };
-  const openTitle = (it: MediaItem) => {
+  /* The panel as text, for the title screen to draw the same (TvDetail's `pv` head). */
+  const headOf = (el: HTMLElement): PvHead => {
+    const q = (sel: string) => el.querySelector<HTMLElement>(sel);
+    const logo = q('.pv-logo');
+    return {
+      logo: logo && logo.style.display !== 'none' ? logo.getAttribute('src') ?? '' : '',
+      name: q('.pv-title')?.textContent ?? '',
+      badge: q('.pv-badge')?.textContent ?? '',
+      callout: q('.pv-callout')?.textContent ?? '',
+      facts: factsOf(el),
+      synopsis: q('.pv-synopsis')?.textContent ?? '',
+    };
+  };
+  const openTitle = (it: MediaItem): PvHead => {
     const L = leaving.current;
     const I = info.current;
     const tm = timers.current;
-    const body = document.body.classList;
-    /* The panel on screen, if the title is in it, and its wordmark if that is drawn. */
-    const panel = !I.hidden && I.keys[I.front] === shown.current.key && performance.now() >= I.inAt + IN_MS ? infoRefs.current[I.front] : null;
-    const logo = panel?.querySelector<HTMLImageElement>('.pv-logo');
-    const flies = !!logo && logo.style.display !== 'none' && logo.complete && logo.naturalWidth > 0;
+    const s = shown.current;
+    const feat = I.hidden;
     const own = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '1px 0px');
     L.id = it.id;
     /* Each from where it is, written out: an animation that takes its start from what lies under it
@@ -1214,54 +1264,83 @@ export default function PrimeTest() {
     };
     sink(trackRef.current, OPEN_ROWS_PX);
     ringRefs.current.forEach((ring) => sink(ring, OPEN_ROWS_PX));
-    /* The words of each panel on screen (the one going out too); a panel still to come in, pressed into
-       before it came, is cut, and comes back with the page. Nothing undrawn is moved: an animation there
-       cannot leave the main thread, and it would then need a main frame on every frame of the open. */
-    for (const one of infoRefs.current) {
-      if (!one) continue;
-      if (+getComputedStyle(one).opacity > 0) {
-        for (const el of one.children) if (!(flies && el === logo) && el.getClientRects().length) sink(el, OPEN_WORDS_PX);
-      } else if (one.style.opacity === '1') {
-        fade(one, 0, 0);
-        L.cut.push(one);
-      }
-    }
-    if (flies && logo) {
-      const from = logo.getBoundingClientRect();
-      const to = titleLogoAt(logo.naturalWidth, logo.naturalHeight);
-      logo.style.transformOrigin = '0 0';
-      L.anims.push(logo.animate([{ transform: 'translate(0px, 0px) scale(1)' }, { transform: `translate(${to.x - from.x}px, ${to.y - from.y}px) scale(${to.w / from.width})` }],
-        { duration: OPEN_MS, easing: OPEN_LOGO_EASE, fill: 'forwards' }));
-      L.logo = logo;
-      body.add('pv-flown');
-    }
-    body.add('pv-titled', 'pv-opening');
-    tm.land = window.setTimeout(() => { body.add('pv-landed'); if (flies) handOver(); }, OPEN_MS);
-    tm.block = window.setTimeout(() => body.remove('pv-opening'), OPEN_BLOCK_AT);
+    /* Nothing more is written meanwhile: at rest over the featured card that would be both panels. */
+    dropWrites();
+    window.clearTimeout(tm.rest);
+    const els = infoRefs.current as HTMLDivElement[];
+    const panel = els[I.front];
+    if (feat) L.held = I.keys[I.front];
+    writeInfo(I.front, it, rows[s.row], s.col);
+    L.panel = panel;
+    /* The panel from where it is (it may still be on its way in), held by its top from here, so that
+       what opens in it opens downward; the title screen's block where it will rise to, a whole number
+       of pixels above, so the two are drawn alike. The other panel, if it is still going out, is left to
+       its own fade (over 185ms after its press, about with the rows'): another fade on top of a running
+       one would be ticked on the main thread. */
+    const cs = getComputedStyle(panel);
+    const fromO = +cs.opacity;
+    const fromT = cs.transform;
+    panel.style.transition = 'none';
+    panel.style.opacity = feat ? '0' : '1';
+    panel.style.transform = 'translate3d(0px, 0px, 0px)';
+    panel.style.top = getComputedStyle(panel).top;
+    panel.style.bottom = 'auto';
+    const box = panel.getBoundingClientRect();
+    const dy = Math.round(HEAD_Y * p - box.top);
+    document.body.style.setProperty('--pv-head-x', `${box.left}px`);
+    document.body.style.setProperty('--pv-head-y', `${box.top + dy}px`);
+    const to = `translate3d(0px, ${dy}px, 0px)`;
+    const start = feat ? to : fromT === 'none' ? 'translate3d(0px, 0px, 0px)' : fromT;
+    L.anims.push(panel.animate([{ transform: start }, { transform: to }], { duration: OPEN_MS, easing: OPEN_RISE_EASE, fill: 'forwards' }));
+    if (!feat && fromO < 1) L.anims.push(panel.animate([{ opacity: fromO }, { opacity: 1 }], { duration: OPEN_FADE_MS, easing: 'linear' }));
+    const head = headOf(panel);
+    document.body.classList.add('pv-titled');
+    tm.land = window.setTimeout(() => {
+      if (feat) {
+        openSynopsis(panel, false);
+        L.anims.push(panel.animate([{ opacity: 0 }, { opacity: 1 }], { duration: OPEN_FADE_MS, easing: 'linear', fill: 'forwards' }));
+      } else openSynopsis(panel, true);
+      tm.hand = window.setTimeout(handOver, feat ? OPEN_FADE_MS : EXPAND_MS);
+    }, OPEN_MS);
+    return head;
   };
   /* Closed: the wordmark is home at once and the rest fades in where it was (BACK_FADE_MS), as the
      reference's page comes back. The ring is left to its own fade, which waits for the remote. Another
-     title opened from the title screen takes away the wordmark left here (it draws that one's). */
-  useEffect(() => useModal.subscribe((s) => {
+     title opened from the title screen leaves no panel here (it draws its own head). */
+  useEffect(() => useModal.subscribe((m) => {
     const L = leaving.current;
+    const P = L.panel;
     if (L.id === '') return;
-    if (s.target) {
-      if (L.logo) L.logo.style.visibility = s.target.id === L.id ? '' : 'hidden';
+    if (m.target) {
+      if (m.target.id !== L.id && P) P.style.visibility = 'hidden';
       return;
     }
     const tm = timers.current;
-    [tm.land, tm.block, tm.hand].forEach((id) => window.clearTimeout(id));
-    document.body.classList.remove('pv-titled', 'pv-opening', 'pv-landed', 'pv-flown');
+    [tm.land, tm.hand].forEach((id) => window.clearTimeout(id));
+    document.body.classList.remove('pv-titled', 'pv-landed');
     L.anims.forEach((a) => a.cancel());
-    for (const el of L.cut) {
-      el.style.transition = 'none';
-      el.style.opacity = '1';
-      el.style.transform = 'translate3d(0px, 0px, 0)';
+    if (P) {
+      const syn = P.querySelector<HTMLElement>('.pv-synopsis');
+      if (syn && L.syn) {
+        syn.textContent = L.syn;
+        syn.classList.remove('is-open');
+      }
+      P.style.top = '';
+      P.style.bottom = '';
+      P.style.visibility = '';
+      if (info.current.hidden) {
+        /* Over the featured card the panel goes back to the title it held (at rest, above). */
+        const c = L.held.lastIndexOf(':');
+        const R = rows.find((r) => r.key === L.held.slice(0, c));
+        const col = Number(L.held.slice(c + 1));
+        if (R?.items[col]) writeInfo(info.current.front, R.items[col], R, col);
+      } else {
+        for (const el of P.children) if (!el.matches('.pv-logo, .pv-title') && el.getClientRects().length) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: BACK_FADE_MS, easing: 'linear' });
+      }
     }
-    for (const el of [...L.faded, ...L.cut]) if (!ringRefs.current.includes(el as HTMLDivElement)) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: BACK_FADE_MS, easing: 'linear' });
-    if (L.logo) L.logo.style.visibility = '';
-    leaving.current = { id: '', anims: [], faded: [], cut: [], logo: null };
-  }), []);
+    for (const el of L.faded) if (!ringRefs.current.includes(el as HTMLDivElement)) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: BACK_FADE_MS, easing: 'linear' });
+    leaving.current = notLeaving();
+  }), [rows, writeInfo]);
 
   /* ---- ONE STEP OF THE REMOTE ---- */
   const lastStep = useRef(0);
@@ -1304,8 +1383,7 @@ export default function PrimeTest() {
     if (!rows.length || leaving.current.id !== '') return;
     if (e.key === 'Enter') {
       const it = rows[s.row].items[s.cols[s.row] ?? 0];
-      openTitle(it);
-      openModal(openItem(it));
+      openModal({ ...openItem(it), pv: openTitle(it) });
       return;
     }
     const h = held.current;
@@ -1365,7 +1443,6 @@ export default function PrimeTest() {
               <span className="pv-age" />
             </p>
             <p className="pv-synopsis" />
-            <Check />
           </div>
         ))}
 

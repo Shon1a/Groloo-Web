@@ -291,7 +291,13 @@ export default function TvDetail(p: TvDetailProps) {
     const id = window.setTimeout(() => setGlanceLate(true), GLANCE_WAIT_MS);
     return () => window.clearTimeout(id);
   }, []);
-  const copyIn = shown && (glanceReady || glanceLate);
+  /* Opened from the Prime page (routes/PrimeTest), the column starts with that page's title panel as it
+   * stood — its wordmark, tags, facts and synopsis, in its own markup and sizes (prime.css) — in place
+   * of this screen's head: no match, no callouts, no tagline, so nothing to wait for. */
+  const pv = target.pv;
+  const copyIn = shown && (!!pv || glanceReady || glanceLate);
+  /* Facts the panel did not have yet fade in when they come, as they would have there. */
+  const pvFirst = useRef(pv?.facts.map((f) => f.text));
 
   /* ---- THE CREDITS: Netflix's three small lines — the cast, who made it, what kind of thing it is. */
   const castLine = (meta?.cast ?? []).slice(0, 3).map((c) => c.name).filter(Boolean).join(', ');
@@ -551,13 +557,36 @@ export default function TvDetail(p: TvDetailProps) {
   };
 
   const mainView = (
-    <div key={parkRun} className={`tv-det-grid tv-dm${copyIn ? ' is-in' : ''}`}>
+    <div key={parkRun} className={`tv-det-grid tv-dm${copyIn ? ' is-in' : ''}${pv ? ' is-pv' : ''}`}>
       <div className="tv-dm-col">
-        {logo(true)}
-        {factsLine(facts)}
-        {callouts.length > 0 && <div className="tv-dm-callouts">{callouts.map((c) => <p key={c.kind}>{c.text}</p>)}</div>}
-        {headline && <p className="tv-dm-headline">{headline}</p>}
-        {synopsis && <p className="tv-dm-plot">{synopsis}</p>}
+        {pv ? (
+          <div className="pv-head">
+            <h2 id="mTitle">
+              {pv.logo ? <img className="pv-logo" src={pv.logo} alt={pv.name} decoding="sync" /> : <span className="pv-title">{pv.name}</span>}
+            </h2>
+            {(pv.badge || pv.callout) && (
+              <p className="pv-tags">
+                {pv.badge && <span className="pv-badge">{pv.badge}</span>}
+                {pv.callout && <span className="pv-callout">{pv.callout}</span>}
+              </p>
+            )}
+            <p className="pv-meta">
+              {pv.facts.map((f, i) => (
+                <span key={f.key} className={`pv-${f.key}${f.text && !pvFirst.current?.[i] ? ' is-late' : ''}`}>{f.text}</span>
+              ))}
+            </p>
+            {/* The whole synopsis, as the panel opens to it before handing over. */}
+            {pv.synopsis && <p className="pv-synopsis is-full">{pv.synopsis}</p>}
+          </div>
+        ) : (
+          <>
+            {logo(true)}
+            {factsLine(facts)}
+            {callouts.length > 0 && <div className="tv-dm-callouts">{callouts.map((c) => <p key={c.kind}>{c.text}</p>)}</div>}
+            {headline && <p className="tv-dm-headline">{headline}</p>}
+            {synopsis && <p className="tv-dm-plot">{synopsis}</p>}
+          </>
+        )}
         {(castLine || makerLine || genresLine) && (
           <div className="tv-dm-credits">
             {castLine && <p><span>{t('tv.cast')}:</span> {castLine}</p>}
@@ -768,7 +797,7 @@ export default function TvDetail(p: TvDetailProps) {
     >
       {/* Mounted invisible behind the veil and revealed with it, so its arrival is the screen's
           arrival rather than an event of its own. The box carries the picture's edge fade too (tv.css). */}
-      <div className={`tv-det-art${artReady ? ' rdy' : ''}`} aria-hidden="true">
+      <div className={`tv-det-art${artReady ? ' rdy' : ''}${pv ? ' is-pv' : ''}`} aria-hidden="true">
         {backdropUrl && <img src={backdropUrl} alt="" decoding="async" />}
       </div>
       <div className={`tv-det-scrim${view === 'main' ? '' : ' is-page'}`} aria-hidden="true" />
