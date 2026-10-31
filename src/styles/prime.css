@@ -91,40 +91,57 @@ body.pv-page .tv-det-art::after {
   width: calc(1300 * var(--p)); height: calc(731 * var(--p));
 }
 
-/* ---- THE TITLE SCREEN OPENED FROM HERE (TvDetail, over this page), as Prime Video's (the user's
-   recording, Oct 31) ----
-   OK leaves the picture where it is. This page clears itself away at the press (PrimeTest's
-   openTitle): the rows and the panel sink and fade, the bar fades, and the wordmark rises to where the
-   title screen's stands — while that screen loads too, with no spinner however long it takes (the
-   user's call, Oct 29). So the title screen draws no black of its own over the page: what is left is
-   the picture, which it draws again in the same box with the same fade (200ms, the same pixels), and
-   the wordmark, which its own covers exactly once that has landed (.pv-landed). The rest of its column
-   comes up from below in one piece 450ms after the press (.pv-opening gone), not a line at a time,
-   three lines of synopsis in it where the panel had two. A wordmark that did not fly (the featured
-   card, a name in place of one) comes with it. */
+/* ---- THE TITLE SCREEN OPENED FROM HERE (TvDetail, over this page): it comes out of the panel (the
+   user's call, Oct 31) ----
+   OK leaves the picture where it is, and this page clears itself away at the press (PrimeTest's
+   openTitle): the rows sink and fade, the bar fades, and the panel rises whole to where the title
+   screen's column starts, on its own left edge, its synopsis then opening to the whole one — while that
+   screen loads too, with no spinner however long it takes (the user's call, Oct 29). So the title
+   screen draws nothing of its own over the page, no black and no fade in: what it has is the picture,
+   drawn again in the same box with the same fade (200ms, the same pixels), and the same block as the
+   panel (`.pv-head`, at --pv-head-x/y), hidden till it takes over from the panel in one frame
+   (.pv-landed). Then its cast fades in under the synopsis, and its buttons — the one thing that moves —
+   come up from below. A title opened from that screen (More Like This) has its own column, which comes
+   up from below in one piece. */
 body.pv-page .tv-det:not([data-parked]) { background: transparent; }
+body.pv-page .tv-det { animation: none; }
 body.pv-page .tv-det .m-load-veil { display: none; }
 body.pv-page.pv-titled .tv-topnav { opacity: 0; transition: opacity 170ms linear; }
-body.pv-page .tv-dm.is-in .tv-dm-col > * { animation: pvBlockIn 200ms cubic-bezier(0, 0, .2, 1) backwards; }
-body.pv-page.pv-opening .tv-dm .tv-dm-col > * { opacity: 0; animation: none; }
-body.pv-page.pv-flown .tv-dm .tv-dm-col > .tv-det-title { animation: none; }
-body.pv-page.pv-flown.pv-landed .tv-dm .tv-dm-col > .tv-det-title { opacity: 1; }
+body.pv-page .tv-dm.is-in:not(.is-pv) .tv-dm-col > * { animation: pvBlockIn 200ms cubic-bezier(0, 0, .2, 1) backwards; }
 @keyframes pvBlockIn {
   from { opacity: 0; transform: translateY(calc(var(--u) * 4.7)); }
   to   { opacity: 1; transform: none; }
 }
+body.pv-page .tv-dm.is-pv { padding: var(--pv-head-y) 0 0 var(--pv-head-x); }
+body.pv-page .tv-dm.is-pv .tv-dm-col { width: calc(900 * var(--p)); opacity: 1; }
+body.pv-page .tv-dm.is-pv .tv-dm-col > * { opacity: 0; animation: none; }
+body.pv-page.pv-landed .tv-dm.is-pv .tv-dm-col > .pv-head { opacity: 1; }
+body.pv-page.pv-landed .tv-dm.is-pv.is-in .tv-dm-col > .tv-dm-credits { opacity: 1; animation: pvTitleIn 200ms linear backwards; }
+body.pv-page.pv-landed .tv-dm.is-pv.is-in .tv-dm-col > .tv-dm-acts { opacity: 1; animation: pvBlockIn 200ms cubic-bezier(0, 0, .2, 1) backwards; }
+/* The block: the panel's own layout (below), its type unshadowed as the panel's is. */
+.pv-head {
+  display: flex; flex-direction: column; align-items: flex-start;
+  width: calc(900 * var(--p));
+  text-shadow: none;
+}
+.pv-head h2 { display: contents; }
+.tv-dm.is-pv .tv-dm-credits { margin-top: calc(20 * var(--p)); }
 body.pv-page .tv-det-art {
   left: calc(620 * 100vw / 1920); right: auto;
   width: calc(1300 * 100vw / 1920); height: calc(731 * 100vw / 1920);
 }
 body.pv-page .tv-det-art.rdy { animation: pvTitleIn 200ms linear both; }
+/* Out of the panel, the picture waits for the hand-over: over the page it would cover the panel's copy
+   where the two overlap. The page's own picture shows meanwhile. */
+body.pv-page:not(.pv-landed) .tv-det-art.is-pv { animation: none; opacity: 0; }
 body.pv-page .tv-det-art img { object-position: center top; }
 @keyframes pvTitleIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---- the focused title's panel, stacked from the bottom: whatever the wordmark's height, or a missing
-   pill, only what is above moves ---- */
+   pill, only what is above moves. Its bottom is where the reference's "Included with" line ended (25px
+   gap, 24px line, 590 from the bottom): that line is gone (the user's call, Oct 31), the rest stays. ---- */
 .pv-info {
-  position: absolute; left: calc(147 * var(--p)); bottom: calc(590 * var(--p)); width: calc(900 * var(--p));
+  position: absolute; left: calc(147 * var(--p)); bottom: calc(639 * var(--p)); width: calc(900 * var(--p));
   display: flex; flex-direction: column; align-items: flex-start;
   opacity: 0;
   will-change: opacity, transform;
@@ -166,13 +183,12 @@ body.pv-page .tv-det-art img { object-position: center top; }
   font-size: calc(25 * var(--p)); line-height: calc(36 * var(--p)); color: rgb(240, 240, 240);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
-.pv-check {
-  display: flex; align-items: center; gap: calc(13 * var(--p)); margin-top: calc(25 * var(--p));
-  font-size: calc(22 * var(--p)); line-height: calc(24 * var(--p));
-}
-.pv-check svg { width: calc(18 * var(--p)); height: calc(18 * var(--p)); }
-.pv-check circle { fill: rgb(26, 152, 255); }
-.pv-check path { fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+/* Opened at OK (PrimeTest's openSynopsis): its first two lines as they stand, and the rest under them,
+   to six lines in all — the same six as the title screen's whole synopsis (.is-full), cut the same. */
+.pv-synopsis.is-open { display: block; }
+.pv-synopsis.is-open > span { display: block; }
+.pv-synopsis > .pv-more { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.pv-synopsis.is-full { -webkit-line-clamp: 6; }
 
 /* ---- rows ---- */
 .pv-track {
@@ -257,9 +273,10 @@ body.pv-page .tv-det-art img { object-position: center top; }
 .pv-row.is-gone .pv-card-fade { opacity: 0; transition: opacity var(--gone); }
 .pv.is-away .pv-card-fade { opacity: 0; transition: none; }
 .pv-face-pic.is-late { animation: pvTitleIn 150ms linear both; }
-/* Stacked from the bottom, as the panel is: wordmark (or name), pill + genre + age, included line. */
+/* Stacked from the bottom, as the panel is: wordmark (or name), pill + genre + age — where they stood
+   over the "Included with" line, now gone (21px gap, 24px line, 35 from the bottom). */
 .pv-face-info {
-  position: absolute; left: calc(36 * var(--p)); bottom: calc(35 * var(--p));
+  position: absolute; left: calc(36 * var(--p)); bottom: calc(80 * var(--p));
   display: flex; flex-direction: column; align-items: flex-start;
 }
 .pv-face-info .pv-logo { max-width: calc(150 * var(--p)); max-height: calc(60 * var(--p)); }
@@ -271,7 +288,6 @@ body.pv-page .tv-det-art img { object-position: center top; }
 }
 .pv-face-tags > :empty { display: none; }
 .pv-face-tags .is-late { animation: pvTitleIn 200ms linear both; }
-.pv-face-info .pv-check { margin-top: calc(21 * var(--p)); font-size: calc(20 * var(--p)); }
 
 /* The ring stands on the focus line; the focused tile is always pinned under it. It goes with the remote
    (100ms) and comes back once the bar has let it go (170ms, 230ms after). Around the featured card it

@@ -26,6 +26,20 @@ export interface ModalTarget {
   addonType?: string;
   /** when reopened from Continue Watching for a series, the episode to resume */
   resumeEp?: { season: number; episode: number };
+  /** opened from the Prime page: its title panel as it stood, which the title screen's column starts
+   *  with (TvDetail) */
+  pv?: PvHead;
+}
+
+/** The Prime page's title panel, as text: what it showed, for the title screen to show the same. */
+export interface PvHead {
+  /** the wordmark's address, or '' where the name stands instead */
+  logo: string;
+  name: string;
+  badge: string;
+  callout: string;
+  facts: { key: 'genre' | 'year' | 'run' | 'age'; text: string }[];
+  synopsis: string;
 }
 
 interface ModalState {
