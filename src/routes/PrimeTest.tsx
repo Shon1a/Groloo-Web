@@ -97,6 +97,8 @@ const FACE_PX_ART = 38;
 /* A Right press on the featured row: the poster left of the card is gone at once, and the one leaving
    the card is cut in this late, already on its way. */
 const SLIVER_BACK_AT = 115;
+/* Its "gone": below one step of brightness in 255 (sliverBack). */
+const SLIVER_GONE = 0.002;
 /* A panel this far into its in is still all but invisible (under 10%): a press then simply gives it the
    new title, as before its in. A hold steps right as each in starts, and so never has the two panels
    trade places on every step (measured: a quarter more main-thread frames through a held Down). */
@@ -112,6 +114,10 @@ const ART_IN_MS = 190;
 const ART_REST_MS = 440;
 /* Into the featured row it goes at once, faster. */
 const ART_GONE_MS = 115;
+/* Its box (TV px), and how many of its pictures are kept decoded (~3.7MB each): the ones the two boxes
+   are about to take, and the last. */
+const ART = { w: 1300, h: 731 };
+const ART_PICS_KEPT = 3;
 /* Out of the featured row the picture is back this soon (~110ms with ART_PRIME_MS), cut in rather than
    faded. */
 const ART_REST_FROM_FEAT = 80;
@@ -155,6 +161,9 @@ const onFirstScreen = (r: PvRow, c: number) => (r.feat ? c >= 1 && c <= 2 : c < 
 const EXIT_ART_MS = 135;
 /* Past the move a press starts: React work waits for this, so it never lands mid-move. */
 const SETTLE_MS = MOVE_MS + 50;
+/* On the featured card the rest's work comes in two parts, the faces one press away first: the rest
+   (title screen, panels, pictures top-right) this much later, if the remote is still resting. */
+const REST_NEXT_MS = 150;
 /* Row pictures are fetched, decoded and put on this many tiles at a time — about a screenful. */
 const PICS_AT_ONCE = 5;
 /* The width of a tile's picture rendition (w500). */
@@ -163,9 +172,15 @@ const PIC_W = 500;
 const LOGO_W = 'w300';
 /* Wordmarks of the titles one press away, fetched at rest and kept decoded — this many at most. */
 const LOGOS_KEPT = 24;
-/* On the featured card, the pictures one press away are kept decoded too (its next faces', and the one
-   top-right after it, which is cut in 110ms after the press) — this many at most. */
-const PICS_KEPT = 4;
+/* The featured card's three faces: the one on screen and, written while the remote rests, the titles one
+   press away either side — so a tap only moves and fades what is already drawn. */
+const FACES = [0, 1, 2];
+/* The card's pictures, decoded and kept for drawing into a face (~3.7MB each): one and two presses
+   away, either side, and the one on it — this many at most. */
+const FACE_PICS_KEPT = 5;
+/* The card's box (TV px, its corner too) and the width of its picture's rendition (w1280). */
+const CARD = { w: 1024, h: 576, r: 7 };
+const CARD_PIC_W = 1280;
 /* Real screen pixels per CSS pixel. Not devicePixelRatio alone: the webOS app's WAM reports 2 while the
    set draws 1080p, which its resolution media query does report (1dppx). */
 const SCREEN_PX = window.matchMedia?.('(resolution: 1dppx)').matches ? 1 : window.devicePixelRatio || 1;
@@ -235,6 +250,69 @@ const Check = () => (
   </span>
 );
 
+/* A picture's pixels, decoded off the main thread, to be drawn into a canvas once — at the size it is
+   drawn, or (`w` left out) its own. The resize is NOT off the main thread: the engine does it as it hands
+   the pixels over (measured: 20-60ms of main thread at 4x for a w1280 picture, at rest, where the next
+   press lands). A tile's is small enough; a big picture is drawn at its own size and scaled by the GPU. */
+const pixels = async (url: string, w?: number, h?: number): Promise<ImageBitmap | null> => {
+  const size: ImageBitmapOptions = w && h ? { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' } : {};
+  try {
+    const res = await fetch(url);
+    if (res.ok) return await createImageBitmap(await res.blob(), size);
+  } catch { /* a host that will not let it be read: through a picture element instead */ }
+  return new Promise((done) => {
+    const im = new Image();
+    im.onload = () => { createImageBitmap(im, size).then(done, () => done(null)); };
+    im.onerror = () => done(null);
+    im.src = url;
+  });
+};
+
+/* Pictures decoded for drawing into a canvas, by address, kept a few at a time (the last used last). */
+type Pic = { bmp?: ImageBitmap | null; got: Promise<ImageBitmap | null> };
+const keepPic = (kept: Map<string, Pic>, url: string, max: number) => {
+  let pic = kept.get(url);
+  if (pic) kept.delete(url);
+  else {
+    const fresh: Pic = { got: pixels(url) };
+    void fresh.got.then((b) => { fresh.bmp = b; });
+    pic = fresh;
+  }
+  kept.set(url, pic);
+  for (const [k, old] of kept) {
+    if (kept.size <= max) break;
+    kept.delete(k);
+    void old.got.then((b) => b?.close());
+  }
+  return pic;
+};
+
+/* A picture drawn to fill a canvas, as object-fit: cover — centred, or kept to the top edge (`top`, as
+   object-position: center top) — its corners rounded by `r`. False if there was nothing to draw. The
+   canvas is a GPU one, unlike a tile's: a layer of its own whose pixels the GPU keeps while it is
+   hidden, so one that comes in is shown, not drawn again (measured: a picture put in a hidden layer at
+   rest was still drawn into it at the press that showed it — a hidden layer is not drawn ahead). */
+const fillCanvas = (cv: HTMLCanvasElement, bmp: ImageBitmap | null | undefined, w: number, h: number, r = 0, top = false) => {
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const ctx = cv.getContext('2d');
+  if (!ctx) return false;
+  ctx.clearRect(0, 0, w, h);
+  if (!bmp?.width) return false;
+  const s = Math.max(w / bmp.width, h / bmp.height);
+  const sw = w / s;
+  const sh = h / s;
+  ctx.save();
+  if (r) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(0, 0, w, h, r);
+    else ctx.rect(0, 0, w, h);
+    ctx.clip();
+  }
+  ctx.drawImage(bmp, (bmp.width - sw) / 2, top ? 0 : (bmp.height - sh) / 2, sw, sh, 0, 0, w, h);
+  ctx.restore();
+  return true;
+};
+
 /* A wordmark that will not load: the name, as for a title that has none. */
 const logoFailed = (e: React.SyntheticEvent<HTMLImageElement>) => {
   e.currentTarget.style.display = 'none';
@@ -252,9 +330,10 @@ const logoFailed = (e: React.SyntheticEvent<HTMLImageElement>) => {
  * one), the titles after it start 32 past its right. That is two copies of the strip, offset by what the
  * card is wider than a poster, moved together — one clipped at the card's left edge, one at its right.
  * The card has no backing of its own: the strips' clips do that — the same to the eye, and nothing
- * black is left to cover the picture top-right when the row is above the focus. The card's two
- * faces (they take turns) are filled in by writeFace; each half — the picture and the words — is one
- * layer, dimmed through a box of its own, so a dimmed card is never drawn offscreen first. */
+ * black is left to cover the picture top-right when the row is above the focus. The card's three
+ * faces (they take turns) are filled in by writeFace, the picture drawn into a canvas, as a tile's is;
+ * each half — the picture and the words — is one layer, dimmed through a box of its own, so a dimmed
+ * card is never drawn offscreen first. */
 const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
   row: PvRow;
   i: number;
@@ -288,20 +367,21 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
       <div className="pv-clip is-left">{strip(true)}</div>
       <div className="pv-clip">{strip()}</div>
       <div className="pv-card">
-        {[0, 1].map((n) => (
-          <div key={n} className="pv-face">
-            <div className="pv-dim"><div className="pv-face-art"><img alt="" decoding="async" /></div></div>
-            <div className="pv-dim">
-              <div className="pv-face-info">
-                <img className="pv-logo" alt="" decoding="async" onError={logoFailed} />
-                <p className="pv-title" />
-                <p className="pv-face-tags">
-                  <span className="pv-badge" />
-                  <span className="pv-genre" />
-                  <span className="pv-age" />
-                </p>
-                <Check />
-              </div>
+        {FACES.map((n) => (
+          <div key={n} className="pv-dim"><div className="pv-face-art"><canvas className="pv-face-pic" /></div></div>
+        ))}
+        <div className="pv-card-fade" />
+        {FACES.map((n) => (
+          <div key={n} className="pv-dim">
+            <div className="pv-face-info">
+              <img className="pv-logo" alt="" decoding="async" onError={logoFailed} />
+              <p className="pv-title" />
+              <p className="pv-face-tags">
+                <span className="pv-badge" />
+                <span className="pv-genre" />
+                <span className="pv-age" />
+              </p>
+              <Check />
             </div>
           </div>
         ))}
@@ -353,7 +433,7 @@ export default function PrimeTest() {
 
   const rootRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
-  const ringRef = useRef<HTMLDivElement>(null);
+  const ringRefs = useRef<(HTMLDivElement | null)[]>([null, null]);
   const rowArtRefs = useRef<(HTMLDivElement | null)[]>([null, null]);
   const infoRefs = useRef<(HTMLDivElement | null)[]>([null, null]);
   const rowEls = useRef<(HTMLDivElement | null)[]>([]);
@@ -486,14 +566,30 @@ export default function PrimeTest() {
     info.current.hidden = true;
   };
 
-  /* ---- THE FEATURED CARD: the focused title of the featured row, in the card on the focus line. Two
-     faces take turns, as the panels do. Each face is two layers, its picture and its words, moved and
-     faded alike. ---- */
-  const face = useRef({ front: 0, keys: ['', ''], inAt: 0 });
+  /* ---- THE FEATURED CARD: the focused title of the featured row, in the card on the focus line. Three
+     faces take turns: the one on screen, and the titles one press away either side, written into the
+     other two while the remote rests — hidden, but drawn, so a tap brings in a face that is already
+     there (measured: writing it after the press decoded its picture twice and drew the card again,
+     inside the move). Each face is two layers, its picture and its words, moved and faded alike. `outAt`:
+     when each last started to go. ---- */
+  const face = useRef({ front: 0, keys: ['', '', ''], inAt: 0, outAt: [0, 0, 0] });
   const faceParts = useCallback((i: number) => {
-    const f = rowEls.current[featAt]?.querySelectorAll<HTMLElement>('.pv-face')[i];
-    return f ? [f.querySelector<HTMLElement>('.pv-face-art')!, f.querySelector<HTMLElement>('.pv-face-info')!] as const : null;
+    const card = rowEls.current[featAt];
+    const art = card?.querySelectorAll<HTMLElement>('.pv-face-art')[i];
+    const words = card?.querySelectorAll<HTMLElement>('.pv-face-info')[i];
+    return art && words ? [art, words] as const : null;
   }, [featAt]);
+
+  /* The card's pictures: each fetched and decoded once, off the main thread, then drawn into a face's
+     canvas at the card's size (fillCanvas, the GPU scaling it) — never decoded again however often it
+     comes back, as a tile's picture is (THE ROWS' PICTURES, below). */
+  const cardScale = Math.min(p * SCREEN_PX, CARD_PIC_W / CARD.w);
+  const cardPx = useMemo(() => ({ w: Math.round(CARD.w * cardScale), h: Math.round(CARD.h * cardScale) }), [cardScale]);
+  const facePics = useRef(new Map<string, Pic>());
+  const facePic = useCallback((url: string) => keepPic(facePics.current, url, FACE_PICS_KEPT), []);
+  const drawPic = useCallback((cv: HTMLCanvasElement, bmp: ImageBitmap | null | undefined) =>
+    fillCanvas(cv, bmp, cardPx.w, cardPx.h, CARD.r * cardScale), [cardPx, cardScale]);
+
   const writeFace = useCallback((i: number, m: MediaItem, row: PvRow, col: number) => {
     const parts = faceParts(i);
     const key = `${row.key}:${col}`;
@@ -514,38 +610,51 @@ export default function PrimeTest() {
     q('.pv-badge').style.display = badge ? '' : 'none';
     q('.pv-genre').textContent = m.genre ?? '';
     writeLate(words, m, d, false);
-    /* The picture goes on once decoded; one that comes after the face has, fades in. */
-    const img = art.querySelector('img')!;
+    /* The picture is drawn at once if its pixels are here; otherwise once they are, and one that comes
+       after the face has, fades in. */
+    const cv = art.querySelector('canvas')!;
     const url = bgSrc(m);
-    img.classList.remove('is-late');
-    img.removeAttribute('src');
-    img.dataset.want = url;
-    const pic = new Image();
-    pic.src = url;
-    pic.decode().catch(() => { /* show it anyway */ }).then(() => {
-      if (img.dataset.want !== url) return;
-      img.src = url;
+    const pic = facePic(url);
+    cv.classList.remove('is-late');
+    cv.dataset.want = url;
+    if (pic.bmp !== undefined) { drawPic(cv, pic.bmp); cv.dataset.on = url; return; }
+    drawPic(cv, null);
+    delete cv.dataset.on;
+    void pic.got.then((bmp) => {
+      if (cv.dataset.want !== url) return;
+      drawPic(cv, bmp);
+      cv.dataset.on = url;
       const F = face.current;
-      if (F.front === i && performance.now() > F.inAt) img.classList.add('is-late');
+      if (F.front === i && performance.now() > F.inAt) cv.classList.add('is-late');
     });
-  }, [metaOf, faceParts]);
+  }, [metaOf, faceParts, facePic, drawPic]);
 
   const faceTo = useCallback((how: 'enter' | 'move', m: MediaItem, row: PvRow, col: number, dx = 0, holding = false) => {
     const F = face.current;
-    if (!faceParts(0) || !faceParts(1)) return;
+    if (!FACES.every((n) => faceParts(n))) return;
     dropWrites();
     const at = (x: number) => `translate3d(${x * p}px, 0, 0)`;
     const now = performance.now();
+    const key = `${row.key}:${col}`;
     let i = F.front;
+    /* The faces not on screen; one that has gone, holding this title (written at rest), is ready. */
+    const others = FACES.filter((n) => n !== i);
+    const gone = (n: number) => now >= F.outAt[n] + FACE_OUT_MS;
+    const ready = others.find((n) => F.keys[n] === key && gone(n));
     if (how === 'enter') {
-      if (F.keys[1 - i] === `${row.key}:${col}`) i = 1 - i;
+      if (ready !== undefined) i = ready;
     } else if (now >= F.inAt + IN_SEEN_MS) {
       for (const el of faceParts(i)!) {
         el.style.transition = `opacity ${FACE_OUT_MS}ms linear, transform ${FACE_OUT_SLIDE_MS}ms linear`;
         el.style.opacity = '0';
         el.style.transform = at(dx * FACE_OUT_PX);
       }
-      i = 1 - i;
+      F.outAt[i] = now;
+      i = ready ?? others.find(gone) ?? others[0];
+    } else if (ready !== undefined) {
+      /* The front face has not come in yet — all but invisible — and a face that has the title takes over. */
+      for (const el of faceParts(i)!) { el.style.transition = 'none'; el.style.opacity = '0'; }
+      i = ready;
     }
     F.front = i;
     const [art, words] = faceParts(i)!;
@@ -563,7 +672,7 @@ export default function PrimeTest() {
       el.style.transform = at(0);
     }
     F.inAt = now + delay;
-    if (how === 'move') writeLater(() => writeFace(i, m, row, col), holding, FACE_IN_AT);
+    if (how === 'move' && F.keys[i] !== key) writeLater(() => writeFace(i, m, row, col), holding, FACE_IN_AT);
   }, [p, faceParts, writeFace, writeLater]);
 
   /* The runtime and age rating of the title on screen, when its detail lands after it was written. */
@@ -579,10 +688,8 @@ export default function PrimeTest() {
     if (d) writeLate(el, item, d, true);
   }), [qc, metaOf, featAt, faceParts]);
 
-  /* Wordmarks for the titles one press away (and on the featured card, their pictures), fetched and
-     decoded at rest. */
+  /* Wordmarks for the titles one press away, fetched and decoded at rest. */
   const logosKept = useRef(new Map<string, HTMLImageElement>());
-  const picsKept = useRef(new Map<string, HTMLImageElement>());
   const keep = (kept: Map<string, HTMLImageElement>, url: string, max: number) => {
     if (kept.has(url)) return;
     const im = new Image();
@@ -595,8 +702,14 @@ export default function PrimeTest() {
   /* ---- THE BACKGROUND PICTURE: the focused title's, in the box top-right. Two boxes take turns.
      `outAt`: how soon the one on screen starts to go, `outMs` its fade; `rest`: how long the remote must
      be still before the next comes in; `inMs`: its fade, `inBy` the earliest that may start (a
-     performance.now() time). The next may come in while the last is still going — the two cross. ---- */
-  const art = useRef({ shown: '', layer: 1, visible: false, token: 0, lastChange: 0 });
+     performance.now() time). The next may come in while the last is still going — the two cross.
+     `goneAt`: when each box's last fade out ends. Each box is a GPU canvas (fillCanvas), its picture
+     decoded once off the main thread and drawn in; the fade over them is one layer for
+     both (prime.css), drawn once. ---- */
+  const art = useRef({ shown: '', layer: 1, visible: false, token: 0, lastChange: 0, goneAt: [0, 0] });
+  const artPx = useMemo(() => ({ w: Math.round(ART.w * p * SCREEN_PX), h: Math.round(ART.h * p * SCREEN_PX) }), [p]);
+  const artPics = useRef(new Map<string, Pic>());
+  const artPic = useCallback((url: string) => keepPic(artPics.current, url, ART_PICS_KEPT), []);
   const artTo = useCallback((want: string, { outAt = ART_OUT_AT, outMs = ART_OUT_MS, rest = ART_REST_MS, inMs = ART_IN_MS, inBy = 0 } = {}) => {
     const a = art.current;
     const tm = timers.current;
@@ -611,6 +724,7 @@ export default function PrimeTest() {
       /* The fade is set now, delayed, so it starts on time whatever the main thread is doing; the timer
          only marks it gone. */
       fade(rowArtRefs.current[a.layer], 0, outMs, outAt);
+      a.goneAt[a.layer] = a.lastChange + outAt + outMs;
       const out = () => { tm.artOut = 0; a.visible = false; };
       if (outAt) tm.artOut = window.setTimeout(out, outAt);
       else out();
@@ -622,53 +736,94 @@ export default function PrimeTest() {
       const now = performance.now();
       const ready = a.visible || tm.artOut ? Infinity : a.lastChange + rest;
       if (now < ready) { tm.artIn = window.setTimeout(tryIn, ready === Infinity ? 50 : ready - now); return; }
-      const next = 1 - a.layer;
+      const cvs = rowArtRefs.current.map((b) => b?.querySelector('canvas'));
+      /* A box that has gone and already holds it (out of the featured row, drawn at rest: holdArt) shows
+         it as it is. */
+      const held = [0, 1].find((n) => now >= a.goneAt[n] && cvs[n]?.dataset.on === want);
+      const next = held ?? 1 - a.layer;
       const box = rowArtRefs.current[next];
-      const img = box?.querySelector('img');
-      if (!box || !img) return;
-      const pic = new Image();
-      pic.src = want;
-      pic.decode().catch(() => { /* show it anyway */ }).then(() => {
-        if (token !== a.token) return;
-        /* Drawn all but invisible for two frames before the fade starts: a picture's first frame on
-           screen can take a few (its upload), and the fade would start that far along. The wait is the
-           fade's delay — on the compositor, no frames of the main thread's. A cut is a 1ms fade. */
-        img.src = want;
+      const cv = cvs[next];
+      if (!box || !cv) return;
+      /* Drawn all but invisible for two frames before the fade starts: a picture's first frame on screen
+         can take a few (its upload), and the fade would start that far along. The wait is the fade's
+         delay — on the compositor, no frames of the main thread's. A cut is a 1ms fade. */
+      const show = () => {
         fade(box, ART_PRIMED, 0);
         void getComputedStyle(box).opacity;
         fade(box, 1, Math.max(inMs, 1), Math.max(inBy - performance.now(), ART_PRIME_MS));
         a.shown = want; a.layer = next; a.visible = true;
-      });
+      };
+      if (held !== undefined) { show(); return; }
+      /* Otherwise decoded (once, off the main thread) and drawn into the box first. */
+      const pic = artPic(want);
+      cv.dataset.want = want;
+      delete cv.dataset.on;
+      const put = (bmp: ImageBitmap | null | undefined) => {
+        fillCanvas(cv, bmp, artPx.w, artPx.h, 0, true);
+        cv.dataset.on = want;
+        show();
+      };
+      if (pic.bmp !== undefined) put(pic.bmp);
+      else void pic.got.then((bmp) => { if (token === a.token) put(bmp); });
     };
     tryIn();
-  }, []);
+  }, [artPic, artPx]);
+  /* On the featured row the picture top-right is gone, and the boxes take, hidden, the pictures that come
+     back out of it, up and down: whichever it is is then cut in drawn already, with nothing decoded or
+     drawn inside the move (measured: decoded twice, ~10ms each on the PC at 4x, and drawn, as the rows
+     moved). */
+  const holdArt = useCallback((urls: string[]) => {
+    const a = art.current;
+    const now = performance.now();
+    if (a.visible || timers.current.artOut) return;
+    const cvs = rowArtRefs.current.map((b) => b?.querySelector('canvas'));
+    const free = [0, 1].filter((n) => now >= a.goneAt[n] && !urls.includes(cvs[n]?.dataset.want ?? ''));
+    for (const url of urls) {
+      if (cvs.some((cv) => cv?.dataset.want === url)) continue;
+      const n = free.shift();
+      const cv = n === undefined ? null : cvs[n];
+      if (!cv) continue;
+      cv.dataset.want = url;
+      delete cv.dataset.on;
+      void artPic(url).got.then((bmp) => {
+        if (cv.dataset.want !== url) return;
+        fillCanvas(cv, bmp, artPx.w, artPx.h, 0, true);
+        cv.dataset.on = url;
+      });
+    }
+  }, [artPic, artPx]);
 
+  /* "Gone" is all but nothing, not nothing: a layer at 0 is not drawn, and its drawing is thrown away —
+     the left strip was drawn again, twice, on every Right press (measured). */
   const sliverBack = (el: HTMLElement | null | undefined) => {
     if (!el) return;
     el.style.transition = 'none';
-    el.style.opacity = '0';
+    el.style.opacity = String(SLIVER_GONE);
     void getComputedStyle(el).opacity;
     /* 1ms, not 0s: a zero-length transition runs on the main thread, a frame of its every 16ms. */
     el.style.transition = `opacity 1ms linear ${SLIVER_BACK_AT}ms`;
     el.style.opacity = '';
   };
 
-  /* ---- THE RING: one box, the tile's or the featured card's. ---- */
+  /* ---- THE RING: the tile's or the featured card's — two, each drawn once, the other hidden (one box
+     resized drew itself again on the press into or out of the card). ---- */
   const ringBig = useRef<boolean | null>(null);
   const ringTo = (big: boolean) => {
-    const ring = ringRef.current;
-    if (!ring || ringBig.current === big) return;
+    const [off, on] = big ? ringRefs.current : [...ringRefs.current].reverse();
+    if (!on || !off || ringBig.current === big) return;
     const first = ringBig.current === null;
     ringBig.current = big;
-    ring.classList.toggle('is-big', big);
+    off.classList.add('is-off');
+    on.classList.remove('is-off');
     if (first) return;
-    ring.style.transition = 'none';
-    ring.style.opacity = '0';
-    void getComputedStyle(ring).opacity;
-    ring.style.transition = `opacity ${RING_IN_MS}ms ${RING_EASE} ${RING_IN_AT}ms`;
-    ring.style.opacity = '';
+    off.style.transition = 'none';
+    on.style.transition = 'none';
+    on.style.opacity = '0';
+    void getComputedStyle(on).opacity;
+    on.style.transition = `opacity ${RING_IN_MS}ms ${RING_EASE} ${RING_IN_AT}ms`;
+    on.style.opacity = '';
     window.clearTimeout(timers.current.ring);
-    timers.current.ring = window.setTimeout(() => { ring.style.transition = ''; }, RING_IN_AT + RING_IN_MS);
+    timers.current.ring = window.setTimeout(() => { on.style.transition = ''; off.style.transition = ''; }, RING_IN_AT + RING_IN_MS);
   };
 
   /* ONE PRESS = THIS. Works out what changed and writes only that. */
@@ -728,25 +883,46 @@ export default function PrimeTest() {
 
     /* Once everything has stopped moving, the title the remote rests on gets its title screen ready
        (detail, backdrop, wordmark) — so OK opens it at once, on the picture already here — and the
-       wordmarks one press away are fetched, so the next panel comes in with its own. */
-    window.clearTimeout(timers.current.rest);
-    timers.current.rest = window.setTimeout(() => {
+       wordmarks one press away are fetched, so the next panel comes in with its own. On the featured
+       card the faces one press away come first, on their own (the likeliest next press's). */
+    const rest = () => {
       warm(item, undefined, () => shown.current.item === item);
       const near: [number, number][] = [[s.row, col + 1], [s.row, col - 1], [s.row + 1, s.cols[s.row + 1] ?? 0], [s.row - 1, s.cols[s.row - 1] ?? 0]];
       for (const [r, c] of near) {
         const m = rows[r]?.items[c];
         if (m?.titleLogo) keep(logosKept.current, imgW(m.titleLogo, LOGO_W), LOGOS_KEPT);
-        if (m && feat) keep(picsKept.current, bgSrc(m), PICS_KEPT);
       }
-      /* On the featured row both panels are hidden: each takes a title one press away, above and below. */
+      /* On the featured row both panels are hidden: each takes a title one press away, above and below —
+         and the boxes top-right their pictures. */
       if (feat) {
+        const out: string[] = [];
         for (const [r, n] of [[s.row - 1, 0], [s.row + 1, 1]]) {
           const R = rows[r];
-          if (R) writeInfo(n, R.items[s.cols[r] ?? 0], R, s.cols[r] ?? 0);
+          if (!R) continue;
+          writeInfo(n, R.items[s.cols[r] ?? 0], R, s.cols[r] ?? 0);
+          out.push(bgSrc(R.items[s.cols[r] ?? 0]));
         }
+        holdArt(out);
       }
+    };
+    window.clearTimeout(timers.current.rest);
+    timers.current.rest = window.setTimeout(() => {
+      if (!feat) { rest(); return; }
+      /* The two faces not on screen take the titles either side, unless they hold them already; the
+         pictures two presses away are decoded too, so a quick second tap draws its face from them. */
+      const F = face.current;
+      const spare = FACES.filter((n) => n !== F.front);
+      const near = [col + 1, col - 1].filter((c) => row.items[c]);
+      const keyAt = (c: number) => `${row.key}:${c}`;
+      for (const c of near) {
+        if (spare.some((n) => F.keys[n] === keyAt(c))) continue;
+        const n = spare.find((j) => !near.some((c2) => F.keys[j] === keyAt(c2)));
+        if (n !== undefined) writeFace(n, row.items[c], row, c);
+      }
+      for (const c of [col + 2, col - 2]) if (row.items[c]) facePic(bgSrc(row.items[c]));
+      timers.current.rest = window.setTimeout(rest, REST_NEXT_MS);
     }, SETTLE_MS);
-  }, [rows, featAt, p, trackAt, infoTo, writeInfo, faceTo, artTo, warm]);
+  }, [rows, featAt, p, trackAt, infoTo, writeInfo, faceTo, writeFace, facePic, artTo, holdArt, warm]);
 
   useLayoutEffect(() => { apply(); }, [apply]);
   useEffect(() => {
@@ -794,20 +970,7 @@ export default function PrimeTest() {
         if (copies?.[c]) twins.set(cv, copies[c]);
       });
     });
-    const pixels = async (url: string, w: number, h: number): Promise<ImageBitmap | null> => {
-      const size: ImageBitmapOptions = { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' };
-      try {
-        const res = await fetch(url);
-        if (res.ok) return await createImageBitmap(await res.blob(), size);
-      } catch { /* a host that will not let it be read: through a picture element instead */ }
-      return new Promise((done) => {
-        const im = new Image();
-        im.onload = () => { createImageBitmap(im, size).then(done, () => done(null)); };
-        im.onerror = () => done(null);
-        im.src = url;
-      });
-    };
-    const draw = (cv: HTMLCanvasElement) => {
+    const draw =(cv: HTMLCanvasElement) => {
       const got = ready.get(cv);
       ready.delete(cv);
       if (!got || got.url !== cv.dataset.src) { got?.bmp?.close(); return; }
@@ -913,12 +1076,8 @@ export default function PrimeTest() {
     const from = performance.now();
     const s = st.current;
     const row = rows[s.row];
-    const pic = row.feat ? null : new Image();
-    let picIn = !pic;
-    if (pic) {
-      pic.src = bgSrc(row.items[s.cols[s.row] ?? 0]);
-      pic.decode().catch(() => { /* it comes all the same */ }).then(() => { picIn = true; });
-    }
+    let picIn = !!row.feat;
+    if (!row.feat) void artPic(bgSrc(row.items[s.cols[s.row] ?? 0])).got.then(() => { picIn = true; });
     const whole = () => {
       const drawn = [0, 1].every((r) => {
         const R = rows[r];
@@ -926,9 +1085,10 @@ export default function PrimeTest() {
         return !cvs || [...cvs].every((cv, c) => !onFirstScreen(R, c) || cv.dataset.on === cv.dataset.src);
       });
       const F = featAt >= 0 && featAt <= 1 ? faceParts(face.current.front) : null;
-      const imgs = [infoRefs.current[info.current.front]?.querySelector('img'), F?.[0].querySelector('img'), F?.[1].querySelector('img')];
-      return drawn && picIn && imgs.every((im) => !im
-        || (im.dataset.want ? im.getAttribute('src') === im.dataset.want : !im.getAttribute('src') || im.complete));
+      const card = F?.[0].querySelector('canvas');
+      const imgs = [infoRefs.current[info.current.front]?.querySelector('img'), F?.[1].querySelector('img')];
+      return drawn && picIn && (!card?.dataset.want || card.dataset.on === card.dataset.want)
+        && imgs.every((im) => !im || !im.getAttribute('src') || im.complete);
     };
     const check = () => {
       const now = performance.now();
@@ -938,7 +1098,7 @@ export default function PrimeTest() {
     };
     check();
     return () => window.clearTimeout(timer);
-  }, [rows, featAt, faceParts, reveal]);
+  }, [rows, featAt, faceParts, reveal, artPic]);
 
   /* Switched away along the bar: the rows (the shapes, if the page has not shown itself yet) slide off
      the way the pages go and fade, the picture fades faster, the panel stays — and the page is cut
@@ -1064,9 +1224,10 @@ export default function PrimeTest() {
         {/* THE BACKGROUND: two boxes top-right that the focused title's picture alternates between. */}
         {[0, 1].map((i) => (
           <div key={i} className="pv-row-art" ref={(el) => { rowArtRefs.current[i] = el; }}>
-            <img alt="" decoding="async" />
+            <canvas />
           </div>
         ))}
+        <div className="pv-art-fade" />
 
         {/* THE FOCUSED TITLE'S PANEL, twice (they take turns) — bottom-anchored, filled in by writeInfo. */}
         {[0, 1].map((n) => (
@@ -1090,7 +1251,8 @@ export default function PrimeTest() {
         </div>
 
         {/* The focus ring stands still: the focused tile, or the featured card, is always pinned under it. */}
-        <div className="pv-ring" ref={ringRef} />
+        <div className="pv-ring" ref={(el) => { ringRefs.current[0] = el; }} />
+        <div className="pv-ring is-big is-off" ref={(el) => { ringRefs.current[1] = el; }} />
       </div>
 
       {/* THE PAGE BEFORE ITS PICTURES: grey shapes over it until it shows itself. */}
