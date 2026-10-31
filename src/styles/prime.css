@@ -91,22 +91,28 @@ body.pv-page .tv-det-art::after {
   width: calc(1300 * var(--p)); height: calc(731 * var(--p));
 }
 
-/* ---- THE TITLE SCREEN OPENED FROM HERE (TvDetail, over this page) ----
-   OK leaves the picture where it is. The title screen draws the same picture in the same box with
-   the same fade, and fades it in (200ms) over this page's — the same pixels, so nothing changes there
-   but the rows and the panel giving way. The black around it is cut around the box: black under the
-   box too would dim the picture mid-fade. While the screen loads, this page stays in view, with no
-   spinner however long that takes (the user's call, Oct 29) — the page takes no keys meanwhile. */
+/* ---- THE TITLE SCREEN OPENED FROM HERE (TvDetail, over this page), as Prime Video's (the user's
+   recording, Oct 31) ----
+   OK leaves the picture where it is. This page clears itself away at the press (PrimeTest's
+   openTitle): the rows and the panel sink and fade, the bar fades, and the wordmark rises to where the
+   title screen's stands — while that screen loads too, with no spinner however long it takes (the
+   user's call, Oct 29). So the title screen draws no black of its own over the page: what is left is
+   the picture, which it draws again in the same box with the same fade (200ms, the same pixels), and
+   the wordmark, which its own covers exactly once that has landed (.pv-landed). The rest of its column
+   comes up from below in one piece 450ms after the press (.pv-opening gone), not a line at a time,
+   three lines of synopsis in it where the panel had two. A wordmark that did not fly (the featured
+   card, a name in place of one) comes with it. */
 body.pv-page .tv-det:not([data-parked]) { background: transparent; }
-body.pv-page .tv-det:not([data-parked])::before {
-  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background:
-    linear-gradient(#000, #000) left top / calc(620 * 100vw / 1920) 100% no-repeat,
-    linear-gradient(#000, #000) left bottom / 100% calc(100% - 731 * 100vw / 1920) no-repeat;
-  animation: pvTitleIn 200ms linear both;
-}
-body.pv-page .tv-det:has(> .m-load-veil)::before { display: none; }
 body.pv-page .tv-det .m-load-veil { display: none; }
+body.pv-page.pv-titled .tv-topnav { opacity: 0; transition: opacity 170ms linear; }
+body.pv-page .tv-dm.is-in .tv-dm-col > * { animation: pvBlockIn 200ms cubic-bezier(0, 0, .2, 1) backwards; }
+body.pv-page.pv-opening .tv-dm .tv-dm-col > * { opacity: 0; animation: none; }
+body.pv-page.pv-flown .tv-dm .tv-dm-col > .tv-det-title { animation: none; }
+body.pv-page.pv-flown.pv-landed .tv-dm .tv-dm-col > .tv-det-title { opacity: 1; }
+@keyframes pvBlockIn {
+  from { opacity: 0; transform: translateY(calc(var(--u) * 4.7)); }
+  to   { opacity: 1; transform: none; }
+}
 body.pv-page .tv-det-art {
   left: calc(620 * 100vw / 1920); right: auto;
   width: calc(1300 * 100vw / 1920); height: calc(731 * 100vw / 1920);

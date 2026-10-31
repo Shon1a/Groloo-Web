@@ -130,6 +130,21 @@ const RING_IN_MS = 150;
 const RING_EASE = 'cubic-bezier(.2, .6, .3, 1)';
 /* Back to the top: the rows are gone this long before they glide back in. */
 const AWAY_MS = 130;
+/* OK: THE TITLE SCREEN COMES AS PRIME VIDEO'S DOES (the user's recording of the emulator, Oct 31, two
+   titles, 30fps, positions read frame by frame and eased to fit). At the press the rows sink 87px and
+   the panel's words 227px (233ms, easing in), faded by 170ms; the wordmark rises to where the title
+   screen's stands (233ms) and is left there under it; the title screen's column comes up 450ms after
+   the press (prime.css). Back cuts the wordmark home and fades the rest in (170ms). */
+const OPEN_MS = 233;
+const OPEN_FADE_MS = 170;
+const OPEN_ROWS_PX = 87;
+const OPEN_WORDS_PX = 227;
+const OPEN_EASE = 'cubic-bezier(.25, 0, .55, .25)';
+const OPEN_LOGO_EASE = 'cubic-bezier(.15, 0, .65, .85)';
+const OPEN_BLOCK_AT = 450;
+const BACK_FADE_MS = 170;
+/* The title screen's wordmark fades in this long (tv.css `.title-logo`): the one left here goes with it. */
+const TITLE_LOGO_FADE_MS = 450;
 /* THE PAGE BEFORE ITS PICTURES, as Prime Video's (four switches along its bar, Oct 30, and a still of
    the emulator for the shapes). Switched to, the page is grey shapes — four bars where the panel goes,
    two rows of tiles — cut in 200px to the side it comes from and gliding home a frame later
@@ -249,6 +264,19 @@ const Check = () => (
     Included with Groloo
   </span>
 );
+
+/* Where the title screen's wordmark stands, drawn, for a picture nw x nh — before the title screen is
+   there to ask: its column's corner (tv.css `.tv-det` --u, `.tv-dm` padding), and app.css
+   `#mTitle .title-logo`: 7vw high between 40 and 72px, at most 360px (and its column) wide, contained
+   in that box, left and centred. */
+const titleLogoAt = (nw: number, nh: number) => {
+  const vw = window.innerWidth;
+  const u = Math.min(vw / 100, window.innerHeight * 1.7778 / 100);
+  const boxH = Math.min(Math.max(40, vw * 0.07), 72);
+  const w = Math.min(boxH * nw / nh, 360, 42 * u, vw - 12.4 * u);
+  const h = w * nh / nw;
+  return { x: 6.2 * u, y: 4.4 * u + (boxH - h) / 2, w, h };
+};
 
 /* A picture's pixels, decoded off the main thread, to be drawn into a canvas once — at the size it is
    drawn, or (`w` left out) its own. The resize is NOT off the main thread: the engine does it as it hands
@@ -442,7 +470,7 @@ export default function PrimeTest() {
   const st = useRef({ row: 0, cols: [] as number[] });
   /* What is on screen now, to tell what a press changed. */
   const shown = useRef({ row: -1, col: -1, key: '', item: null as MediaItem | null });
-  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0, skel: 0 });
+  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0, skel: 0, land: 0, block: 0, hand: 0 });
   /* Whether the page has shown itself yet (THE PAGE BEFORE ITS PICTURES). */
   const revealed = useRef(false);
   /* Whether the press being applied is a held key's step. */
@@ -929,7 +957,7 @@ export default function PrimeTest() {
     document.body.classList.add('pv-page');
     const tm = timers.current;
     return () => {
-      document.body.classList.remove('pv-page', 'pv-deep');
+      document.body.classList.remove('pv-page', 'pv-deep', 'pv-titled', 'pv-opening', 'pv-landed', 'pv-flown');
       Object.values(tm).forEach((id) => window.clearTimeout(id));
     };
   }, []);
@@ -1143,6 +1171,98 @@ export default function PrimeTest() {
     return true;
   }, 100), [apply, trackAt]);
 
+  /* ---- OK: THE TITLE SCREEN (TvDetail, over this page) comes as Prime Video's does (OPEN_MS). What is
+     on screen goes at the press, whether or not the title screen is ready — no spinner however long it
+     takes (the user's call, Oct 29), and the page takes no keys till it is closed: the rows and the ring
+     sink and fade, the panel's words sink further, and the wordmark rises to where the title screen's
+     will stand and is left there, under it, till that one has come in over it. The title screen's
+     column keeps its own clock (prime.css): body.pv-opening till OPEN_BLOCK_AT, .pv-landed once the
+     wordmark is home, .pv-flown if there was one to send, .pv-titled while a title is open. ---- */
+  const leaving = useRef({ id: '' as string | number, anims: [] as Animation[], faded: [] as Element[], cut: [] as HTMLElement[], logo: null as HTMLElement | null });
+  /* The wordmark left here goes once the title screen's stands over it — its column in, its picture
+     loaded (or its name, where it has none) — fading as that one fades in. */
+  const handOver = () => {
+    const L = leaving.current;
+    const title = document.querySelector('.tv-dm.is-in .tv-det-title');
+    if (!title || (title.classList.contains('has-logo') && !title.querySelector('.title-logo.rdy'))) {
+      timers.current.hand = window.setTimeout(handOver, 50);
+      return;
+    }
+    const out = L.logo?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: TITLE_LOGO_FADE_MS, easing: 'linear', fill: 'forwards' });
+    if (out) L.anims.push(out);
+  };
+  const openTitle = (it: MediaItem) => {
+    const L = leaving.current;
+    const I = info.current;
+    const tm = timers.current;
+    const body = document.body.classList;
+    /* The panel on screen, if the title is in it, and its wordmark if that is drawn. */
+    const panel = !I.hidden && I.keys[I.front] === shown.current.key && performance.now() >= I.inAt + IN_MS ? infoRefs.current[I.front] : null;
+    const logo = panel?.querySelector<HTMLImageElement>('.pv-logo');
+    const flies = !!logo && logo.style.display !== 'none' && logo.complete && logo.naturalWidth > 0;
+    const own = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '1px 0px');
+    L.id = it.id;
+    /* Each from where it is, written out: an animation that takes its start from what lies under it
+       cannot leave the main thread while an old one lies there finished, till that is collected. (A ring
+       at 0 is held there: it may be on its way in.) */
+    const sink = (el: Element | null | undefined, px: number) => {
+      if (!el) return;
+      const from = +getComputedStyle(el).opacity;
+      if (own) L.anims.push(el.animate([{ translate: '0px 0px' }, { translate: `0px ${px * p}px` }], { duration: OPEN_MS, easing: OPEN_EASE, fill: 'forwards' }));
+      L.anims.push(el.animate([{ opacity: from }, { opacity: 0 }], { duration: OPEN_FADE_MS, easing: 'linear', fill: 'forwards' }));
+      L.faded.push(el);
+    };
+    sink(trackRef.current, OPEN_ROWS_PX);
+    ringRefs.current.forEach((ring) => sink(ring, OPEN_ROWS_PX));
+    /* The words of each panel on screen (the one going out too); a panel still to come in, pressed into
+       before it came, is cut, and comes back with the page. Nothing undrawn is moved: an animation there
+       cannot leave the main thread, and it would then need a main frame on every frame of the open. */
+    for (const one of infoRefs.current) {
+      if (!one) continue;
+      if (+getComputedStyle(one).opacity > 0) {
+        for (const el of one.children) if (!(flies && el === logo) && el.getClientRects().length) sink(el, OPEN_WORDS_PX);
+      } else if (one.style.opacity === '1') {
+        fade(one, 0, 0);
+        L.cut.push(one);
+      }
+    }
+    if (flies && logo) {
+      const from = logo.getBoundingClientRect();
+      const to = titleLogoAt(logo.naturalWidth, logo.naturalHeight);
+      logo.style.transformOrigin = '0 0';
+      L.anims.push(logo.animate([{ transform: 'translate(0px, 0px) scale(1)' }, { transform: `translate(${to.x - from.x}px, ${to.y - from.y}px) scale(${to.w / from.width})` }],
+        { duration: OPEN_MS, easing: OPEN_LOGO_EASE, fill: 'forwards' }));
+      L.logo = logo;
+      body.add('pv-flown');
+    }
+    body.add('pv-titled', 'pv-opening');
+    tm.land = window.setTimeout(() => { body.add('pv-landed'); if (flies) handOver(); }, OPEN_MS);
+    tm.block = window.setTimeout(() => body.remove('pv-opening'), OPEN_BLOCK_AT);
+  };
+  /* Closed: the wordmark is home at once and the rest fades in where it was (BACK_FADE_MS), as the
+     reference's page comes back. The ring is left to its own fade, which waits for the remote. Another
+     title opened from the title screen takes away the wordmark left here (it draws that one's). */
+  useEffect(() => useModal.subscribe((s) => {
+    const L = leaving.current;
+    if (L.id === '') return;
+    if (s.target) {
+      if (L.logo) L.logo.style.visibility = s.target.id === L.id ? '' : 'hidden';
+      return;
+    }
+    const tm = timers.current;
+    [tm.land, tm.block, tm.hand].forEach((id) => window.clearTimeout(id));
+    document.body.classList.remove('pv-titled', 'pv-opening', 'pv-landed', 'pv-flown');
+    L.anims.forEach((a) => a.cancel());
+    for (const el of L.cut) {
+      el.style.transition = 'none';
+      el.style.opacity = '1';
+      el.style.transform = 'translate3d(0px, 0px, 0)';
+    }
+    for (const el of [...L.faded, ...L.cut]) if (!ringRefs.current.includes(el as HTMLDivElement)) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: BACK_FADE_MS, easing: 'linear' });
+    if (L.logo) L.logo.style.visibility = '';
+    leaving.current = { id: '', anims: [], faded: [], cut: [], logo: null };
+  }), []);
+
   /* ---- ONE STEP OF THE REMOTE ---- */
   const lastStep = useRef(0);
   const step = (dir: 'up' | 'down' | 'left' | 'right', held = false) => {
@@ -1180,9 +1300,12 @@ export default function PrimeTest() {
     if (!dir && e.key !== 'Enter') return;
     e.preventDefault();
     e.stopPropagation();
-    if (!rows.length) return;
+    /* A title open over the page, or on its way: the page takes no keys till it is closed. */
+    if (!rows.length || leaving.current.id !== '') return;
     if (e.key === 'Enter') {
-      openModal(openItem(rows[s.row].items[s.cols[s.row] ?? 0]));
+      const it = rows[s.row].items[s.cols[s.row] ?? 0];
+      openTitle(it);
+      openModal(openItem(it));
       return;
     }
     const h = held.current;
