@@ -558,6 +558,16 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
   );
 });
 
+/* THE WORDMARK LOADS WITH ITS PICTURE. Both are `lazy`, and lazy waits until an image is inside the
+   grid's clip: the row peeking under the grid had its pictures, but its wordmarks — at the foot of the
+   tile, still under the edge — were fetched only as the row slid up, so every row arrived without its
+   names. A picture that has loaded lets its tile's wordmark load too. */
+const pictureReady = (img: HTMLImageElement) => {
+  img.classList.add('rdy');
+  const mark = img.parentElement?.querySelector<HTMLImageElement>('.tv-spot-thumbmark');
+  if (mark) mark.loading = 'eager';
+};
+
 /* One poster, drawn as a closed row draws it (TvSpotlight's Tile): the same picture choice, and the
    wordmark — or the title in type — over it. */
 const GridTile = memo(function GridTile({ item: it, index, onOpen }: { item: MediaItem; index: number; onOpen: (m: MediaItem) => void }) {
@@ -582,8 +592,8 @@ const GridTile = memo(function GridTile({ item: it, index, onOpen }: { item: Med
           decoding="async"
           style={{ objectPosition: pos }}
           alt=""
-          ref={(el) => { if (el?.complete && el.naturalWidth > 0) el.classList.add('rdy'); }}
-          onLoad={(e) => e.currentTarget.classList.add('rdy')}
+          ref={(el) => { if (el?.complete && el.naturalWidth > 0) pictureReady(el); }}
+          onLoad={(e) => pictureReady(e.currentTarget)}
           onError={(e) => {
             const img = e.currentTarget;
             if (!fallbackSrc || img.dataset.fell) return;
