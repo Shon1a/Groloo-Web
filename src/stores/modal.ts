@@ -24,6 +24,9 @@ export interface ModalTarget {
   imdb?: string;
   /** the add-on's own content type for a card whose catalog is not movie/series — see MediaItem */
   addonType?: string;
+  /** the picture the card was showing big, for the title screen to open on the same one (the Prime
+   *  page's `bgArt`); absent, it shows `meta.backdrop` */
+  backdrop?: string;
   /** when reopened from Continue Watching for a series, the episode to resume */
   resumeEp?: { season: number; episode: number };
   /** opened from the Prime page: its title panel as it stood, which the title screen's column starts

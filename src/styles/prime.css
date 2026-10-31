@@ -241,16 +241,18 @@ body.pv-page .tv-det-art img { object-position: center top; }
 /* ---- THE FEATURED ROW: a 1024x576 card on the focus line (x 144) for the focused title, then 384x576
    posters from x 1200, and the one before it ending at x 112. The posters pass under the card: two copies
    of the strip, one clipped at its right edge (x 1168) with the focused title's poster just inside it,
-   one at its left edge (x 144) with the same poster just past it (PrimeTest's PvRowView). ---- */
+   one at its left edge (x 144) with the same poster just past it (PrimeTest's PvRowView). Both are cut at
+   the ring's outer edge (x 137 and 1175), not the card's: passing under the card they never show in the
+   7px between the two. ---- */
 .pv-feat { position: relative; height: calc(642 * var(--p)); }
 .pv-clip {
-  position: absolute; left: calc(1168 * var(--p)); right: 0; top: calc(45 * var(--p));
+  position: absolute; left: calc(1175 * var(--p)); right: 0; top: calc(45 * var(--p));
   height: calc(576 * var(--p)); overflow: hidden;
 }
-.pv-clip > .pv-strip { padding-left: 0; margin-left: calc(-384 * var(--p)); }
+.pv-clip > .pv-strip { padding-left: 0; margin-left: calc(-391 * var(--p)); }
 /* Its opacity is the compositor's (PrimeTest's sliverBack): changed on the paint, the edge fade below was
    drawn again with it. */
-.pv-clip.is-left { left: 0; right: auto; width: calc(144 * var(--p)); will-change: opacity; }
+.pv-clip.is-left { left: 0; right: auto; width: calc(137 * var(--p)); will-change: opacity; }
 .pv-clip.is-left > .pv-strip { padding-left: calc(144 * var(--p)); margin-left: 0; }
 /* The poster before the card fades into the screen's left edge: black at 0, clear where it ends (112). */
 .pv-clip.is-left::after {
@@ -261,6 +263,8 @@ body.pv-page .tv-det-art img { object-position: center top; }
 .pv-card {
   position: absolute; left: calc(144 * var(--p)); top: calc(45 * var(--p));
   width: calc(1024 * var(--p)); height: calc(576 * var(--p));
+  /* A face sliding out (PrimeTest's FACE_OUT_PX) stays inside the card, never under or past the ring. */
+  overflow: hidden;
 }
 .pv-dim { position: absolute; inset: 0; transition: opacity var(--dim); }
 .pv-face-art, .pv-face-info { opacity: 0; will-change: opacity, transform; }

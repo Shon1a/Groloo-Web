@@ -372,7 +372,7 @@ const WARM_PICTURES_QUIET_MS = 150;
 export function useWarmDetail() {
   const { lang } = useLang();
   const qc = useQueryClient();
-  return useCallback((it: MediaItem | null | undefined, resumeEp?: { season: number; episode: number }, wanted?: () => boolean) => {
+  return useCallback((it: MediaItem | null | undefined, resumeEp?: { season: number; episode: number }, wanted?: () => boolean, pic?: string) => {
     const id = it ? apiIdOf(it) : undefined;
     if (!it || !id) return;
     const q = metaQuery(id, it.type, lang);
@@ -382,7 +382,7 @@ export function useWarmDetail() {
       if (wanted && !wanted()) return;
       const m = qc.getQueryData<MetaDetail>(q.queryKey);
       if (!m) return;
-      const backdrop = m.backdrop || it.poster;
+      const backdrop = pic || m.backdrop || it.poster;
       for (const url of [backdrop ? imgW(backdrop, DETAIL_BACKDROP) : '', m.titleLogo ? rasterLogo(m.titleLogo, 'original') : '']) {
         if (!url) continue;
         const img = retainImage(url);

@@ -215,7 +215,7 @@ export default function TvDetail(p: TvDetailProps) {
    * out cost a whole extra commit: the veil drawn for one frame, then the grid. Read synchronously
    * instead, the screen's first commit is the finished screen, arriving inside the overlay's own
    * fade (`tvDetIn`) rather than after it. */
-  const backdrop = ready ? (meta?.backdrop || target.poster) : '';
+  const backdrop = ready ? (target.backdrop || meta?.backdrop || target.poster) : '';
   const backdropUrl = backdrop ? imgW(backdrop, BACKDROP_RENDITION) : '';
   const [artReady, setArtReady] = useState(() => !!backdropUrl && retainedReady(backdropUrl));
   useEffect(() => {
