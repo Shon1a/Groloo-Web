@@ -67,6 +67,16 @@ const TITLE_H = 45;
 const ROW_GAP = 21;
 const FOCUS_BOTTOM = 828;
 const ROW_CAP = 20;
+/* THE PAGE IS MOUNTED A FEW ROWS AT A TIME, not all in one commit (see the build effect below). The full
+   row list is known at once; only how many rows are in the DOM grows. BUILD_FIRST is the first screen's
+   rows, mounted together so the reveal never shows the page a row short (it checks rows 0 and 1); then
+   BUILD_STEP more each frame to the end. Kept small so no single commit holds the main thread past a
+   frame too long — building all ~270 tiles at once was one long task (~300ms on a PC, far more on a TV):
+   a freeze at the instant the tab opens, with the remote dead through it. Spread this way it is a handful
+   of short commits instead (measured ~90ms worst against ~480ms), the remote answers between them, and
+   the grey shapes glide over all of it on the compositor — so the entrance stays smooth. */
+const BUILD_FIRST = 2;
+const BUILD_STEP = 2;
 
 /* The rows' one move, on both axes (prime.css has it too, as --move). */
 const MOVE_MS = 380;
@@ -169,6 +179,14 @@ const ART_AT_REVEAL = 185;
 const ART_REVEAL_MS = 150;
 /* How often the page looks whether its first screen is in. */
 const SKEL_POLL_MS = 32;
+/* WARM-UP: on webOS the first move of each layer pays a one-time cost — the GPU rasterises and uploads
+   that layer's texture only when it first actually moves, which is the cold stutter felt on the first
+   press in each direction (it is gone once every layer has been composited once — the user's own finding,
+   Nov 2). So, hidden behind the skeleton, each layer navigation will move (the row track, every strip,
+   the rings, the faces, the panel) is nudged 1px and back on the compositor (`composite: 'add'`, so the
+   real resting transform is untouched and nothing jumps): the GPU does its one-time work before the
+   remote ever comes down. Off with localStorage['groloo.primewarm']='0' (to A/B it on the set). */
+const WARM_MS = 160;
 /* The first screen at the top: a row's first five tiles (the fifth cut by the edge); on the featured
    row, the two posters right of its card. */
 const onFirstScreen = (r: PvRow, c: number) => (r.feat ? c >= 1 && c <= 2 : c < 5);
@@ -420,18 +438,11 @@ export default function PrimeTest() {
   const metaOf = useMetaOf();
   const qc = useQueryClient();
 
-  /* The rows are built a frame after the page's first, which is the grey shapes alone (THE PAGE BEFORE
-     ITS PICTURES): building twenty rows before it held the switch on black for ~300ms (measured, PC),
-     while the shapes glide through the build on the compositor. */
-  const [built, setBuilt] = useState(false);
-  useEffect(() => {
-    let timer = 0;
-    const frame = requestAnimationFrame(() => { timer = window.setTimeout(() => setBuilt(true)); });
-    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
-  }, []);
-
-  const rows = useMemo(() => {
-    if (!built) return [];
+  /* THE PAGE BEFORE ITS PICTURES is the grey shapes alone; the rows mount under them. The whole list is
+     computed here at once (cheap — it is plain data), but only `builtCount` of its rows are rendered, and
+     that count grows a row per frame (the build effect below), so the main thread is never held for one
+     long task. The shapes glide over it on the compositor the whole time. */
+  const allRows = useMemo(() => {
     const list =(cat: string) => (data?.rows?.[cat]?.results ?? []).filter((m) => m.backdrop).slice(0, ROW_CAP);
     const out: PvRow[] = [];
     const push = (key: string, title: string, items: MediaItem[], feat = false) => { if (items.length) out.push({ key, title, items, feat }); };
@@ -443,7 +454,24 @@ export default function PrimeTest() {
       push(row.cat, t(row.key), list(row.cat));
     }
     return out;
-  }, [data?.rows, t, built]);
+  }, [data?.rows, t]);
+  /* 0 until a frame after the first paint (the shapes are on screen first, as the whole build used to
+     wait); then the first screen's rows together, then one more each frame. A press does not race this:
+     the remote is in the bar until the page shows itself, which waits for the first screen's pictures —
+     long after every row is mounted. */
+  const [builtCount, setBuiltCount] = useState(0);
+  const rows = useMemo(() => allRows.slice(0, builtCount), [allRows, builtCount]);
+  useEffect(() => {
+    if (!allRows.length) { setBuiltCount(0); return; }
+    let raf = 0;
+    let timer = 0;
+    const grow = (n: number) => {
+      setBuiltCount(n);
+      if (n < allRows.length) raf = requestAnimationFrame(() => grow(Math.min(n + BUILD_STEP, allRows.length)));
+    };
+    raf = requestAnimationFrame(() => { timer = window.setTimeout(() => grow(Math.min(BUILD_FIRST, allRows.length))); });
+    return () => { cancelAnimationFrame(raf); window.clearTimeout(timer); };
+  }, [allRows]);
   /* Where each row starts on the track. */
   const tops = useMemo(() => {
     let y = 0;
@@ -1072,6 +1100,37 @@ export default function PrimeTest() {
     };
   }, [rows, p]);
 
+  /* Pay the first-move GPU cost up front (WARM_MS above). Each layer is nudged once — a dataset mark
+     keeps it to once — by a tiny compositor-only animation that adds 1px and takes it back, over the
+     layer's own resting transform (`composite: 'add'`), so `apply`'s inline transform is never touched
+     and there is nothing to see. Opacity-0 layers (rings, faces before the featured row) cost nothing
+     to nudge and warm when they first draw instead; the ones that matter — the track and the strips —
+     are opaque and on screen, so this is where their texture goes to the GPU. */
+  const warmLayers = useCallback(() => {
+    try { if (localStorage.getItem('groloo.primewarm') === '0') return; } catch { /* storage blocked: warm */ }
+    if (typeof Element === 'undefined' || !Element.prototype.animate) return;
+    const nudge = (el?: Element | null) => {
+      const h = el as HTMLElement | null;
+      if (!h || h.dataset.warm === '1') return;
+      h.dataset.warm = '1';
+      h.animate(
+        [{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(1px,0,0)' }, { transform: 'translate3d(0,0,0)' }],
+        { duration: WARM_MS, easing: 'linear', composite: 'add' },
+      );
+    };
+    const root = rootRef.current;
+    if (!root) return;
+    nudge(trackRef.current);
+    ringRefs.current.forEach(nudge);
+    root.querySelectorAll('.pv-strip, .pv-face-art, .pv-face-info, .pv-info').forEach(nudge);
+  }, []);
+  /* Rows build a few at a time (BUILD_STEP), so some strips mount after the reveal warmed what was there.
+     Once the build is whole, warm again — the dataset mark skips all the already-warm ones, so only the
+     late strips pay, and every row is hot before the remote reaches it. */
+  useEffect(() => {
+    if (allRows.length && builtCount >= allRows.length) warmLayers();
+  }, [builtCount, allRows.length, warmLayers]);
+
   /* ---- THE PAGE BEFORE ITS PICTURES (SKELETON above) ----
      The page is there from its first frame but hidden (prime.css `.pv-show`, kept rastered) under its
      grey shapes, the remote still in the bar. It shows itself — `is-shown` on the root: the shapes fade,
@@ -1086,12 +1145,13 @@ export default function PrimeTest() {
     if (revealed.current || !root) return;
     revealed.current = true;
     root.classList.add('is-shown');
+    warmLayers();
     const s = st.current;
     const row = rows[s.row];
     const item = row?.items[s.cols[s.row] ?? 0];
     if (item && !row.feat) artTo(bgSrc(item), { rest: 0, inMs: ART_REVEAL_MS, inBy: performance.now() + ART_AT_REVEAL });
     timers.current.skel = window.setTimeout(() => { if (skelRef.current) skelRef.current.style.display = 'none'; }, SKEL_OUT_MS);
-  }, [rows, artTo]);
+  }, [rows, artTo, warmLayers]);
 
   /* Switched to along the bar, the shapes glide in from the side the page comes from. */
   useLayoutEffect(() => {
