@@ -66,6 +66,27 @@ const BUCKETS = [16.67, 33.33, 50, 67, 100] as const;
 
 interface Frame { t: number; dt: number }
 interface Press { t: number; key: string; tag: string }
+interface Long { start: number; duration: number }
+
+/* ---- WHAT A BAD FRAME WAS, NOT JUST THAT THERE WAS ONE --------------------------------------------
+ * The block stats say the tail is bad (p99, worst, dropped) but not WHERE the time went — a one-off
+ * page build charged to the press that opened the page reads identically to a stutter inside a held
+ * scroll, and the two have opposite fixes. A hotspot pins each of the worst frames to the press that
+ * precedes it (or says there was none — a build, a GC, a background prefetch) and to the longtask that
+ * overlapped it, so one short run tells the two apart. `sincePress` 0–60ms is a synchronous press
+ * handler; 200–430ms is deferred work landing mid-move; null/large is not navigation at all. */
+export interface TvPerfHotspot {
+  /** When the frame was delivered (ms on the shared timeline). */
+  at: number;
+  /** How long that frame took. Anything over ~16.7 is a dropped frame. */
+  dt: number;
+  /** ms from the last keypress at or before this frame, or null if none preceded it. */
+  sincePress: number | null;
+  /** The key of that press (ArrowDown, …), '' when sincePress is null. */
+  key: string;
+  /** The longest longtask overlapping this frame's interval, ms (0 if none/unsupported). */
+  longtaskMs: number;
+}
 
 export interface TvPerfBlock {
   label: string;
@@ -162,6 +183,12 @@ export interface TvPerfApi {
   idleStats(): TvPerfIdle;
   sample(): TvPerfSample;
   raw(): { frames: Frame[]; presses: Press[] };
+  /** The `n` worst frames, each tied to the press before it and the longtask that overlapped it.
+   *  The one call that says whether a stutter is navigation or a one-off. See TvPerfHotspot. */
+  hotspots(n?: number): TvPerfHotspot[];
+  /** Dropped frames split by whether they fell within WINDOW_MS of a press (navigation) or not
+   *  (page build, GC, background prefetch). A big `awayFromPress` means the fix is not in the press path. */
+  dropBreakdown(): { nearPress: number; awayFromPress: number };
   overlay(on: boolean): void;
   /** The build + configuration under test. Read by the driver BEFORE it scores anything. */
   buildIdentity(): TvBuildIdentity;
@@ -266,12 +293,17 @@ export function startTvPerf(mode: '1' | '2'): TvPerfApi {
   /* ---- LONG TASKS. 'longtask' is Chromium 58; the newer 'long-animation-frame' is Chromium 123 and
    * would simply never fire on a webOS 22 set, so it is not used. */
   let longTasks = 0, longTaskMs = 0, longTaskWorst = 0;
+  /* Kept so hotspots() can name the task behind a bad frame. Capped — a long session must not grow
+   * this without bound, and only the recent ones can overlap the frames still being looked at. */
+  const longs: Long[] = [];
   try {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries()) {
         longTasks++;
         longTaskMs += e.duration;
         if (e.duration > longTaskWorst) longTaskWorst = e.duration;
+        longs.push({ start: e.startTime, duration: e.duration });
+        if (longs.length > 400) longs.shift();
       }
     }).observe({ entryTypes: ['longtask'] });
   } catch { /* not supported — the rest of the probe still works */ }
@@ -411,6 +443,17 @@ export function startTvPerf(mode: '1' | '2'): TvPerfApi {
         bitmapBytes += im.naturalWidth * im.naturalHeight * 4;
       }
     }
+    /* THE PRIME PAGE DRAWS ITS ARTWORK INTO <canvas>, NOT <img> (routes/PrimeTest.tsx: tiles, faces
+     * and the two top-right boxes are all canvases holding decoded pixels). Counting only <img> above
+     * reads near-zero bitmap memory on that page and hides the one figure the webOS kill ceiling
+     * (~250MB free) actually turns on — so each canvas's backing store (its own width/height, the
+     * real decoded-pixel footprint) is added here. A tile with no picture yet has a 0x0 backing store
+     * and contributes nothing, so this also tracks how much of the page has actually filled in. */
+    const canvases = document.getElementsByTagName('canvas');
+    for (let i = 0; i < canvases.length; i++) {
+      const cv = canvases[i];
+      if (cv.width > 0 && cv.height > 0) bitmapBytes += cv.width * cv.height * 4;
+    }
     const videos = document.querySelectorAll('video');
     /* A <video> with no source is an empty element, not a media pipeline — the distinction matters
      * because the row keeps its slot mounted and only fills it when a preview actually starts. */
@@ -423,9 +466,11 @@ export function startTvPerf(mode: '1' | '2'): TvPerfApi {
     return {
       /* `.tv-spot` is the row root (TvSpotlight:1633); `.tv-spot-thumb` is one poster in its strip.
        * Both are load-bearing names for this file — if either is renamed, these counts silently
-       * become zero rather than failing, so they are asserted in the driver's pre-flight. */
-      rows: document.querySelectorAll('.tv-spot').length,
-      cards: document.querySelectorAll('.tv-spot-thumb').length,
+       * become zero rather than failing, so they are asserted in the driver's pre-flight. The Prime
+       * page has its own roots (`.pv-row` / `.pv-tile`, routes/PrimeTest.tsx); they are added so the
+       * overlay is truthful on both pages, while the Spotlight names stay for the driver's pre-flight. */
+      rows: document.querySelectorAll('.tv-spot, .pv-row').length,
+      cards: document.querySelectorAll('.tv-spot-thumb, .pv-tile').length,
       images: imgs.length,
       imagesDecoded: decoded,
       bitmapMb: Math.round(bitmapBytes / 1048576),
@@ -439,6 +484,40 @@ export function startTvPerf(mode: '1' | '2'): TvPerfApi {
       longTaskMsTotal: Math.round(longTaskMs),
       longTaskWorst: Math.round(longTaskWorst),
     };
+  }
+
+  /* The worst frames, each pinned to the press before it and the longtask over it. Frames carry their
+   * end time `t` and duration `dt`, so the frame spans [t - dt, t]; a press or task is "behind" it if it
+   * falls in or overlaps that span. */
+  function hotspots(n = 12): TvPerfHotspot[] {
+    return frames.slice().sort((a, b) => b.dt - a.dt).slice(0, n).map((f) => {
+      const start = f.t - f.dt;
+      let prev: Press | null = null;
+      for (const p of presses) if (p.t <= f.t && (!prev || p.t > prev.t)) prev = p;
+      let lt = 0;
+      for (const L of longs) if (L.start + L.duration >= start && L.start <= f.t) lt = Math.max(lt, L.duration);
+      return {
+        at: r1(f.t),
+        dt: r1(f.dt),
+        sincePress: prev ? r1(f.t - prev.t) : null,
+        key: prev?.key ?? '',
+        longtaskMs: Math.round(lt),
+      };
+    });
+  }
+
+  /* Dropped frames split by proximity to a press. `nearPress` is the navigation cost the goal is about;
+   * `awayFromPress` is everything else (the one-off build, a GC pause, a prefetch landing in dead air). */
+  function dropBreakdown() {
+    let nearPress = 0, awayFromPress = 0;
+    for (const f of frames) {
+      const d = Math.max(0, Math.round(f.dt / BUDGET) - 1);
+      if (!d) continue;
+      let near = false;
+      for (const p of presses) if (p.t <= f.t && f.t - p.t <= WINDOW_MS) { near = true; break; }
+      if (near) nearPress += d; else awayFromPress += d;
+    }
+    return { nearPress, awayFromPress };
   }
 
   /* ---- THE OVERLAY, written as plain DOM on purpose.
@@ -498,11 +577,13 @@ export function startTvPerf(mode: '1' | '2'): TvPerfApi {
 
   const api: TvPerfApi = {
     tag: (v) => { tag = v; },
-    reset: () => { frames.length = 0; presses.length = 0; longTasks = 0; longTaskMs = 0; longTaskWorst = 0; },
+    reset: () => { frames.length = 0; presses.length = 0; longs.length = 0; longTasks = 0; longTaskMs = 0; longTaskWorst = 0; },
     summary: (labels) => labels.map(summarise),
     idleStats,
     sample,
     raw: () => ({ frames, presses }),
+    hotspots,
+    dropBreakdown,
     overlay,
     buildIdentity: tvBuildIdentity,
     ready: false,
