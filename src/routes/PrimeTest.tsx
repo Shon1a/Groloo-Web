@@ -1,6 +1,8 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useHome, useMetaOf, useWarmDetail } from '../lib/queries';
+import { useHome, useMetaOf, useWarmDetail, useImdbTrailer } from '../lib/queries';
+import { useVideoTrailer } from '../components/DetailModal/useVideoTrailer';
+import { useSettings } from '../stores/settings';
 import { useT } from '../i18n/i18n';
 import { HOME_ROWS } from '../lib/home';
 import { imgW } from '../lib/img';
@@ -187,6 +189,19 @@ const SKEL_POLL_MS = 32;
    real resting transform is untouched and nothing jumps): the GPU does its one-time work before the
    remote ever comes down. Off with localStorage['groloo.primewarm']='0' (to A/B it on the set). */
 const WARM_MS = 160;
+
+/* HOLD-OK TRAILERS. A deliberate hold of OK on a rested title plays its trailer (IMDb MP4, the same
+   pipeline the home hero uses — useImdbTrailer + useVideoTrailer) on that title's big-picture surface:
+   the top-right backdrop for a standard row, the featured card for the featured row. NOT autoplay —
+   the user's call, so a trailer never starts itself and never costs a frame unasked. A tap still opens
+   the title; a hold past TRAILER_HOLD_MS starts the trailer instead. */
+const TRAILER_HOLD_MS = 450;
+/* The sound rises from silence over this long when the picture is revealed (useVideoTrailer fadeSoundMs). */
+const TRAILER_FADE_MS = 1000;
+/* The widest frame a trailer's box fills to, pushing IMDb's baked-in scope bands out (coverOf, mirrors
+   SpotlightStage): 2.39 for a scope film, its own aspect for a mild-wide one, none for 16:9. */
+const COVER_MAX = 2.39;
+const coverOf = (aspect?: number | null) => (!aspect || aspect >= 2.3 ? COVER_MAX : aspect > 1.9 ? aspect : undefined);
 /* The first screen at the top: a row's first five tiles (the fifth cut by the edge); on the featured
    row, the two posters right of its card. */
 const onFirstScreen = (r: PvRow, c: number) => (r.feat ? c >= 1 && c <= 2 : c < 5);
@@ -411,6 +426,9 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
         {FACES.map((n) => (
           <div key={n} className="pv-dim"><div className="pv-face-art"><canvas className="pv-face-pic" /></div></div>
         ))}
+        {/* A held trailer mounts here — OVER the card's pictures but UNDER its fade and wordmark, so the
+            card's dark gradient and the title's logo stay drawn over the moving trailer, as over the still. */}
+        <div className="pv-trailer-slot is-feat" aria-hidden="true" />
         <div className="pv-card-fade" />
         {FACES.map((n) => (
           <div key={n} className="pv-dim">
@@ -497,6 +515,68 @@ export default function PrimeTest() {
   const revealed = useRef(false);
   /* Whether the press being applied is a held key's step. */
   const pressHeld = useRef(false);
+
+  /* ---- HOLD-OK TRAILERS ---------------------------------------------------------------------------
+     A trailer plays only on a deliberate hold of OK — never autoplay. `dwelt` is the title the remote
+     is resting on; its IMDb trailer is resolved while it rests (useImdbTrailer), so a hold starts at
+     once. `playing` mounts ONE shared <video> (useVideoTrailer) in `slotRef`, positioned over the
+     active surface — the featured card, or the top-right backdrop — and torn down the moment anything
+     moves. `playingRef` mirrors `playing` for the imperative handlers (step/back/exit). */
+  const trailersOn = useSettings((s) => s.settings.tvRowTrailers);
+  const [dwelt, setDwelt] = useState<MediaItem | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [sound, setSound] = useState(true);
+  const playingRef = useRef(false);
+  /* The trailer mounts INSIDE whichever surface it plays on — the featured card, or the standard-row
+     backdrop — so that surface's own gradient and wordmark paint over it, exactly as over the still.
+     Each slot sits in its surface's DOM, between the picture and the fade; `slotRef` points at the
+     active one, chosen at play time (the hook mounts its <video> there). */
+  const slotRef = useRef<HTMLDivElement | null>(null);
+  const artSlotRef = useRef<HTMLDivElement | null>(null);
+  const trailer = useImdbTrailer(trailersOn ? dwelt?.imdb : undefined);
+  const trailerUrl = trailer.data?.url || undefined;
+  const stopTrailer = useCallback(() => {
+    if (!playingRef.current) return;
+    playingRef.current = false;
+    slotRef.current?.classList.remove('is-live');
+    /* If a trailer was carrying the title screen's backdrop, let that screen show its own picture again. */
+    document.body.classList.remove('pv-trailer-bg');
+    setPlaying(false);
+  }, []);
+  const playTrailer = () => {
+    if (!trailersOn || !trailerUrl || playingRef.current) return;
+    const s = st.current;
+    const it = rows[s.row]?.items[s.cols[s.row] ?? 0];
+    /* Only the rested title, whose trailer the hold holds — matched by IMDb id, not object identity
+       (a background refetch rebuilds the item objects while the id stays). */
+    if (!it || !it.imdb || it.imdb !== dwelt?.imdb) return;
+    const feat = s.row === featAt;
+    const node = feat
+      ? rootRef.current?.querySelector<HTMLDivElement>('.pv-card .pv-trailer-slot') ?? null
+      : artSlotRef.current;
+    if (!node) return;
+    slotRef.current = node;
+    node.classList.add('is-live');            // reveal the active slot before the hook measures it
+    playingRef.current = true;
+    setSound(true);
+    setPlaying(true);
+  };
+  useVideoTrailer(
+    slotRef,
+    rootRef as RefObject<HTMLElement | null>,
+    playing ? trailerUrl : undefined,
+    dwelt?.title ?? '',
+    {
+      renditions: trailer.data?.urls,
+      cropScale: 1,                            // TV: the crop is laid out, never transformed
+      coverAspect: coverOf(trailer.data?.aspect),
+      maxRenditionPx: 1280,
+      sound,
+      fadeSoundMs: TRAILER_FADE_MS,
+      restartKey: dwelt?.id != null ? String(dwelt.id) : undefined,
+      onFail: stopTrailer,
+    },
+  );
   /* Where the track stands with row `r` on the focus line. */
   const trackAt = useCallback((r: number) => `translate3d(0, ${Math.round((FOCUS_BOTTOM - (tops[r] + TITLE_H + tileH(rows[r]))) * p)}px, 0)`, [p, rows, tops]);
 
@@ -548,6 +628,9 @@ export default function PrimeTest() {
 
   /* The key being held, if any (the hold logic below keeps it). */
   const held = useRef({ key: '', lastRepeat: 0, timer: 0 });
+  /* OK's tap-vs-hold: `timer` fires at TRAILER_HOLD_MS and plays the trailer; `held` then suppresses
+     the tap-open on key-up. A quick release (before the timer) is a tap and opens the title. */
+  const enter = useRef({ timer: 0, held: false });
   const keyHeld = () => !!held.current.key && performance.now() - held.current.lastRepeat < REPEAT_GONE_MS;
 
   /* The next title is written WRITE_AT after a tap. `holding`: a hold steps again before the title
@@ -884,6 +967,31 @@ export default function PrimeTest() {
     timers.current.ring = window.setTimeout(() => { on.style.transition = ''; off.style.transition = ''; }, RING_IN_AT + RING_IN_MS);
   };
 
+  /* WARM THE FEATURED CARD as navigation reaches it. Its poster strips, card, the three faces and the
+     big ring each pay a one-time GPU upload the first time they draw or move — and the entrance warm
+     (warmLayers) could not reach them: at reveal they are opacity-0, where a nudge is free and uploads
+     nothing, yet it still spends the `warm` mark. So this uses a mark of its own (`warmfeat`) and fires
+     while the card is actually on screen (focused, or one row away and dimmed-visible), a beat before
+     the first left/right carries the posters under the card — which is where the ~400ms cold stall was.
+     Off with the same localStorage['groloo.primewarm']='0'. */
+  const warmFeatured = useCallback(() => {
+    try { if (localStorage.getItem('groloo.primewarm') === '0') return; } catch { /* storage blocked: warm */ }
+    if (typeof Element === 'undefined' || !Element.prototype.animate || featAt < 0) return;
+    const card = rowEls.current[featAt];
+    if (!card) return;
+    const nudge = (el?: Element | null) => {
+      const h = el as HTMLElement | null;
+      if (!h || h.dataset.warmfeat === '1') return;
+      h.dataset.warmfeat = '1';
+      h.animate(
+        [{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(1px,0,0)' }, { transform: 'translate3d(0,0,0)' }],
+        { duration: WARM_MS, easing: 'linear', composite: 'add' },
+      );
+    };
+    nudge(ringRefs.current[1]);
+    card.querySelectorAll('.pv-strip, .pv-face-art, .pv-face-info, .pv-card, .pv-card-fade').forEach(nudge);
+  }, [featAt]);
+
   /* ONE PRESS = THIS. Works out what changed and writes only that. */
   const apply = useCallback(() => {
     const s = st.current;
@@ -937,6 +1045,10 @@ export default function PrimeTest() {
         artTo(bgSrc(item), fromFeat ? { rest: ART_REST_FROM_FEAT, inMs: 0 } : undefined);
       }
     }
+    /* Reached the featured row (or the row beside it) by an actual move — warm its layers now, before
+       the first poster slide. Gated on a real row change and on being revealed, so it never fires at
+       the opening rest and never adds its uploads to the entrance fade. */
+    if (revealed.current && featAt >= 0 && s.row !== was.row && Math.abs(s.row - featAt) <= 1) warmFeatured();
     shown.current = { row: s.row, col, key: `${row.key}:${col}`, item };
 
     /* Once everything has stopped moving, the title the remote rests on gets its title screen ready
@@ -944,6 +1056,10 @@ export default function PrimeTest() {
        wordmarks one press away are fetched, so the next panel comes in with its own. On the featured
        card the faces one press away come first, on their own (the likeliest next press's). */
     const rest = () => {
+      /* Rested on this title: let the trailer resolve for it and show the "Hold select for trailer"
+         hint (CSS reveals it under `.pv.is-still`). One render per rest, with the remote still. */
+      setDwelt(item);
+      rootRef.current?.classList.add('is-still');
       warm(item, undefined, () => shown.current.item === item, item.bgArt);
       const near: [number, number][] = [[s.row, col + 1], [s.row, col - 1], [s.row + 1, s.cols[s.row + 1] ?? 0], [s.row - 1, s.cols[s.row - 1] ?? 0]];
       for (const [r, c] of near) {
@@ -980,7 +1096,7 @@ export default function PrimeTest() {
       for (const c of [col + 2, col - 2]) if (row.items[c]) facePic(bgSrc(row.items[c]));
       timers.current.rest = window.setTimeout(rest, REST_NEXT_MS);
     }, SETTLE_MS);
-  }, [rows, featAt, p, trackAt, infoTo, writeInfo, faceTo, writeFace, facePic, artTo, holdArt, warm]);
+  }, [rows, featAt, p, trackAt, infoTo, writeInfo, faceTo, writeFace, facePic, artTo, holdArt, warm, warmFeatured]);
 
   useLayoutEffect(() => { apply(); }, [apply]);
   useEffect(() => {
@@ -1144,13 +1260,28 @@ export default function PrimeTest() {
     const root = rootRef.current;
     if (revealed.current || !root) return;
     revealed.current = true;
-    root.classList.add('is-shown');
-    warmLayers();
-    const s = st.current;
-    const row = rows[s.row];
-    const item = row?.items[s.cols[s.row] ?? 0];
-    if (item && !row.feat) artTo(bgSrc(item), { rest: 0, inMs: ART_REVEAL_MS, inBy: performance.now() + ART_AT_REVEAL });
-    timers.current.skel = window.setTimeout(() => { if (skelRef.current) skelRef.current.style.display = 'none'; }, SKEL_OUT_MS);
+    /* Show the page's picture and arm the skeleton's fade — the visible reveal. */
+    const showPage = () => {
+      root.classList.add('is-shown');
+      const s = st.current;
+      const row = rows[s.row];
+      const item = row?.items[s.cols[s.row] ?? 0];
+      if (item && !row.feat) artTo(bgSrc(item), { rest: 0, inMs: ART_REVEAL_MS, inBy: performance.now() + ART_AT_REVEAL });
+      timers.current.skel = window.setTimeout(() => { if (skelRef.current) skelRef.current.style.display = 'none'; }, SKEL_OUT_MS);
+    };
+    let decouple = true;
+    try { decouple = localStorage.getItem('groloo.primedecouple') !== '0'; } catch { /* storage blocked: on */ }
+    if (decouple) {
+      /* PRE-LIGHT: the page goes live under the still, opaque skeleton (is-lit). Every layer takes its
+         one-time upload now — nothing is animating, the shapes hide it — so when the skeleton fades two
+         frames later the page beneath it is already whole and the fade carries no upload work. */
+      root.classList.add('is-lit');
+      warmLayers();
+      requestAnimationFrame(() => requestAnimationFrame(showPage));
+    } else {
+      showPage();
+      warmLayers();
+    }
   }, [rows, artTo, warmLayers]);
 
   /* Switched to along the bar, the shapes glide in from the side the page comes from. */
@@ -1186,18 +1317,26 @@ export default function PrimeTest() {
     const check = () => {
       const now = performance.now();
       const early = openedAt.current + SKEL_MIN_MS - now;
-      if (now - from >= SKEL_MAX_MS || (early <= 0 && whole())) { reveal(); return; }
+      /* Hold the reveal until the LAST row has mounted, not just the first screen. The rows build a
+         couple per frame (builtCount), and a build commit is a main-thread task; revealing at the first
+         screen left the rest of that build running straight through the glide and the fade — a process
+         moving while the animation does. Waiting for the whole build keeps it behind the still skeleton,
+         where a long frame is invisible, so both the glide and the fade have the thread to themselves.
+         SKEL_MAX_MS is still the hard cap, so a stalled build can never strand the page on the shapes. */
+      const builtWhole = rows.length >= allRows.length;
+      if (now - from >= SKEL_MAX_MS || (early <= 0 && builtWhole && whole())) { reveal(); return; }
       timer = window.setTimeout(check, Math.max(SKEL_POLL_MS, early));
     };
     check();
     return () => window.clearTimeout(timer);
-  }, [rows, featAt, faceParts, reveal, artPic]);
+  }, [rows, allRows.length, featAt, faceParts, reveal, artPic]);
 
   /* Switched away along the bar: the rows (the shapes, if the page has not shown itself yet) slide off
      the way the pages go and fade, the picture fades faster, the panel stays — and the page is cut
      PAGE_EXIT.cutMs in (lib/tvPageSlide.ts). Each from where it is now. */
   useEffect(() => {
     registerPageExit((dir) => {
+      stopTrailer();
       const own = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '1px 0px');
       const going = revealed.current ? trackRef.current : skelRef.current?.firstElementChild;
       going?.animate([own ? { translate: `${-dir * PAGE_EXIT.px * p}px 0px`, opacity: 0 } : { opacity: 0 }],
@@ -1215,6 +1354,8 @@ export default function PrimeTest() {
    * player is open over the page, whose own Back comes first. */
   useEffect(() => registerBackHandler(() => {
     if (useModal.getState().target || usePlayer.getState().source) return false;
+    /* A playing trailer takes Back first: it stops and the page stays where it is. */
+    if (playingRef.current) { stopTrailer(); return true; }
     const root = rootRef.current;
     const track = trackRef.current;
     if (!root || !track || document.activeElement !== root) return false;
@@ -1290,6 +1431,9 @@ export default function PrimeTest() {
       if (leaving.current !== L) return;
       document.body.classList.add('pv-landed');
       if (L.panel) L.panel.style.visibility = 'hidden';
+      /* A standard-row trailer is NOT stopped here: it plays on as the title screen's backdrop (the
+         screen's own picture is held back by `pv-trailer-bg`), so there is no cut between the two pages.
+         It ends on Back or when the clip finishes (stopTrailer). The featured row stopped it at the press. */
     };
     const img = head.querySelector('img');
     if (img) img.decode().then(take, take);
@@ -1382,6 +1526,7 @@ export default function PrimeTest() {
     const tm = timers.current;
     [tm.land, tm.hand].forEach((id) => window.clearTimeout(id));
     document.body.classList.remove('pv-titled', 'pv-landed');
+    stopTrailer();                             // safety: never leave a bridge trailer running behind Back
     L.anims.forEach((a) => a.cancel());
     if (P) {
       const syn = P.querySelector<HTMLElement>('.pv-synopsis');
@@ -1409,6 +1554,9 @@ export default function PrimeTest() {
   /* ---- ONE STEP OF THE REMOTE ---- */
   const lastStep = useRef(0);
   const step = (dir: 'up' | 'down' | 'left' | 'right', held = false) => {
+    /* A directional press stops a playing trailer. (The hint is hidden only on a real move — below,
+       next to apply() — so a blocked press, e.g. Left at column 0, does not make it vanish.) */
+    stopTrailer();
     const s = st.current;
     const col = s.cols[s.row] ?? 0;
     if (dir === 'up') {
@@ -1422,6 +1570,9 @@ export default function PrimeTest() {
       s.cols[s.row] = col - 1;
     } else if (col < rows[s.row].items.length - 1) s.cols[s.row] = col + 1;
     else return;
+    /* A real move: hide the hint until the next rest re-adds `is-still` (no React render — the hint
+       element stays mounted, CSS just fades it under the class). */
+    rootRef.current?.classList.remove('is-still');
     lastStep.current = performance.now();
     pressHeld.current = held;
     apply();
@@ -1446,9 +1597,31 @@ export default function PrimeTest() {
     /* A title open over the page, or on its way: the page takes no keys till it is closed. */
     if (!rows.length || leaving.current.id !== '') return;
     if (e.key === 'Enter') {
+      if (e.repeat) return;                    // the OS repeats a held OK; the hold timer is enough
+      /* OK while a trailer plays opens the title — never a sound toggle. On the featured row the card
+         rises into the title head, so its trailer is stopped first and the title opens with no trailer.
+         On a standard row the trailer plays on in the top-right backdrop and is handed to the title's
+         own picture once it lands (handOver → stopTrailer), so there is no cut. */
+      if (playingRef.current) {
+        const it = rows[s.row].items[s.cols[s.row] ?? 0];
+        enter.current.held = true;             // this press is spent; the keyup must not also tap-open
+        if (s.row === featAt) stopTrailer();    // featured: the card rises into the head; no carry-over
+        else document.body.classList.add('pv-trailer-bg'); // standard: the trailer plays on as the backdrop
+        openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
+        return;
+      }
       const it = rows[s.row].items[s.cols[s.row] ?? 0];
-      /* The title screen opens on the picture shown here, not on another of the title's backdrops. */
-      openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
+      const canTrail = trailersOn && !!trailerUrl && !!it.imdb && it.imdb === dwelt?.imdb;
+      if (!canTrail) {
+        /* No trailer to offer — open at once, as OK always did. */
+        openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
+        return;
+      }
+      /* A trailer is ready: wait to tell a tap (opens the title) from a hold (plays the trailer). */
+      const en = enter.current;
+      en.held = false;
+      window.clearTimeout(en.timer);
+      en.timer = window.setTimeout(() => { en.timer = 0; en.held = true; playTrailer(); }, TRAILER_HOLD_MS);
       return;
     }
     const h = held.current;
@@ -1468,6 +1641,19 @@ export default function PrimeTest() {
     else if (!h.timer) h.timer = window.setTimeout(chain, left);
   };
   const onKeyUp = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      const en = enter.current;
+      window.clearTimeout(en.timer);
+      en.timer = 0;
+      /* Released before the hold fired, and nothing is playing: it was a tap — open the title. */
+      if (!en.held && !playingRef.current) {
+        const s = st.current;
+        const it = rows[s.row]?.items[s.cols[s.row] ?? 0];
+        if (it) openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
+      }
+      en.held = false;
+      return;
+    }
     const h = held.current;
     if (e.key !== h.key) return;
     h.key = '';
@@ -1493,6 +1679,9 @@ export default function PrimeTest() {
             <canvas />
           </div>
         ))}
+        {/* A held trailer mounts here — OVER the backdrop still but UNDER its fade and the title panel,
+            so the standard row's gradient and wordmark stay drawn over the moving trailer. */}
+        <div ref={artSlotRef} className="pv-trailer-slot" aria-hidden="true" />
         <div className="pv-art-fade" />
 
         {/* THE FOCUSED TITLE'S PANEL, twice (they take turns) — bottom-anchored, filled in by writeInfo. */}
@@ -1519,6 +1708,19 @@ export default function PrimeTest() {
         <div className="pv-ring" ref={(el) => { ringRefs.current[0] = el; }} />
         <div className="pv-ring is-big is-off" ref={(el) => { ringRefs.current[1] = el; }} />
       </div>
+
+      {/* "Hold select for trailer" hint — hidden for now (the user's call). To bring it back, restore the
+          `.pv-hint` block below (Prime-Video style, bottom-right of the hero; CSS + i18n are still in
+          place) and re-add the `dweltFeat` state (set in rest()) that its `.is-feat` modifier needs:
+          {trailersOn && !!trailerUrl && !playing && (
+            <div className={`pv-hint${dweltFeat ? ' is-feat' : ''}`} aria-hidden="true">
+              <svg className="pv-hint-ic" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                <circle cx="12" cy="12" r="3.4" fill="currentColor" />
+              </svg>
+              <span>{t('pv.holdForTrailer')}</span>
+            </div>
+          )} */}
 
       {/* THE PAGE BEFORE ITS PICTURES: grey shapes over it until it shows itself. */}
       <div className="pv-skel" ref={skelRef} aria-hidden="true">
