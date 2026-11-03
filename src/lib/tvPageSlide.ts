@@ -68,7 +68,11 @@ const TABS = ['/explore', '/', '/tv', '/movies', '/anime', '/prime', '/library']
  * to or from the Prime page does that: the Prime page leaves its own way (registerPageExit), any other
  * page leaving for it slides and fades whole; the Prime page then draws its arrival itself
  * (takeArrival), so `<main>` does not slide in. */
-const PRIME = '/prime';
+/* The Prime test page AND the Series / Movies / Anime tabs are the one PrimeTest component, and all
+ * switch Prime-Video's way: the page on screen leaves by its own hand (registerPageExit) and the one
+ * arriving draws its own slide (takeArrival), so `<main>` is not cross-slid for any of them. */
+const PRIME_LIKE = new Set(['/tv', '/movies', '/anime', '/prime']);
+const isPrimeLike = (path: string): boolean => PRIME_LIKE.has(path);
 /** The leaving page's rows: how far they slide (TV px of 1920), over how long, and when it is cut. */
 export const PAGE_EXIT = { px: 200, ms: 300, ease: 'ease-in-out', cutMs: 220 } as const;
 
@@ -185,8 +189,8 @@ function swapWhenRested(): void {
     stranded = window.setTimeout(() => { if (phase === 'held') { phase = 'idle'; unExit(); } }, STRANDED_MS);
     c?.();
   };
-  const prime = commitTo === PRIME || commitFrom === PRIME;
-  const cut = !prime || !dir ? 0 : pageExit ? pageExit(dir) : commitTo === PRIME ? exitWhole(dir) : 0;
+  const prime = isPrimeLike(commitTo) || isPrimeLike(commitFrom);
+  const cut = !prime || !dir ? 0 : pageExit ? pageExit(dir) : isPrimeLike(commitTo) ? exitWhole(dir) : 0;
   window.clearTimeout(exitTimer);
   if (cut) exitTimer = window.setTimeout(swap, cut);
   else swap();
@@ -259,7 +263,7 @@ export function pageArrived(from: string, to: string): void {
   const queued = !!commit && commitTo !== to;
   if (!queued) { commit = null; window.clearTimeout(waitTimer); }
   /* To the Prime page it draws its own arrival; from it, the next page is cut in, as before. */
-  if (a < 0 || b < 0 || a === b || reduceMotion() || from === PRIME || to === PRIME) {
+  if (a < 0 || b < 0 || a === b || reduceMotion() || isPrimeLike(from) || isPrimeLike(to)) {
     el.style.transform = rest();
     phase = queued ? 'wait' : 'idle';
     return;
