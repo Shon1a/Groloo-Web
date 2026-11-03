@@ -82,8 +82,12 @@ const PREFETCH: Record<string, () => Promise<unknown>> = {
   /* My Space renders Add-ons and Settings as sections, each a lazy chunk of its own
      (routes/Library.tsx) — fetched with the page rather than one round trip behind it. */
   '/library': () => Promise.all([import('../routes/Library'), import('../routes/Addons'), import('../routes/Settings')]),
-  /* Kept in hand, so the switch renders it at once rather than suspending (lib/lazyNow.ts). */
+  /* Kept in hand, so the switch renders it at once rather than suspending (lib/lazyNow.ts). The Series /
+     Movies / Anime tabs are the same Prime-layout chunk on a TV, so they prefetch it too. */
   '/prime': () => PrimeTestPage?.preload() ?? Promise.resolve(),
+  '/tv': () => PrimeTestPage?.preload() ?? Promise.resolve(),
+  '/movies': () => PrimeTestPage?.preload() ?? Promise.resolve(),
+  '/anime': () => PrimeTestPage?.preload() ?? Promise.resolve(),
 };
 
 const ITEMS = [

@@ -1,10 +1,12 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQueries } from '@tanstack/react-query';
 import { useHome, useMetaOf, useWarmDetail, useImdbTrailer } from '../lib/queries';
 import { useVideoTrailer } from '../components/DetailModal/useVideoTrailer';
 import { useSettings } from '../stores/settings';
-import { useT } from '../i18n/i18n';
-import { HOME_ROWS } from '../lib/home';
+import { useT, useLang, useGenre } from '../i18n/i18n';
+import { HOME_ROWS, PROVIDER_CATS } from '../lib/home';
+import { api } from '../lib/api';
+import { gridUrl } from '../lib/grid';
 import { imgW } from '../lib/img';
 import { barItemHere, setPageEntry } from '../lib/tvBar';
 import { registerBackHandler } from '../lib/tvKeys';
@@ -79,6 +81,37 @@ const ROW_CAP = 20;
    the grey shapes glide over all of it on the compositor — so the entrance stays smooth. */
 const BUILD_FIRST = 2;
 const BUILD_STEP = 2;
+
+/* A row has to carry at least this many titles to earn a place on a single-kind tab. The provider
+   rows (Netflix, Disney+ …) are mixed movie+series feeds; once a Movies/Series tab keeps only its
+   own kind, some shrink to two or three tiles, which reads as broken — those are dropped. */
+const MIN_ROW = 8;
+/* GENRE ROWS — what gives the single-kind tabs their body past the handful of home feeds. One
+   /api/catalog request per name (OR'd on the server for the mixed kinds). The names are TMDB's
+   MOVIE genre labels on purpose: the server maps each onto the right TV bucket for type=tv
+   (Action → Action & Adventure, Science Fiction → Sci-Fi & Fantasy — see TV_GENRE_ALIASES), so the
+   same list drives both tabs. The Movies tab leans on these hardest — its provider rows almost all
+   fall below MIN_ROW once trimmed to films, so the genre rows ARE its body; the Series tab keeps
+   full provider rows, so it takes a shorter list (and one that avoids the pairs that would collide
+   onto one TV bucket — no Action+Adventure, no Science Fiction+Fantasy together). */
+const GENRE_ROWS: Record<'movie' | 'series', string[]> = {
+  movie: ['Action', 'Comedy', 'Drama', 'Science Fiction', 'Horror', 'Animation', 'Thriller'],
+  series: ['Drama', 'Comedy', 'Crime', 'Mystery'],
+};
+/* The anime tab cannot use /api/catalog genre rows — that endpoint has no origin-country filter, so
+   a "genre=Action" row would be every action series, not anime. Instead its two feeds are pulled a
+   few pages deep and the pooled titles are re-cut client-side (so every row stays Japanese
+   animation). Primary genre barely splits them — ~90% read "Animation" — so the body comes from
+   ERAS, which do split cleanly (measured: 2020s/2010s/2000s/pre-2000 all clear MIN_ROW), plus
+   whatever non-Animation genre bucket is large enough to stand on its own. */
+const ANIME_POOLS = ['trending_anime', 'top_anime'];
+const ANIME_ERAS: { key: string; title: string; lo: number; hi: number }[] = [
+  { key: 'era_2020', title: 'New Releases', lo: 2020, hi: 9999 },
+  { key: 'era_2010', title: '2010s Anime', lo: 2010, hi: 2019 },
+  { key: 'era_2000', title: '2000s Anime', lo: 2000, hi: 2009 },
+  { key: 'era_classic', title: 'Classic Anime', lo: 0, hi: 1999 },
+];
+const ANIME_BUCKET_MAX = 6;   // cap the extra rows a sparse tab gains
 
 /* The rows' one move, on both axes (prime.css has it too, as --move). */
 const MOVE_MS = 380;
@@ -448,13 +481,104 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
   );
 });
 
-export default function PrimeTest() {
+/* The same Prime-Video layout serves four pages — the Prime test page and the Series / Movies / Anime
+   tabs — differing only in which rows they build. `kind` picks that: 'prime' keeps the mixed home feed;
+   the others keep ONE kind of content (a Movies tab shows only movies, etc.). */
+export type PvKind = 'prime' | 'movie' | 'series' | 'anime';
+
+export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   const t = useT();
   const { data } = useHome();
   const openModal = useModal((s) => s.open);
   const warm = useWarmDetail();
   const metaOf = useMetaOf();
   const qc = useQueryClient();
+  const { lang } = useLang();
+  const genreT = useGenre();
+
+  /* EXTRA ROWS beyond the home feed, so a single-kind tab is not three thin rows (the home feed only
+     carries one trending + one top + the mixed provider rows for each kind). Movies / Series pull a
+     catalogue row per genre; Anime pools its two feeds a few pages deep (the catalogue has no
+     origin filter, so it is bucketed client-side to stay anime). `prime` adds nothing — it keeps the
+     full mixed home feed it always had. Every request is keyed by its URL, so react-query dedupes and
+     caches them, and they fold in as they land (the build effect appends, never restarts — below). */
+  const fetchSpecs = useMemo<{ key: string; title: string; url: string }[]>(() => {
+    if (kind === 'movie' || kind === 'series') {
+      const type = kind === 'movie' ? 'movie' : 'tv';
+      return GENRE_ROWS[kind].map((g) => ({
+        key: `genre_${g}`,
+        title: genreT(g),
+        url: gridUrl({ kind: 'filter', filters: { genre: g, type }, title: g }, 1, lang),
+      }));
+    }
+    if (kind === 'anime') {
+      return ANIME_POOLS.flatMap((cat) => [1, 2, 3].map((page) => ({
+        key: `pool_${cat}_${page}`,
+        title: '',
+        url: gridUrl({ kind: 'category', cat, title: '' }, page, lang),
+      })));
+    }
+    return [];
+  }, [kind, lang, genreT]);
+
+  const fetched = useQueries({
+    queries: fetchSpecs.map((s) => ({
+      queryKey: ['pv-row', s.url],
+      staleTime: 10 * 60 * 1000,
+      queryFn: () => api<{ results?: MediaItem[] }>(s.url),
+    })),
+  });
+  /* useQueries hands back a fresh array every render; a ref lets the memo below read the latest data
+     without listing `fetched` as a dependency (which would rebuild the rows — and restart the whole
+     page build — on every render). `sig` moves only when a query actually resolves, so the rows
+     recompute exactly when new data arrives and no more often. */
+  const fetchedRef = useRef(fetched);
+  fetchedRef.current = fetched;
+  const sig = fetched.map((q) => q.dataUpdatedAt).join('|');
+  const extraRows = useMemo<PvRow[]>(() => {
+    const f = fetchedRef.current;
+    const withArt = (arr: MediaItem[]) => arr.filter((m) => m.backdrop).slice(0, ROW_CAP);
+    if (kind === 'movie' || kind === 'series') {
+      const out: PvRow[] = [];
+      fetchSpecs.forEach((s, i) => {
+        const items = withArt(f[i]?.data?.results ?? []);
+        if (items.length >= MIN_ROW) out.push({ key: s.key, title: s.title, items, feat: false });
+      });
+      return out;
+    }
+    if (kind === 'anime') {
+      // Pool every page of both anime feeds and dedupe by id — one list of Japanese animation to cut.
+      const seen = new Set<string | number>();
+      const pool: MediaItem[] = [];
+      for (const q of f) for (const m of (q?.data?.results ?? [])) {
+        if (m.id == null || seen.has(m.id) || !m.backdrop) continue;
+        seen.add(m.id);
+        pool.push(m);
+      }
+      const byPop = (a: MediaItem, b: MediaItem) => (b.pop ?? 0) - (a.pop ?? 0);
+      const out: PvRow[] = [];
+      // Any non-Animation primary genre big enough to be a row of its own (usually "Action &
+      // Adventure"); Animation itself is every title's genre, so it is skipped.
+      const buckets = new Map<string, MediaItem[]>();
+      for (const m of pool) {
+        const g = m.genre;
+        if (!g || g === '—' || g === 'Animation') continue;
+        (buckets.get(g) ?? (buckets.set(g, []), buckets.get(g)!)).push(m);
+      }
+      for (const [g, arr] of [...buckets.entries()].sort((a, b) => b[1].length - a[1].length)) {
+        if (arr.length >= MIN_ROW) out.push({ key: `anime_${g}`, title: genreT(g), items: arr.sort(byPop).slice(0, ROW_CAP), feat: false });
+      }
+      // Era rows — the axis that actually splits anime — newest first, each popularity-sorted.
+      for (const e of ANIME_ERAS) {
+        const arr = pool.filter((m) => { const y = parseInt(String(m.year), 10); return y >= e.lo && y <= e.hi; });
+        if (arr.length >= MIN_ROW) out.push({ key: e.key, title: e.title, items: arr.sort(byPop).slice(0, ROW_CAP), feat: false });
+      }
+      return out.slice(0, ANIME_BUCKET_MAX);
+    }
+    return [];
+    // `fetched` is intentionally NOT a dependency — it is a new array each render and is read through
+    // `fetchedRef`; `sig` moves exactly when a query's data changes, which is the only time to recompute.
+  }, [kind, fetchSpecs, genreT, sig]);
 
   /* THE PAGE BEFORE ITS PICTURES is the grey shapes alone; the rows mount under them. The whole list is
      computed here at once (cheap — it is plain data), but only `builtCount` of its rows are rendered, and
@@ -464,6 +588,44 @@ export default function PrimeTest() {
     const list =(cat: string) => (data?.rows?.[cat]?.results ?? []).filter((m) => m.backdrop).slice(0, ROW_CAP);
     const out: PvRow[] = [];
     const push = (key: string, title: string, items: MediaItem[], feat = false) => { if (items.length) out.push({ key, title, items, feat }); };
+
+    /* A single-kind tab (Series / Movies / Anime): the Prime layout, kept to one kind of content.
+       One trending feed leads, THEN the featured card (row 2, as on the Prime page), THEN the
+       top-rated feed and the streaming-service rows kept to that kind (anime has none but
+       Crunchyroll), and finally the genre rows (`extraRows`) that give the page its body. The genre
+       rows land a moment after the home feed, so they are appended at the END: the rows already on
+       screen keep their index, and the imperative draw never has a built row shift under it.
+       Featured MUST stay within the first BUILD_FIRST rows (it is row 2, index 1): its card art is
+       written once, on the first apply() while the opening rows mount, so a featured row that is not
+       yet built at that moment would never get its first picture and would open black. */
+    if (kind !== 'prime') {
+      const meta = {
+        movie: { T: 'movie', tr: 'sec.trending_movies', tp: 'sec.top_movies' },
+        series: { T: 'tv', tr: 'sec.trending_shows', tp: 'sec.top_shows' },
+        anime: { T: 'anime', tr: 'sec.trending_anime', tp: 'sec.top_anime' },
+      }[kind];
+      const T = meta.T;
+      push(`trending_${T}`, t(meta.tr), list(`trending_${T}`));
+      const feat = list(`top_${T}`).filter((m) => m.poster);
+      push('featured', t('tv.featured'), feat.length ? feat : list(`trending_${T}`).filter((m) => m.poster), true);
+      push(`top_${T}`, t(meta.tp), list(`top_${T}`));
+      if (kind === 'anime') {
+        push('prov_crunchyroll', t('sec.crunchyroll'), list('prov_crunchyroll'));
+      } else {
+        const isKind = kind === 'movie'
+          ? (m: MediaItem) => (m.type ?? 'movie') === 'movie'
+          : (m: MediaItem) => m.type === 'tv' || m.type === 'series';
+        for (const cat of PROVIDER_CATS) {
+          if (cat === 'prov_crunchyroll') continue;   // an anime house — not this tab's kind
+          const row = HOME_ROWS.find((r) => r.cat === cat);
+          // Drop a provider row that keeps too few of its own kind to look like a row (MIN_ROW).
+          if (row) { const items = list(cat).filter(isKind); if (items.length >= MIN_ROW) push(cat, t(row.key), items); }
+        }
+      }
+      out.push(...extraRows);
+      return out;
+    }
+
     push('trending_movie', t('sec.trending_movies'), list('trending_movie'));
     push('featured', t('tv.featured'), list('top_tv').filter((m) => m.poster), true);
     push('top10', 'Top 10', list('trending_tv').slice(0, 10));
@@ -472,22 +634,31 @@ export default function PrimeTest() {
       push(row.cat, t(row.key), list(row.cat));
     }
     return out;
-  }, [data?.rows, t]);
+  }, [data?.rows, t, kind, extraRows]);
   /* 0 until a frame after the first paint (the shapes are on screen first, as the whole build used to
      wait); then the first screen's rows together, then one more each frame. A press does not race this:
      the remote is in the bar until the page shows itself, which waits for the first screen's pictures —
      long after every row is mounted. */
   const [builtCount, setBuiltCount] = useState(0);
   const rows = useMemo(() => allRows.slice(0, builtCount), [allRows, builtCount]);
+  /* `allRows` grows after first paint — the genre rows (`extraRows`) fold in as they fetch. The build
+     must CONTINUE from where it is, never restart: a restart would drop `builtCount` back to
+     BUILD_FIRST, unmounting rows already on screen and re-running their imperative draw. A ref holds
+     the live count so a re-run resumes from it (clamped to at least the first screen), and only the
+     newly-appended rows are built. */
+  const builtRef = useRef(0);
+  builtRef.current = builtCount;
   useEffect(() => {
     if (!allRows.length) { setBuiltCount(0); return; }
+    if (builtRef.current >= allRows.length) { setBuiltCount(allRows.length); return; }
     let raf = 0;
     let timer = 0;
     const grow = (n: number) => {
       setBuiltCount(n);
       if (n < allRows.length) raf = requestAnimationFrame(() => grow(Math.min(n + BUILD_STEP, allRows.length)));
     };
-    raf = requestAnimationFrame(() => { timer = window.setTimeout(() => grow(Math.min(BUILD_FIRST, allRows.length))); });
+    const start = Math.max(builtRef.current, BUILD_FIRST);
+    raf = requestAnimationFrame(() => { timer = window.setTimeout(() => grow(Math.min(start, allRows.length))); });
     return () => { cancelAnimationFrame(raf); window.clearTimeout(timer); };
   }, [allRows]);
   /* Where each row starts on the track. */
