@@ -486,6 +486,11 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
    the others keep ONE kind of content (a Movies tab shows only movies, etc.). */
 export type PvKind = 'prime' | 'movie' | 'series' | 'anime';
 
+/* Each kind's path on the top bar — the key the page-slide stores its arrival direction under, so the
+   arriving tab reads back the side it came from (takeArrival). Must match the routes in App.tsx and the
+   PRIME_LIKE set in tvPageSlide.ts. */
+const ROUTE_OF: Record<PvKind, string> = { prime: '/prime', movie: '/movies', series: '/tv', anime: '/anime' };
+
 export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   const t = useT();
   const { data } = useHome();
@@ -536,6 +541,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   fetchedRef.current = fetched;
   const sig = fetched.map((q) => q.dataUpdatedAt).join('|');
   const extraRows = useMemo<PvRow[]>(() => {
+    void sig;   // recompute marker: `sig` moves exactly when a query's data lands (read below via ref)
     const f = fetchedRef.current;
     const withArt = (arr: MediaItem[]) => arr.filter((m) => m.backdrop).slice(0, ROW_CAP);
     if (kind === 'movie' || kind === 'series') {
@@ -1458,12 +1464,12 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   /* Switched to along the bar, the shapes glide in from the side the page comes from. */
   useLayoutEffect(() => {
     openedAt.current = performance.now();
-    const dir = takeArrival('/prime');
+    const dir = takeArrival(ROUTE_OF[kind]);
     const glide = skelRef.current?.firstElementChild;
     if (!dir || !glide) return;
     glide.animate([{ transform: `translate3d(${dir * SKEL_SHIFT * p}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }],
       { duration: SKEL_GLIDE_MS, delay: SKEL_GLIDE_AT, easing: SKEL_GLIDE_EASE, fill: 'backwards' });
-  }, [p]);
+  }, [p, kind]);
 
   useEffect(() => {
     if (!rows.length || revealed.current) return;
@@ -1502,16 +1508,22 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     return () => window.clearTimeout(timer);
   }, [rows, allRows.length, featAt, faceParts, reveal, artPic]);
 
-  /* Switched away along the bar: the rows (the shapes, if the page has not shown itself yet) slide off
-     the way the pages go and fade, the picture fades faster, the panel stays — and the page is cut
-     PAGE_EXIT.cutMs in (lib/tvPageSlide.ts). Each from where it is now. */
+  /* Switched away along the bar: the rows (the shapes, if the page has not shown itself yet) AND the
+     title panel slide off the way the pages go and fade, together; the picture top-right fades faster
+     where it is — and the page is cut PAGE_EXIT.cutMs in (lib/tvPageSlide.ts). Each from where it is
+     now. (The panel used to stay put, mirroring the reference, but the user wants it to leave with the
+     rest.) */
   useEffect(() => {
     registerPageExit((dir) => {
       stopTrailer();
       const own = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '1px 0px');
+      const slideOut = [own ? { translate: `${-dir * PAGE_EXIT.px * p}px 0px`, opacity: 0 } : { opacity: 0 }];
+      const opts = { duration: PAGE_EXIT.ms, easing: PAGE_EXIT.ease, fill: 'forwards' as const };
       const going = revealed.current ? trackRef.current : skelRef.current?.firstElementChild;
-      going?.animate([own ? { translate: `${-dir * PAGE_EXIT.px * p}px 0px`, opacity: 0 } : { opacity: 0 }],
-        { duration: PAGE_EXIT.ms, easing: PAGE_EXIT.ease, fill: 'forwards' });
+      going?.animate(slideOut, opts);
+      // The title panel is a sibling of the rows, not inside the track, so it needs its own matching
+      // slide-and-fade to leave with them instead of hanging on the empty page.
+      infoRefs.current.forEach((el) => el?.animate(slideOut, opts));
       rowArtRefs.current.forEach((el) => el?.animate([{ opacity: 0 }], { duration: EXIT_ART_MS, easing: 'linear', fill: 'forwards' }));
       return PAGE_EXIT.cutMs;
     });
