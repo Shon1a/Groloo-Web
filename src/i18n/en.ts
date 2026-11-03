@@ -17,6 +17,8 @@ const SEED: Record<string, string> = {
   'nav.series': 'Series',
   // TV home spotlight row heading.
   'tv.featured': 'Featured',
+  // Prime page: the hint shown on a rested title that has a trailer (hold OK to play it).
+  'pv.holdForTrailer': 'Hold select for trailer',
   'nav.tv_shows': 'TV Shows',
   'nav.movies': 'Movies',
   'nav.new_popular': 'New & Popular',

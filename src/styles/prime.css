@@ -37,6 +37,14 @@ body.pv-deep .tv-topnav { opacity: 0; transition: opacity 75ms linear; }
 .pv.is-shown .pv-show { opacity: 1; will-change: auto; transition: opacity 380ms ease-in-out 25ms; }
 .pv-skel { position: absolute; inset: 0; pointer-events: none; will-change: opacity; }
 .pv.is-shown .pv-skel { opacity: 0; transition: opacity 380ms linear; }
+/* PRE-LIT reveal: the page is switched on at full opacity a couple of frames BEFORE the skeleton
+   starts to fade (reveal(), behind groloo.primedecouple), while the still, opaque grey shapes still
+   cover it — so every layer pays its one-time upload there, on a frame the eye cannot see and nothing
+   is moving. Placed after the is-shown rule so that when both classes are on, this wins the tie: the
+   page holds opacity 1 with no fade of its own, and `is-shown` is left only driving the skeleton out
+   over an already-live page. The fade then carries no upload work — the row-build freeze is not traded
+   for a run of reveal stutters. (gaps between the shapes are the page's own black, so nothing shows.) */
+.pv.is-lit .pv-show { opacity: 1; transition: none; }
 .pv-skel::after {
   content: ''; position: absolute; inset: 0;
   background: linear-gradient(90deg, var(--bg), transparent calc(144 * var(--p)));
@@ -134,6 +142,11 @@ body.pv-page .tv-det-art.rdy { animation: pvTitleIn 200ms linear both; }
 /* Out of the panel, the picture waits for the hand-over: over the page it would cover the panel's copy
    where the two overlap. The page's own picture shows meanwhile. */
 body.pv-page:not(.pv-landed) .tv-det-art.is-pv { animation: none; opacity: 0; }
+/* OK pressed on a PLAYING standard-row trailer opens the title with the trailer carrying on as the
+   backdrop (PrimeTest adds `pv-trailer-bg`): the title screen keeps its own still hidden so the live
+   trailer behind — the page's own slot, with its gradient — shows through. Cleared when the trailer
+   stops (Back / clip end), and the still then fades in as usual. */
+body.pv-page.pv-trailer-bg .tv-det-art.is-pv { animation: none !important; opacity: 0 !important; }
 body.pv-page .tv-det-art img { object-position: center top; }
 @keyframes pvTitleIn { from { opacity: 0; } to { opacity: 1; } }
 
@@ -280,7 +293,7 @@ body.pv-page .tv-det-art img { object-position: center top; }
 /* Stacked from the bottom, as the panel is: wordmark (or name), pill + genre + age — where they stood
    over the "Included with" line, now gone (21px gap, 24px line, 35 from the bottom). */
 .pv-face-info {
-  position: absolute; left: calc(36 * var(--p)); bottom: calc(80 * var(--p));
+  position: absolute; left: calc(36 * var(--p)); bottom: calc(52 * var(--p));
   display: flex; flex-direction: column; align-items: flex-start;
 }
 .pv-face-info .pv-logo { max-width: calc(150 * var(--p)); max-height: calc(60 * var(--p)); }
@@ -309,3 +322,67 @@ body.pv-page .tv-det-art img { object-position: center top; }
 .pv:focus .pv-ring { opacity: 1; transition: opacity 170ms linear 230ms; }
 .pv-ring.is-big { top: calc(245 * var(--p)); width: calc(1038 * var(--p)); height: calc(590 * var(--p)); }
 .pv:focus .pv-ring.is-off, .pv-ring.is-off { opacity: 0; }
+
+/* ---- HOLD-OK TRAILER (PrimeTest) --------------------------------------------------------------
+   A trailer the viewer starts with a hold of OK — never autoplay (the user's call, so nothing on this
+   page decodes a video unasked). One <video> (useVideoTrailer) mounts into `.pv-trailer-slot`, which
+   PrimeTest sizes and places over the active surface: the top-right backdrop for a standard row, the
+   featured card for the featured row. It sits in `.pv`, above the stills; the still underneath simply
+   shows through until the picture has started (the engine adds `.on` to the video), so there is no
+   black box during the load and no coupling to the page's own imperative fades. */
+.pv-trailer-slot {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: calc(4 * var(--p));
+  /* Standard rows: the fixed backdrop box, the same one as .pv-row-art / .pv-art-fade. The slot sits
+     in the DOM after the backdrop and before its fade, so it carries NO z-index — it paints above the
+     still it covers and below the gradient and panel that follow, which keeps the row's dark fade and
+     the title's wordmark over the trailer. */
+  left: calc(620 * var(--p)); top: 0;
+  width: calc(1300 * var(--p)); height: calc(731 * var(--p));
+}
+.pv-trailer-slot:not(.is-live) { display: none; }
+/* The featured card's slot is nested in .pv-card (between its pictures and its fade) and fills it. */
+.pv-trailer-slot.is-feat { inset: 0; left: 0; top: 0; width: 100%; height: 100%; border-radius: calc(12 * var(--p)); }
+.pv-trailer-slot video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  border: 0;
+  background: #000;
+  opacity: 0;
+  transition: opacity .9s cubic-bezier(.4, 0, .2, 1);
+  pointer-events: none;
+}
+.pv-trailer-slot video.on { opacity: 1; }
+
+/* "◎ Hold select for trailer": Prime-Video style — a dark pill at the BOTTOM-RIGHT of the hero, led by
+   the select-button glyph. Shown only once the remote is still on a title that has a trailer (PrimeTest
+   toggles `.is-still` on a move/rest, so the hint never flickers through a navigation). The default spot
+   is the bottom-right of the standard top-right backdrop; `.is-feat` moves it to the featured card's
+   bottom-right corner (the card is pinned on the focus line at the big ring's box, 137..1175 / 245..835). */
+.pv-hint {
+  position: absolute;
+  right: calc(72 * var(--p));
+  bottom: calc(500 * var(--p));             /* lower-right of the backdrop picture, clear of the poster row */
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--p));
+  padding: calc(10 * var(--p)) calc(22 * var(--p));
+  border-radius: 999px;
+  background: rgba(16, 18, 24, .72);
+  color: rgba(255, 255, 255, .92);
+  font-size: calc(26 * var(--p));
+  font-weight: 600;
+  letter-spacing: .01em;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms linear;
+}
+/* Featured card: its bottom-right corner (clear of the bottom-left wordmark). */
+.pv-hint.is-feat { right: calc(790 * var(--p)); bottom: calc(290 * var(--p)); }
+/* Only while the page itself holds the remote (not when focus has gone up to the bar). */
+.pv.is-still:focus .pv-hint { opacity: 1; transition: opacity 220ms linear 140ms; }
+.pv-hint-ic { width: calc(30 * var(--p)); height: calc(30 * var(--p)); flex: 0 0 auto; }
