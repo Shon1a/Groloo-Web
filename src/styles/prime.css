@@ -386,3 +386,22 @@ body.pv-page .tv-det-art img { object-position: center top; }
 /* Only while the page itself holds the remote (not when focus has gone up to the bar). */
 .pv.is-still:focus .pv-hint { opacity: 1; transition: opacity 220ms linear 140ms; }
 .pv-hint-ic { width: calc(30 * var(--p)); height: calc(30 * var(--p)); flex: 0 0 auto; }
+
+/* ---- SWITCHED AWAY (PrimeTest's registerPageExit): the track SLIDES, the rows FADE ON THEIR LEAVES ----
+   The exit used to fade the whole .pv-track to 0. The track is a promoted layer (will-change: transform) and
+   every .pv-strip under it is its own promoted layer, so a group opacity on the track flattens the whole
+   subtree into one offscreen surface every frame of the fade — the very cost this file calls out and avoids
+   for dim/gone (an opacity over two layers is drawn offscreen first). Here the track only slides (translate),
+   and the fade is put on the leaf layers the page already fades, each compositing with its own opacity, no
+   flatten. Higher specificity than the dim/gone rules so it wins whatever a row's state at the press. */
+.pv.is-exiting .pv-row :is(.pv-row-title, .pv-strip, .pv-dim, .pv-card-fade) {
+  opacity: 0;
+  transition: opacity 300ms ease-in-out;
+}
+
+/* While a title screen is up (pv-landed) the rows have sunk and faded to nothing, but the track is still a
+   promoted, on-screen layer the compositor keeps flattening under the title's own fades (its cast and
+   buttons come in ~800ms after the press, over the dead track). Drop it from the paint until Back brings
+   it home — pv-landed is removed on close (PrimeTest's modal subscribe), which restores it for the fade back.
+   The two rings sink and fade with the rows and sit at 0 while landed too, so drop them from the paint with it. */
+body.pv-page.pv-landed :is(.pv-track, .pv-ring) { visibility: hidden; }

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { useQueryClient, useQueries } from '@tanstack/react-query';
 import { useHome, useMetaOf, useWarmDetail, useImdbTrailer } from '../lib/queries';
 import { useVideoTrailer } from '../components/DetailModal/useVideoTrailer';
@@ -654,6 +654,24 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
      newly-appended rows are built. */
   const builtRef = useRef(0);
   builtRef.current = builtCount;
+  /* THE REVEAL HOLDS DEFERRABLE MAIN-THREAD WORK FOR THE LENGTH OF THE FADE (fadeHoldRef, set in
+     `reveal`): the off-screen rows past the first screen (the build, below) and the off-screen tiles'
+     canvas draws (the picture pump, below) both wait out the ~380ms skeleton→page fade and land AFTER
+     it, so the fade keeps the compositor to itself and never has a build commit or a drawImage in the
+     middle of it. The first screen is never held — it must be whole for the reveal to fire at all.
+     Before this, the reveal instead waited for the WHOLE build so the fade ran clean; but a single-kind
+     tab's genre rows arrive over the network, so that wait routinely hit SKEL_MAX_MS (measured: Series
+     ~3.3s, Movies ~2.8s on the shapes) and then revealed mid-build anyway. Revealing at the first screen
+     and holding the off-screen work gives both: the page shows as soon as it is drawn, and the fade is
+     still alone. */
+  const fadeHoldRef = useRef(false);
+  /* AND THE SAME HOLD FOR THE ARRIVAL GLIDE (glideHoldRef, set in the glide layout effect below): when the
+     page is switched to along the bar its skeleton glides in (~250ms) while the remount's build train
+     (grow, 2 rows/frame) is still running — a build commit is a main-thread task, so the off-screen rows
+     mounting under the glide dropped its frames (the worst block, the tab-switch). The FIRST screen (rows
+     0 and 1, which the reveal waits on) still builds at once — only the rows past it are held, so the
+     reveal is not delayed — and they land in the dead air after the glide, before the reveal fade. */
+  const glideHoldRef = useRef(false);
   useEffect(() => {
     if (!allRows.length) { setBuiltCount(0); return; }
     if (builtRef.current >= allRows.length) { setBuiltCount(allRows.length); return; }
@@ -661,7 +679,10 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     let timer = 0;
     const grow = (n: number) => {
       setBuiltCount(n);
-      if (n < allRows.length) raf = requestAnimationFrame(() => grow(Math.min(n + BUILD_STEP, allRows.length)));
+      if (n >= allRows.length) return;
+      // Past the first screen, don't mount more rows while the reveal fade OR the arrival glide is running.
+      if (n >= BUILD_FIRST && (fadeHoldRef.current || glideHoldRef.current)) { timer = window.setTimeout(() => grow(n), 48); return; }
+      raf = requestAnimationFrame(() => grow(Math.min(n + BUILD_STEP, allRows.length)));
     };
     const start = Math.max(builtRef.current, BUILD_FIRST);
     raf = requestAnimationFrame(() => { timer = window.setTimeout(() => grow(Math.min(start, allRows.length))); });
@@ -687,7 +708,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   const st = useRef({ row: 0, cols: [] as number[] });
   /* What is on screen now, to tell what a press changed. */
   const shown = useRef({ row: -1, col: -1, key: '', item: null as MediaItem | null });
-  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0, skel: 0, land: 0, hand: 0 });
+  const timers = useRef({ text: 0, write: 0, rest: 0, artOut: 0, artIn: 0, away: 0, ring: 0, skel: 0, land: 0, hand: 0, build: 0 });
   /* Whether the page has shown itself yet (THE PAGE BEFORE ITS PICTURES). */
   const revealed = useRef(false);
   /* Whether the press being applied is a held key's step. */
@@ -1184,15 +1205,20 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     const feat = s.row === featAt;
     const wasFeat = was.row === featAt;
 
-    document.body.classList.toggle('pv-deep', s.row > 0);
-    track.style.transform = trackAt(s.row);
-    rowEls.current.forEach((el, i) => {
-      if (!el) return;
-      /* Over the featured card there is no panel: the row above it stays, at half. */
-      const above = feat && i === s.row - 1;
-      el.classList.toggle('is-gone', i < s.row && !above);
-      el.classList.toggle('is-dim', i > s.row || above);
-    });
+    /* Only the ROW-dependent writes need redoing when the row changes; a horizontal (same-row) press
+       leaves pv-deep, the track's vertical transform and every row's dim/gone state identical, so skip
+       them (classList.toggle is a no-op when unchanged, but this also saves the track write and the loop). */
+    if (s.row !== was.row) {
+      document.body.classList.toggle('pv-deep', s.row > 0);
+      track.style.transform = trackAt(s.row);
+      rowEls.current.forEach((el, i) => {
+        if (!el) return;
+        /* Over the featured card there is no panel: the row above it stays, at half. */
+        const above = feat && i === s.row - 1;
+        el.classList.toggle('is-gone', i < s.row && !above);
+        el.classList.toggle('is-dim', i > s.row || above);
+      });
+    }
     rowEls.current[s.row]?.querySelectorAll<HTMLElement>('.pv-strip').forEach((strip) => {
       strip.style.transform = `translate3d(${-Math.round(col * TILE.pitch * p)}px, 0, 0)`;
     });
@@ -1234,8 +1260,11 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
        card the faces one press away come first, on their own (the likeliest next press's). */
     const rest = () => {
       /* Rested on this title: let the trailer resolve for it and show the "Hold select for trailer"
-         hint (CSS reveals it under `.pv.is-still`). One render per rest, with the remote still. */
-      setDwelt(item);
+         hint (CSS reveals it under `.pv.is-still`). `dwelt` is read ONLY by the trailer path (useImdbTrailer,
+         canTrail), so skip the whole re-render when trailers are off; when on, defer it as a transition so a
+         press that lands while this rest's render is in flight preempts it instead of colliding with the move
+         (the far-from-press frames a held/quick-second press showed were this render landing mid-glide). */
+      if (trailersOn) startTransition(() => setDwelt(item));
       rootRef.current?.classList.add('is-still');
       warm(item, undefined, () => shown.current.item === item, item.bgArt);
       const near: [number, number][] = [[s.row, col + 1], [s.row, col - 1], [s.row + 1, s.cols[s.row + 1] ?? 0], [s.row - 1, s.cols[s.row - 1] ?? 0]];
@@ -1378,6 +1407,11 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
           const bmp = await pixels(url, tw, th);
           if (dead) bmp?.close(); else ready.set(cv, { url, bmp });
         }));
+        /* The off-screen tiles' draws (drawImage, main thread) wait out the reveal fade, which only
+           ever shows the first screen — its tiles are already on by the time the page shows itself.
+           Decoding above stays off-thread throughout; this holds only the paint, so the fade is alone.
+           `running` stays true, so the pump is paused here rather than re-armed (which would spin). */
+        while (fadeHoldRef.current && !dead) await new Promise((r) => setTimeout(r, 48));
         if (!still()) break;
         tiles.forEach((tl) => draw(tl.cv));
       }
@@ -1437,6 +1471,11 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     const root = rootRef.current;
     if (revealed.current || !root) return;
     revealed.current = true;
+    /* Hold the deferrable work (off-screen rows' build, off-screen tiles' canvas draws) off the thread
+       until the fade is done — see the build effect and the picture pump. Released a beat past the
+       skeleton's fade so nothing lands through it. */
+    fadeHoldRef.current = true;
+    timers.current.build = window.setTimeout(() => { fadeHoldRef.current = false; }, SKEL_OUT_MS + 80);
     /* Show the page's picture and arm the skeleton's fade — the visible reveal. */
     const showPage = () => {
       root.classList.add('is-shown');
@@ -1467,8 +1506,15 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     const dir = takeArrival(ROUTE_OF[kind]);
     const glide = skelRef.current?.firstElementChild;
     if (!dir || !glide) return;
+    /* Hold the off-screen build train off the thread while this glide runs (glideHoldRef, read by the build
+       effect above), so a build commit never lands under the arrival animation. Released on a real timer,
+       not the animation's finish, so a backgrounded tab whose animation never fires still builds. Only when
+       dir is set — a deep link or a Down into the page (dir 0) has no glide and builds at once. */
+    glideHoldRef.current = true;
     glide.animate([{ transform: `translate3d(${dir * SKEL_SHIFT * p}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }],
       { duration: SKEL_GLIDE_MS, delay: SKEL_GLIDE_AT, easing: SKEL_GLIDE_EASE, fill: 'backwards' });
+    const release = window.setTimeout(() => { glideHoldRef.current = false; }, SKEL_GLIDE_AT + SKEL_GLIDE_MS);
+    return () => { window.clearTimeout(release); glideHoldRef.current = false; };
   }, [p, kind]);
 
   useEffect(() => {
@@ -1494,19 +1540,21 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     const check = () => {
       const now = performance.now();
       const early = openedAt.current + SKEL_MIN_MS - now;
-      /* Hold the reveal until the LAST row has mounted, not just the first screen. The rows build a
-         couple per frame (builtCount), and a build commit is a main-thread task; revealing at the first
-         screen left the rest of that build running straight through the glide and the fade — a process
-         moving while the animation does. Waiting for the whole build keeps it behind the still skeleton,
-         where a long frame is invisible, so both the glide and the fade have the thread to themselves.
-         SKEL_MAX_MS is still the hard cap, so a stalled build can never strand the page on the shapes. */
-      const builtWhole = rows.length >= allRows.length;
-      if (now - from >= SKEL_MAX_MS || (early <= 0 && builtWhole && whole())) { reveal(); return; }
+      /* Reveal once the FIRST SCREEN is drawn (whole() checks rows 0 and 1 and the featured card — the
+         only rows on screen behind the shapes), not the whole build. The rows build a couple per frame
+         and a build commit is a main-thread task, so revealing with the rest of the build still running
+         let a long frame land in the glide and the fade. The build is paused for the length of the fade
+         instead (holdBuildRef, set in `reveal`), so the off-screen rows mount after it — the animation
+         keeps the thread to itself without the page waiting on rows nobody can see yet. That wait used
+         to reach the whole build, which on a single-kind tab meant waiting on genre rows coming over the
+         network: it routinely hit SKEL_MAX_MS (~3.3s Series, ~2.8s Movies) and revealed mid-build anyway.
+         SKEL_MAX_MS stays the hard cap, so a stalled first screen can never strand the page on the shapes. */
+      if (now - from >= SKEL_MAX_MS || (early <= 0 && whole())) { reveal(); return; }
       timer = window.setTimeout(check, Math.max(SKEL_POLL_MS, early));
     };
     check();
     return () => window.clearTimeout(timer);
-  }, [rows, allRows.length, featAt, faceParts, reveal, artPic]);
+  }, [rows, featAt, faceParts, reveal, artPic]);
 
   /* Switched away along the bar: the rows (the shapes, if the page has not shown itself yet) AND the
      title panel slide off the way the pages go and fade, together; the picture top-right fades faster
@@ -1519,8 +1567,19 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
       const own = typeof CSS !== 'undefined' && !!CSS.supports?.('translate', '1px 0px');
       const slideOut = [own ? { translate: `${-dir * PAGE_EXIT.px * p}px 0px`, opacity: 0 } : { opacity: 0 }];
       const opts = { duration: PAGE_EXIT.ms, easing: PAGE_EXIT.ease, fill: 'forwards' as const };
-      const going = revealed.current ? trackRef.current : skelRef.current?.firstElementChild;
-      going?.animate(slideOut, opts);
+      if (revealed.current) {
+        /* The rows SLIDE on the track (translate, compositor-cheap) but FADE on their leaf layers via
+           `is-exiting` (prime.css) — never the track as a group. A group opacity over the ~15-25 promoted
+           strip layers forces them all into one offscreen surface every frame, the exact flatten this page
+           avoids for dim/gone. Each strip/title/dim is its own layer, so fading them apart needs no flatten. */
+        rootRef.current?.classList.add('is-exiting');
+        trackRef.current?.animate(
+          own ? [{ translate: '0px 0px' }, { translate: `${-dir * PAGE_EXIT.px * p}px 0px` }] : [{ opacity: 1 }, { opacity: 0 }],
+          opts,
+        );
+      } else {
+        skelRef.current?.firstElementChild?.animate(slideOut, opts);
+      }
       // The title panel is a sibling of the rows, not inside the track, so it needs its own matching
       // slide-and-fade to leave with them instead of hanging on the empty page.
       infoRefs.current.forEach((el) => el?.animate(slideOut, opts));
