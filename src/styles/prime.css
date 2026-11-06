@@ -220,7 +220,9 @@ body.pv-page .tv-det-art img { object-position: center top; }
   padding: calc(5 * var(--p)) 0 0 calc(144 * var(--p));
   font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p)); font-weight: 700;
   transition: opacity var(--dim);
-  will-change: opacity;
+  /* No standing will-change: a title only fades on an up/down row change (is-dim/is-gone), which Chromium
+     auto-composites for the fade's duration; a permanent hint just kept ~13 idle layers backed on the GPU
+     (nothing during left/right) and folds into the already-promoted .pv-track at rest. */
 }
 /* EACH STRIP IS ONE LAYER, and two things here keep it so (measured: 35 extra layers without them).
    The strip is as wide as its tiles: a tile that hangs past the strip's own box, 37px from the last one,
@@ -267,6 +269,13 @@ body.pv-page .tv-det-art img { object-position: center top; }
    drawn again with it. */
 .pv-clip.is-left { left: 0; right: auto; width: calc(137 * var(--p)); will-change: opacity; }
 .pv-clip.is-left > .pv-strip { padding-left: calc(144 * var(--p)); margin-left: 0; }
+/* The featured row, once focus is >1 away, is is-gone (opacity 0): drop its two full-width poster strips
+   (~8432x576 — the two biggest layers on the page) from the compositor so a weak TV GPU stops backing them.
+   will-change:auto ALONE will not de-promote: each strip keeps an inline translate3d() from apply(), and a
+   3D transform is itself a compositing trigger, so the transform is neutralised too. Active only while the
+   row is invisible (nothing is seen); re-promoted + re-warmed one row before focus returns (PrimeTest
+   apply(): the is-cold toggle resets warmfeat so the abs<=1 warmFeatured re-uploads them in time). */
+.pv-feat.is-cold .pv-strip { will-change: auto; transform: none !important; transition: none; }
 /* The poster before the card fades into the screen's left edge: black at 0, clear where it ends (112). */
 .pv-clip.is-left::after {
   content: ''; position: absolute; inset: 0;
@@ -317,10 +326,12 @@ body.pv-page .tv-det-art img { object-position: center top; }
   border: calc(3 * var(--p)) solid rgb(240, 240, 245); border-radius: calc(12 * var(--p));
   opacity: 0;
   transition: opacity 100ms linear;
-  will-change: opacity;
+  /* The small ring carries no standing will-change: it is idle through every standard up/down/left/right
+     move (focus never leaves .pv), so promoting it permanently just held an extra layer. The BIG ring keeps
+     will-change (below) so featured-row crossings don't re-upload its 1038x590 border mid-move. */
 }
 .pv:focus .pv-ring { opacity: 1; transition: opacity 170ms linear 230ms; }
-.pv-ring.is-big { top: calc(245 * var(--p)); width: calc(1038 * var(--p)); height: calc(590 * var(--p)); }
+.pv-ring.is-big { top: calc(245 * var(--p)); width: calc(1038 * var(--p)); height: calc(590 * var(--p)); will-change: opacity; }
 .pv:focus .pv-ring.is-off, .pv-ring.is-off { opacity: 0; }
 
 /* ---- HOLD-OK TRAILER (PrimeTest) --------------------------------------------------------------
