@@ -184,8 +184,9 @@ const AWAY_MS = 130;
    buttons come from below). At the press the rows sink 87px (233ms, easing in), faded by 170ms, and
    the panel rises whole to where the title screen's column starts (HEAD_Y, 233ms), on its own left
    edge. Its synopsis then opens to the whole one (EXPAND_MS), and the title screen takes over the same
-   block, adding the cast under it and its buttons from below (prime.css). Back cuts the wordmark home
-   and fades the rest in (170ms). */
+   block, adding the cast under it and its buttons from below (prime.css). Back runs the way in backwards:
+   the panel comes down from the column, the rows and ring rise back up, the opened synopsis folds away
+   (CLOSE_EASE). */
 const OPEN_MS = 233;
 const OPEN_FADE_MS = 170;
 const OPEN_ROWS_PX = 87;
@@ -193,7 +194,8 @@ const OPEN_EASE = 'cubic-bezier(.25, 0, .55, .25)';
 const OPEN_RISE_EASE = 'cubic-bezier(.15, 0, .65, .85)';
 const HEAD_Y = 84;
 const EXPAND_MS = 200;
-const BACK_FADE_MS = 170;
+/* Back plays openTitle in reverse: the panel comes down, the rows rise — decelerating into place. */
+const CLOSE_EASE = 'cubic-bezier(.2, .6, .3, 1)';
 /* THE PAGE BEFORE ITS PICTURES, as Prime Video's (four switches along its bar, Oct 30, and a still of
    the emulator for the shapes). Switched to, the page is grey shapes — four bars where the panel goes,
    two rows of tiles — cut in 200px to the side it comes from and gliding home a frame later
@@ -204,7 +206,9 @@ const BACK_FADE_MS = 170;
    after its rows came, with what it has. x, y, width, height, corner. */
 const SKELETON: [number, number, number, number, number][] = [
   [144, 253, 300, 33, 12], [144, 310, 500, 120, 16], [144, 454, 300, 33, 12], [144, 508, 246, 86, 12],
-  ...[666, 946].flatMap((y) => [0, 1, 2, 3, 4].map((k): [number, number, number, number, number] => [TILE.x + k * TILE.pitch, y, TILE.w, TILE.h, 12])),
+  /* Same forms as before; only the two tile rows moved up (was 666/946) to land on the real rows — row 0's
+     tiles sit at y 612, and the row below (the featured row) at y 894. */
+  ...[612, 894].flatMap((y) => [0, 1, 2, 3, 4].map((k): [number, number, number, number, number] => [TILE.x + k * TILE.pitch, y, TILE.w, TILE.h, 12])),
 ];
 const SKEL_SHIFT = 200;
 const SKEL_GLIDE_AT = 16;
@@ -340,7 +344,7 @@ const factsOf = (el: HTMLElement): PvHead['facts'] =>
    faded, the panel that rose, its synopsis as it was before it opened, and over the featured card the
    title that panel held. */
 const notLeaving = () => ({
-  id: '' as string | number, anims: [] as Animation[], faded: [] as Element[], panel: null as HTMLElement | null, syn: '', held: '',
+  id: '' as string | number, anims: [] as Animation[], faded: [] as Element[], panel: null as HTMLElement | null, syn: '', held: '', dy: 0,
 });
 
 /* A picture's pixels, decoded off the main thread, to be drawn into a canvas once — at the size it is
@@ -1747,6 +1751,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     panel.style.bottom = 'auto';
     const box = panel.getBoundingClientRect();
     const dy = Math.round(HEAD_Y * p - box.top);
+    L.dy = dy;                                 // how far it rose — Back brings it back down from here
     document.body.style.setProperty('--pv-head-x', `${box.left}px`);
     document.body.style.setProperty('--pv-head-y', `${box.top + dy}px`);
     const to = `translate3d(0px, ${dy}px, 0px)`;
@@ -1764,9 +1769,13 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     }, OPEN_MS);
     return head;
   };
-  /* Closed: the wordmark is home at once and the rest fades in where it was (BACK_FADE_MS), as the
-     reference's page comes back. The ring is left to its own fade, which waits for the remote. Another
-     title opened from the title screen leaves no panel here (it draws its own head). */
+  /* Closed: openTitle in reverse. The title screen unmounts at the press (target → null), and the panel,
+     drawn the same as its head, takes the head's place at HEAD_Y in that frame and carries the way-in
+     backwards — down to its home while the rows and ring rise from where they sank and the opened synopsis
+     folds away. Each piece is pinned at its open end-state first, so cancelling the open's animations under
+     them snaps nothing, and each clears itself to rest on arrival so no finished animation is left on the
+     compositor. The ring keeps its own opacity (it waits for the remote); it only rides the rise so it
+     stays on its tile. A title opened from the title screen (More Like This) leaves no panel here. */
   useEffect(() => useModal.subscribe((m) => {
     const L = leaving.current;
     const P = L.panel;
@@ -1779,27 +1788,44 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     [tm.land, tm.hand].forEach((id) => window.clearTimeout(id));
     document.body.classList.remove('pv-titled', 'pv-landed');
     stopTrailer();                             // safety: never leave a bridge trailer running behind Back
+    const feat = info.current.hidden;
+    const sank = L.faded as HTMLElement[];
+    const track = trackRef.current;
+    const down = `0px ${OPEN_ROWS_PX * p}px`;
+    /* Pin each piece at the open's end-state, so cancelling the open animations under them snaps nothing. */
+    for (const el of sank) el.style.translate = down;
+    if (track) track.style.opacity = '0';
+    if (P) P.style.transform = `translate3d(0px, ${L.dy}px, 0px)`;
     L.anims.forEach((a) => a.cancel());
+    /* Rise: the rows and ring come back up together, the track fading in with them. */
+    for (const el of sank) {
+      const a = el.animate([{ translate: down }, { translate: '0px 0px' }], { duration: OPEN_MS, easing: CLOSE_EASE, fill: 'both' });
+      a.onfinish = () => { el.style.translate = ''; a.cancel(); };
+    }
+    if (track) {
+      const a = track.animate([{ opacity: 0 }, { opacity: 1 }], { duration: OPEN_FADE_MS, easing: 'linear', fill: 'both' });
+      a.onfinish = () => { track.style.opacity = ''; a.cancel(); };
+    }
+    /* Down: the panel comes home from HEAD_Y, its opened synopsis folding back to two lines. */
     if (P) {
-      const syn = P.querySelector<HTMLElement>('.pv-synopsis');
-      if (syn && L.syn) {
-        syn.textContent = L.syn;
-        syn.classList.remove('is-open');
-      }
-      P.style.top = '';
-      P.style.bottom = '';
       P.style.visibility = '';
-      if (info.current.hidden) {
-        /* Over the featured card the panel goes back to the title it held (at rest, above). */
+      const a = P.animate([{ transform: `translate3d(0px, ${L.dy}px, 0px)` }, { transform: 'translate3d(0px, 0px, 0px)' }], { duration: OPEN_MS, easing: CLOSE_EASE, fill: 'both' });
+      a.onfinish = () => { P.style.transform = ''; P.style.top = ''; P.style.bottom = ''; a.cancel(); };
+      const syn = P.querySelector<HTMLElement>('.pv-synopsis');
+      const more = syn?.querySelector<HTMLElement>('.pv-more');
+      const fold = () => { if (syn && L.syn) { syn.textContent = L.syn; syn.classList.remove('is-open'); } };
+      if (more) more.animate([{ opacity: 1 }, { opacity: 0 }], { duration: OPEN_FADE_MS, easing: 'linear', fill: 'forwards' }).onfinish = fold;
+      else fold();
+      if (feat) {
+        /* Over the featured card the panel is hidden at rest: it fades out as it comes down and goes back
+           to the title it held. */
+        P.animate([{ opacity: 1 }, { opacity: 0 }], { duration: OPEN_FADE_MS, easing: 'linear' });
         const c = L.held.lastIndexOf(':');
         const R = rows.find((r) => r.key === L.held.slice(0, c));
         const col = Number(L.held.slice(c + 1));
         if (R?.items[col]) writeInfo(info.current.front, R.items[col], R, col);
-      } else {
-        for (const el of P.children) if (!el.matches('.pv-logo, .pv-title') && el.getClientRects().length) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: BACK_FADE_MS, easing: 'linear' });
       }
     }
-    for (const el of L.faded) if (!ringRefs.current.includes(el as HTMLDivElement)) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: BACK_FADE_MS, easing: 'linear' });
     leaving.current = notLeaving();
   }), [rows, writeInfo]);
 
