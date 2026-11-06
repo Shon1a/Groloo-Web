@@ -70,7 +70,11 @@ const TITLE_H = 45;
 /* Between one row's tiles and the next row's title. */
 const ROW_GAP = 21;
 const FOCUS_BOTTOM = 828;
-const ROW_CAP = 20;
+/* Items kept per row. 14 (was 20): each row's `.pv-strip` is a promoted compositor layer as wide as its
+   tiles, and on a weak TV GPU the full set of full-width strips exceeds GPU memory and gets evicted then
+   re-uploaded mid-move — dropped frames a desktop can't reproduce. 14 tiles ~= 5936px strips (~30% less
+   backing per row) and still well above MIN_ROW (8). Raise toward 20 if a stronger set wants deeper rows. */
+const ROW_CAP = 14;
 /* THE PAGE IS MOUNTED A FEW ROWS AT A TIME, not all in one commit (see the build effect below). The full
    row list is known at once; only how many rows are in the DOM grows. BUILD_FIRST is the first screen's
    rows, mounted together so the reveal never shows the page a row short (it checks rows 0 and 1); then
@@ -1217,6 +1221,12 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
         const above = feat && i === s.row - 1;
         el.classList.toggle('is-gone', i < s.row && !above);
         el.classList.toggle('is-dim', i > s.row || above);
+        /* The featured row, when >1 away (invisible, is-gone), drops its two full-width poster strips from
+           the compositor (prime.css `.pv-feat.is-cold`) to free a weak TV GPU's memory. Clearing warmfeat
+           lets the abs<=1 warmFeatured below re-upload the re-promoted strips one row before focus returns. */
+        const cold = i === featAt && Math.abs(i - s.row) > 1;
+        el.classList.toggle('is-cold', cold);
+        if (cold) el.querySelectorAll<HTMLElement>('.pv-strip').forEach((n) => { delete n.dataset.warmfeat; });
       });
     }
     rowEls.current[s.row]?.querySelectorAll<HTMLElement>('.pv-strip').forEach((strip) => {
