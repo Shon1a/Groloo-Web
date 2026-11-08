@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type FocusEvent, type JSX, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
