@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type FocusEvent } from 'react';
+import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import { flushPageSwitch, pageSwitchPending, slideTo } from '../lib/tvPageSlide';
+import { barItemHere, openRail, pageEntry } from '../lib/tvBar';
+import { registerBackHandler } from '../lib/tvKeys';
 import { PrimeTestPage } from '../routes/primeTestPage';
 
 /* THE TV TOP MENU BAR — rendered ONLY in the `--mode tv` build (AppShell gates it on
@@ -40,8 +42,51 @@ const SearchGlyph = () => (
     <circle cx="11" cy="11" r="8" />
   </svg>
 );
+/* The rail's Main menu (the top bar) and Settings, as the reference draws them (Nov 9). */
+const MenuGlyph = () => (
+  <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true" {...ICON}>
+    <rect width="7" height="7" x="3" y="3" rx="1" /><rect width="7" height="7" x="14" y="3" rx="1" />
+    <rect width="7" height="7" x="14" y="14" rx="1" /><rect width="7" height="7" x="3" y="14" rx="1" />
+  </svg>
+);
+const GearGlyph = () => (
+  <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true" {...ICON}>
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+/* My Space in the side rail (Nov 8): the same person outline My Space's own Account tab uses. */
+const ProfileGlyph = () => (
+  <svg width={24} height={24} viewBox="0 0 24 24" aria-hidden="true" {...ICON}>
+    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+    <circle cx="12" cy="7" r="4" />
+  </svg>
+);
 
-const GATED = ['/addons', '/settings', '/library'];
+/* ---- THE SIDE RAIL: SEARCH AND MY SPACE, WHERE PRIME VIDEO KEEPS THEM (Nov 8, the user's call) ----
+ * Measured off the reference on the emulator (1080p): closed, dim glyphs in the left margin (24px,
+ * centre x 70, 57px apart, ~.71 white); Left off a row's first card opens it — a dark sheet from the
+ * left edge and a wash over the page, the glyphs brightening as the items spread to 72px apart,
+ * the top bar gone — in ~230ms; it closes in ~120ms (Right or Back) and the remote goes back where it
+ * came from. The item the remote is on wears a white rounded box behind its glyph only (57x56, r8),
+ * fading in over ~215ms; the one it left cuts. No labels, no account disc (the user's call). The rail
+ * does not follow focus: OK opens the page (the reference's does the same). TvSpatialNav keeps the
+ * rail out of its geometry; it is entered only through `openRail` (lib/tvBar.ts). */
+/* Nov 9 (the user's call, from the reference): Main menu and Settings join it, and My Space shows only
+ * while the rail is open, above the rest (closed: Search / Main menu / Settings at y 483 / 540 / 597;
+ * open: My Space 397, then 467 / 540 / 612). Main menu hands the remote to the top bar's own item;
+ * Settings opens the Settings page (routes/TvSettings.tsx). The page's own item is `data-current` — Main
+ * menu for every page on the bar — and is where the rail opens. */
+const RAIL = [
+  { to: '/library', key: 'myspace.title', cls: 'tv-rail-me' },
+  { to: '/explore', key: 'nav.search', cls: 'tv-rail-search' },
+  { to: 'menu', key: 'nav.main_menu', cls: 'tv-rail-menu' },
+  { to: '/settings', key: 'settings.title', cls: 'tv-rail-set' },
+] as const;
+const RAIL_GLYPH: Record<string, () => JSX.Element> = { '/library': ProfileGlyph, '/explore': SearchGlyph, menu: MenuGlyph, '/settings': GearGlyph };
+
+/* Settings is open to a guest, as the reference's is (it lists Sign in). */
+const GATED = ['/library'];
 
 // Centre order: Search (icon) · Home · Series · Movies · Anime. Search is the icon button
 // rendered first; the rest are text items.
@@ -81,10 +126,10 @@ const PREFETCH: Record<string, () => Promise<unknown>> = {
   '/explore': () => import('../routes/Explore'),
   /* My Space renders Add-ons and Settings as sections, each a lazy chunk of its own
      (routes/Library.tsx) — fetched with the page rather than one round trip behind it. */
-  '/library': () => Promise.all([import('../routes/Library'), import('../routes/Addons'), import('../routes/Settings')]),
+  '/library': () => PrimeTestPage?.preload() ?? Promise.resolve(),
   /* Kept in hand, so the switch renders it at once rather than suspending (lib/lazyNow.ts). The Series /
-     Movies / Anime tabs are the same Prime-layout chunk on a TV, so they prefetch it too. */
-  '/prime': () => PrimeTestPage?.preload() ?? Promise.resolve(),
+     Movies / Anime tabs and Home are the same Prime-layout chunk on a TV, so they prefetch it too. */
+  '/': () => PrimeTestPage?.preload() ?? Promise.resolve(),
   '/tv': () => PrimeTestPage?.preload() ?? Promise.resolve(),
   '/movies': () => PrimeTestPage?.preload() ?? Promise.resolve(),
   '/anime': () => PrimeTestPage?.preload() ?? Promise.resolve(),
@@ -92,14 +137,12 @@ const PREFETCH: Record<string, () => Promise<unknown>> = {
 
 const ITEMS = [
   { to: '/', key: 'nav.home' },
-  { to: '/tv', key: 'nav.series' },
+  { to: '/tv', key: 'nav.tv_shows' },
   { to: '/movies', key: 'nav.movies' },
   { to: '/anime', key: 'nav.anime' },
-  // TEST: the Prime Video home layout (routes/PrimeTest.tsx).
-  { to: '/prime', key: 'nav.prime_test' },
 ] as const;
 /* Every page the bar switches between — what a hop REPLACES rather than pushes (see `go`). */
-const BAR: string[] = ['/explore', ...ITEMS.map((it) => it.to), '/library'];
+const BAR: string[] = ['/explore', ...ITEMS.map((it) => it.to), '/library', '/settings'];
 
 export default function TvTopNav() {
   const t = useT();
@@ -109,6 +152,14 @@ export default function TvTopNav() {
   const openAuth = useAuth((s) => s.openAuth);
   const [itemsFocused, setItemsFocused] = useState(false);
   const groupRef = useRef<HTMLDivElement>(null);
+  const [railOpen, setRailOpen] = useState(false);
+  /* Where the remote was when it went into the rail — it goes back there on Right or Back. */
+  const railFrom = useRef<HTMLElement | null>(null);
+  /* The page an OK in the rail is opening: the remote waits in the (closed) rail till it is up. */
+  const railGoing = useRef('');
+  /* …and it is going to the top bar (Main menu from a page with none), not into the page. */
+  const railToBar = useRef(false);
+  const [railLand, setRailLand] = useState(0);
 
   /* THE WHITE PILL IS ONE ELEMENT THAT SLIDES, not a background that switches item — the same
    * decision, and the same implementation, as the season chip menu's travelling bar (see
@@ -243,7 +294,106 @@ export default function TvTopNav() {
     return () => window.clearTimeout(timer);
   }, [pathname]);
 
+  /* ---- THE RAIL (see RAIL above) ---- */
+  useEffect(() => { document.body.classList.toggle('tv-rail-open', railOpen); }, [railOpen]);
+  const leaveRail = () => {
+    const back = railFrom.current;
+    railFrom.current = null;
+    (back?.isConnected ? back : pageEntry() || barItemHere())?.focus({ preventScroll: true });
+  };
+  /* Back closes it, ahead of the page's own Back (PrimeTest's is 100). */
+  useEffect(() => (railOpen ? registerBackHandler(() => { leaveRail(); return true; }, 150) : undefined), [railOpen]);
+  /* OK on an item: the page is opened, the rail closes at once, and the remote is handed into the new
+     page once it is up — where it asks to be entered (lib/tvBar.ts pageEntry), else its first control. */
+  const railPick = (to: string) => {
+    if (railGoing.current) return;
+    /* Main menu: up to the top bar — the page's own item, else its first (My Space is on no item: the
+       remote arriving there opens nothing); on a page with no bar (Settings), Home's, at Home. */
+    if (to === 'menu') {
+      railFrom.current = null;
+      const here = barItemHere() || groupRef.current?.querySelector<HTMLElement>('button.tv-nav-item') || null;
+      if (here && here.offsetParent) { here.focus({ preventScroll: true }); return; }
+      railGoing.current = '/';
+      railToBar.current = true;
+      setRailOpen(false);
+      go('/');
+      setRailLand((n) => n + 1);
+      return;
+    }
+    if (GATED.includes(to) && !user) { openAuth(to); return; }
+    railGoing.current = to;
+    setRailOpen(false);
+    if (to !== pathname) go(to);
+    setRailLand((n) => n + 1);
+  };
+  useEffect(() => {
+    const to = railGoing.current;
+    if (!to || to !== pathname) return;
+    const t0 = performance.now();
+    let timer = 0;
+    const tryLand = () => {
+      if (!document.activeElement?.closest('.tv-side')) { railGoing.current = ''; railToBar.current = false; return; }
+      const main = document.querySelector('main');
+      const el = pageSwitchPending() ? null
+        : railToBar.current ? (barItemHere()?.offsetParent ? barItemHere() : null)
+        : pageEntry() || main?.querySelector<HTMLElement>('.poster, input, button, [tabindex="0"]') || null;
+      if (el || performance.now() - t0 > DOWN_OWED_MS) {
+        railGoing.current = '';
+        railToBar.current = false;
+        railFrom.current = null;
+        (el || barItemHere())?.focus({ preventScroll: true });
+        return;
+      }
+      timer = window.setTimeout(tryLand, 80);
+    };
+    timer = window.setTimeout(tryLand, 0);
+    return () => window.clearTimeout(timer);
+  }, [pathname, railLand]);
+  const railKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (railGoing.current) return;
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>('.tv-rail-item')];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'ArrowUp' && i > 0) items[i - 1].focus({ preventScroll: true });
+    else if (e.key === 'ArrowDown' && i >= 0 && i < items.length - 1) items[i + 1].focus({ preventScroll: true });
+    else if (e.key === 'ArrowRight') leaveRail();
+  };
+
   return (
+    <>
+    <div className="tv-rail-edge" aria-hidden="true" />
+    <div className="tv-rail-veil" aria-hidden="true" />
+    <div
+      className={`tv-side${railOpen ? ' is-open' : ''}`}
+      onKeyDown={railKey}
+      onFocus={(e) => {
+        if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) {
+          railFrom.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null;
+        }
+        if (!railGoing.current) setRailOpen(true);
+      }}
+      onBlur={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        railGoing.current = '';
+        setRailOpen(false);
+      }}
+    >
+      {RAIL.map((it) => (
+        <button
+          key={it.to}
+          type="button"
+          className={`tv-rail-item ${it.cls}`}
+          data-current={(it.to === 'menu' ? ITEMS.some((b) => isCurrent(b.to)) : isCurrent(it.to)) || undefined}
+          tabIndex={-1}
+          aria-label={t(it.key)}
+          onClick={() => railPick(it.to)}
+        >
+          <span className="tv-rail-ico">{(() => { const G = RAIL_GLYPH[it.to]; return <G />; })()}</span>
+        </button>
+      ))}
+    </div>
     <nav className="tv-topnav" aria-label="Primary navigation">
       {/* LEFT — an empty spacer. The profile avatar used to live here, alone in the corner, and it
           has moved into the centre group (below). It was the one destination in this bar that the
@@ -285,6 +435,11 @@ export default function TvTopNav() {
           }
           // Any other press — a Down that went through included — settles what was owed.
           downOwed.current = 0;
+          /* Left off the bar's first item goes into the side rail (the user's call, Nov 8). */
+          if (e.key === 'ArrowLeft' && !e.repeat && e.target === groupRef.current?.querySelector('button.tv-nav-item') && openRail()) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
         }}
         onBlur={(e) => {
           if (e.currentTarget.contains(e.relatedTarget as Node)) return;
@@ -314,21 +469,9 @@ export default function TvTopNav() {
             className="tv-nav-ink"
             style={mark ? { transform: `translate(${-mark.left}px, ${-mark.top}px)` } : undefined}
           >
-            <span className="tv-nav-item tv-nav-search"><SearchGlyph /></span>
             {ITEMS.map((it) => <span key={it.to} className="tv-nav-item">{t(it.key)}</span>)}
-            <span className="tv-nav-item tv-nav-profile">{t('myspace.title')}</span>
           </span>
         </span>
-        <button
-          type="button"
-          className="tv-nav-item tv-nav-search"
-          aria-label={t('nav.search')}
-          data-current={isCurrent('/explore') || undefined}
-          onFocus={follow('/explore')}
-          onClick={() => go('/explore')}
-        >
-          <SearchGlyph />
-        </button>
         {ITEMS.map((it) => (
           <button
             key={it.to}
@@ -341,39 +484,11 @@ export default function TvTopNav() {
             {t(it.key)}
           </button>
         ))}
-        {/* MY SPACE CLOSES THE ROW, and it is a WORD now rather than an avatar glyph. The icon
-            was inherited from the corner it used to sit in, where a 44px disc is what a lone
-            account control looks like; in a row of words it was the one item that had to be
-            recognised rather than read, and a head-and-shoulders outline at three metres says
-            "a person" long before it says "your space". Every other destination here states its
-            name — this one now does too.
-
-            `tv-nav-item` is load-bearing, not decoration: it is what the travelling pill's
-            `place()` looks for. Without it focus would land here and the white pill would stay
-            behind on Anime. `tv-nav-profile` is kept purely as the hook TvSpatialNav lists in its
-            candidate selectors; it no longer carries any style of its own.
-
-            No `aria-label` any more — the visible text is the accessible name, and a label
-            duplicating it would only be a second copy to let drift.
-
-            LAST RATHER THAN FIRST, the way an account sits at the end of every other product's
-            nav, and it keeps Home one press from the search icon at the head of the group.
-            `active` is deliberately not applied: My Space is a destination rather than one of the
-            browse surfaces these items switch between, and lighting it up as "the page you are
-            on" would put two meanings on one wash. */}
-        <button
-          type="button"
-          className="tv-nav-item tv-nav-profile"
-          data-current={isCurrent('/library') || undefined}
-          onFocus={follow('/library')}
-          onClick={() => go('/library')}
-        >
-          {t('myspace.title')}
-        </button>
       </div>
 
       {/* RIGHT — intentionally empty (no logo); a spacer keeps the centre truly centred */}
       <div className="tv-nav-right" aria-hidden="true" />
     </nav>
+    </>
   );
 }

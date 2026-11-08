@@ -56,9 +56,9 @@ import { pageY, usingTransformScroll } from './tvPageScroll';
 
 const IS_TV = import.meta.env.MODE === 'tv';
 
-/* The bar's order, left to right: the search icon, the four pages, the Prime test page, My Space.
+/* The bar's order, left to right: the search icon, the four pages, My Space.
  * Direction is just which way along this list the move goes. */
-const TABS = ['/explore', '/', '/tv', '/movies', '/anime', '/prime', '/library'];
+const TABS = ['/explore', '/', '/tv', '/movies', '/anime', '/library'];
 
 /* ---- THE PRIME TEST PAGE SWITCHES AS PRIME VIDEO'S PAGES DO (routes/PrimeTest.tsx) ----------------
  * Measured on the Prime Video app on an Android TV emulator (Oct 30, four switches along its bar): the
@@ -71,7 +71,7 @@ const TABS = ['/explore', '/', '/tv', '/movies', '/anime', '/prime', '/library']
 /* The Prime test page AND the Series / Movies / Anime tabs are the one PrimeTest component, and all
  * switch Prime-Video's way: the page on screen leaves by its own hand (registerPageExit) and the one
  * arriving draws its own slide (takeArrival), so `<main>` is not cross-slid for any of them. */
-const PRIME_LIKE = new Set(['/tv', '/movies', '/anime', '/prime']);
+const PRIME_LIKE = new Set(['/', '/tv', '/movies', '/anime']);
 const isPrimeLike = (path: string): boolean => PRIME_LIKE.has(path);
 /** The leaving page's rows: how far they slide (TV px of 1920), over how long, and when it is cut. */
 export const PAGE_EXIT = { px: 200, ms: 300, ease: 'ease-in-out', cutMs: 220 } as const;

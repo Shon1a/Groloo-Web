@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { gridUrl, type GridDesc } from '../lib/grid';
 import { imgW } from '../lib/img';
 import { heroFallbackGradient } from '../lib/hero';
-import { barItemHere, setPageEntry } from '../lib/tvBar';
+import { barItemHere, openRail, setPageEntry } from '../lib/tvBar';
 import { useGenres } from '../lib/queries';
 import { useT, useGenre, useLang } from '../i18n/i18n';
 import { useModal, openItem } from '../stores/modal';
@@ -343,7 +343,8 @@ export default function TvSearch() {
     const c = Number(el.dataset.c);
     if (r >= 0) kbCol.current = c;
     if (e.key === 'ArrowUp') {
-      go(r < 0 ? barItemHere() : r === 0 ? keyAt(-1, c < 3 ? 0 : 3) : keyAt(r - 1, c));
+      /* Search is not on the bar any more (it is in the side rail): Up lands on the bar's first item. */
+      go(r < 0 ? barItemHere() || document.querySelector<HTMLElement>('button.tv-nav-item') : r === 0 ? keyAt(-1, c < 3 ? 0 : 3) : keyAt(r - 1, c));
     } else if (e.key === 'ArrowDown') {
       if (r < 0) {
         const k = kbCol.current;
@@ -351,7 +352,8 @@ export default function TvSearch() {
       } else if (r < LAST_ROW) go(keyAt(r + 1, c));
       else go(line(0));
     } else if (e.key === 'ArrowLeft') {
-      if (r < 0) { if (c === 3) go(keyAt(-1, 0)); } else if (c > 0) go(keyAt(r, c - 1));
+      /* Off the keyboard's left edge: the side rail (TvTopNav's RAIL), on a tap. */
+      if (r < 0) { if (c === 3) go(keyAt(-1, 0)); else if (!e.repeat) openRail(); } else if (c > 0) go(keyAt(r, c - 1)); else if (!e.repeat) openRail();
     } else if (r < 0 ? c === 0 : c < 5) {
       go(r < 0 ? keyAt(-1, 3) : keyAt(r, c + 1));
     } else {
@@ -528,7 +530,7 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
     } else if (e.key === 'ArrowRight') {
       if (c < COLS - 1 && i + 1 < n) to = i + 1;
     } else if (e.key === 'ArrowUp') {
-      if (i < COLS) { barItemHere()?.focus({ preventScroll: true }); return; }
+      if (i < COLS) { (barItemHere() || document.querySelector<HTMLElement>('button.tv-nav-item'))?.focus({ preventScroll: true }); return; }
       to = i - COLS;
     } else if (i + COLS < n) {
       to = i + COLS;

@@ -172,7 +172,11 @@ function CoreCard() {
 
 /* `embedded` is My Space's section (routes/Library.tsx): the same grid without its own heading,
  * which the section draws instead. */
-export default function Settings({ embedded = false }: { embedded?: boolean } = {}) {
+/* One card alone, by name — the TV's Settings page (routes/TvSettings.tsx) shows a section at a time. */
+export type SettingsSection = 'interface' | 'autoplay' | 'player' | 'playback' | 'advanced' | 'account' | 'core';
+
+export default function Settings({ embedded = false, only }: { embedded?: boolean; only?: SettingsSection } = {}) {
+  const show = (s: SettingsSection) => !only || only === s;
   const t = useT();
   const nav = useNavigate();
   const { lang, setLang, languages } = useLang();
@@ -241,7 +245,7 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
       </>}
 
       <div className="settings-grid">
-        <Card icon={icons.interface} head={t('settings.interface_head')} desc={t('settings.interface_desc')}>
+        {show('interface') && <Card icon={icons.interface} head={t('settings.interface_head')} desc={t('settings.interface_desc')}>
           <div className="setting-row">
             <label>{t('settings.website_language')}</label>
             <TvSelect value={lang} onChange={(v) => setLang(v)} ariaLabel="Language">
@@ -262,9 +266,9 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
               <Toggle checked={settings.tvRowTrailers} onChange={set('tvRowTrailers')} label={t('settings.row_trailers')} />
             </div>
           )}
-        </Card>
+        </Card>}
 
-        <Card icon={icons.autoplay} head={t('settings.autoplay_head')} desc={t('settings.autoplay_desc')}>
+        {show('autoplay') && <Card icon={icons.autoplay} head={t('settings.autoplay_head')} desc={t('settings.autoplay_desc')}>
           <div className="setting-row">
             <label>{t('settings.autoplay_next')}</label>
             <Toggle checked={settings.autoplayNext} onChange={set('autoplayNext')} label={t('settings.autoplay_next')} />
@@ -284,9 +288,9 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
               <span className="clock-ring" aria-hidden="true" />
             </div>
           </div>
-        </Card>
+        </Card>}
 
-        <Card icon={icons.player} head={t('settings.player_head')} desc={t('settings.player_desc')}>
+        {show('player') && <Card icon={icons.player} head={t('settings.player_head')} desc={t('settings.player_desc')}>
           <div className="set-subhead">{t('settings.group_subtitles')}</div>
           <div className="setting-row">
             <label>{t('settings.sub_lang')}</label>
@@ -344,9 +348,9 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
               </TvSelect>
             </div>
           </div>
-        </Card>
+        </Card>}
 
-        <Card icon={icons.playback} head={t('settings.playback_head')} desc={t('settings.playback_desc')}>
+        {show('playback') && <Card icon={icons.playback} head={t('settings.playback_head')} desc={t('settings.playback_desc')}>
           <div className="setting-row">
             <label>{t('settings.auto_quality')}</label>
             <TvSelect className="sel-signal" value={settings.autoQuality} onChange={(v) => update({ autoQuality: v as S['autoQuality'] })} ariaLabel={t('settings.auto_quality')}>
@@ -366,9 +370,9 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
             <svg className="note-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
             <span>{t('settings.network_note')}</span>
           </div>
-        </Card>
+        </Card>}
 
-        <Card icon={icons.advanced} head={t('settings.advanced_head')} desc={t('settings.advanced_desc')}>
+        {show('advanced') && <Card icon={icons.advanced} head={t('settings.advanced_head')} desc={t('settings.advanced_desc')}>
           <div className="setting-row">
             <label>{t('settings.external_player')}</label>
             <TvSelect value={settings.externalPlayer} onChange={(v) => update({ externalPlayer: v as S['externalPlayer'] })} ariaLabel={t('settings.external_player')}>
@@ -379,9 +383,9 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
               <option value="nplayer">nPlayer</option>
             </TvSelect>
           </div>
-        </Card>
+        </Card>}
 
-        <Card icon={icons.account} head={t('settings.account_head')} desc={t('settings.account_desc')}>
+        {show('account') && <Card icon={icons.account} head={t('settings.account_head')} desc={t('settings.account_desc')}>
           {/* The ONLY entry point to #/link anywhere in the app. Without it the device-link
               flow is reachable only by typing the URL off a TV screen, which is exactly the
               typing the flow exists to avoid — and a user who never learns the page exists
@@ -453,12 +457,12 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
               </div>
             </>
           )}
-        </Card>
+        </Card>}
 
         {/* Last in the grid on purpose: it is the card you are sent to, never the one you
             came for, and putting diagnostics above account deletion would push the
             store-compliance surface further down the column on a phone. */}
-        <CoreCard />
+        {show('core') && <CoreCard />}
       </div>
     </Wrap>
   );

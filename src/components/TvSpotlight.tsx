@@ -24,7 +24,7 @@ import { tileFadeAlways, HELD } from '../lib/tvMotionFlags';
 import { tvRowsMode, rowInWindow, subscribeRowWindow, getActiveRowIndex } from '../lib/tvRowWindow';
 import { usePreviewSound } from '../stores/previewSound';
 import { isPreviewSoundKey } from '../lib/tvKeys';
-import { barItemHere } from '../lib/tvBar';
+import { barItemHere, openRail } from '../lib/tvBar';
 import { prefetchArt } from '../lib/artPrefetch';
 import { slowLink } from '../lib/slowLink';
 import { bootDone, onBootRevealing } from '../lib/bootGate';
@@ -2688,6 +2688,8 @@ export default function TvSpotlight({ items, title, cat, onSelect, onSeeAll, res
          * too (it would otherwise run on into the bar and walk it to another page); a press made once the
          * walk has settled leaves. */
         if (held || performance.now() - lastStepAt.current < SLIDE_CHAIN_WINDOW) return;
+        /* Into the side rail now, as the reference does (Nov 8); the bar only where there is no rail. */
+        if (openRail()) return;
         const nav = barItemHere() || document.querySelector<HTMLElement>('.tv-nav-item');
         if (nav) { nav.focus(); return; }
       }

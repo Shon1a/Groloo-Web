@@ -13,13 +13,21 @@
   /* A row leaving upward: gone by the fourth frame. */
   --gone: 60ms linear;
   position: relative;
-  height: 100vh;
+  /* A 16:9 frame of the screen's width, not the window's height: the rows are placed from the top and
+     the title panel from the bottom, so in a window shorter than 16:9 (a browser with its toolbars)
+     the panel rose into the top bar. On a TV the two are the same. */
+  height: calc(1080 * var(--p));
   margin-top: calc(var(--tv-topbar-pad, 0px) * -1);
   overflow: hidden;
   background: var(--bg);
   color: #fff;
   outline: none;
 }
+/* The page root holds the remote for all its rows, and the TV's blanket focus ring (tv.css, `[tabindex]:
+   focus-visible`, which outranks the line above) drew round it, just off screen, with app.css's 4px corners:
+   invisible, but it put drawing into every tile of the page's layer, so its black was rastered and blended
+   as a whole screen every frame instead of being a plain solid colour. */
+.tv-shell .pv[tabindex]:focus-visible { outline: none; border-radius: 0; }
 
 /* The bar is there on the first row and while it has the remote. It is gone in ~75ms the moment the
    rows go further down, and comes back as the move up to the first row ends — at once when the remote
@@ -29,22 +37,22 @@ body.pv-page .tv-topnav:focus-within { transition: opacity 60ms linear; }
 body.pv-deep .tv-topnav { opacity: 0; transition: opacity 75ms linear; }
 
 /* ---- THE PAGE BEFORE ITS PICTURES (PrimeTest's SKELETON): Prime Video's own shapes and grey, off a
-   still of the emulator, over the page until it shows itself. Then the shapes fade (380ms, linear) as
-   the page fades in under them (380ms, ease-in-out, 25ms later). Hidden, the page is kept rastered
-   (will-change), so its first frame costs nothing; shown, it is no effect of its own. The shapes' left
+   still of the emulator, UNDER the page until it shows itself. Then the shapes fade (380ms, linear) as
+   the page fades in over them (380ms, ease-in-out, 25ms later): the words and pictures come up over the
+   grey, never behind a half-faded grey box (the user's call, Nov 8 — the veil over crisp text read
+   badly). Hidden, the page is kept rastered (will-change), so its first frame costs nothing; shown, it
+   is no effect of its own. The shapes' left
    ends fade into the screen's edge (black at 0, clear at 144) as they glide in. ---- */
 .pv-show { opacity: 0; will-change: opacity; }
 .pv.is-shown .pv-show { opacity: 1; will-change: auto; transition: opacity 380ms ease-in-out 25ms; }
 .pv-skel { position: absolute; inset: 0; pointer-events: none; will-change: opacity; }
 .pv.is-shown .pv-skel { opacity: 0; transition: opacity 380ms linear; }
-/* PRE-LIT reveal: the page is switched on at full opacity a couple of frames BEFORE the skeleton
-   starts to fade (reveal(), behind groloo.primedecouple), while the still, opaque grey shapes still
-   cover it — so every layer pays its one-time upload there, on a frame the eye cannot see and nothing
-   is moving. Placed after the is-shown rule so that when both classes are on, this wins the tie: the
-   page holds opacity 1 with no fade of its own, and `is-shown` is left only driving the skeleton out
-   over an already-live page. The fade then carries no upload work — the row-build freeze is not traded
-   for a run of reveal stutters. (gaps between the shapes are the page's own black, so nothing shows.) */
-.pv.is-lit .pv-show { opacity: 1; transition: none; }
+/* PRE-LIT reveal: the page is switched on at 1% a couple of frames BEFORE the fade (reveal(), behind
+   groloo.primedecouple) — drawn, so every layer pays its one-time upload there, nothing is moving, and
+   1% of the page over black is nothing the eye can see (a layer at 0 is not drawn at all). The fade then
+   starts from it and carries no upload work; with is-shown on too, the page fades up to 1 (above). */
+.pv.is-lit .pv-show { opacity: .01; }
+.pv.is-lit.is-shown .pv-show { opacity: 1; }
 .pv-skel::after {
   content: ''; position: absolute; inset: 0;
   background: linear-gradient(90deg, var(--bg), transparent calc(144 * var(--p)));
@@ -147,6 +155,8 @@ body.pv-page:not(.pv-landed) .tv-det-art.is-pv { animation: none; opacity: 0; }
    trailer behind — the page's own slot, with its gradient — shows through. Cleared when the trailer
    stops (Back / clip end), and the still then fades in as usual. */
 body.pv-page.pv-trailer-bg .tv-det-art.is-pv { animation: none !important; opacity: 0 !important; }
+/* The page's own picture is the same one, already up (PrimeTest's handOver): the screen draws none. */
+body.pv-page.pv-art-same .tv-det-art.is-pv { display: none; }
 body.pv-page .tv-det-art img { object-position: center top; }
 @keyframes pvTitleIn { from { opacity: 0; } to { opacity: 1; } }
 
@@ -220,9 +230,13 @@ body.pv-page .tv-det-art img { object-position: center top; }
   padding: calc(5 * var(--p)) 0 0 calc(144 * var(--p));
   font-size: calc(24 * var(--p)); line-height: calc(30 * var(--p)); font-weight: 700;
   transition: opacity var(--dim);
-  /* No standing will-change: a title only fades on an up/down row change (is-dim/is-gone), which Chromium
-     auto-composites for the fade's duration; a permanent hint just kept ~13 idle layers backed on the GPU
-     (nothing during left/right) and folds into the already-promoted .pv-track at rest. */
+  /* EACH TITLE A SMALL LAYER OF ITS OWN, as wide as its words (Nov 9, measured). Folded into the track, the
+     titles were the only thing it painted — and the GPU draws a layer in full-width tiles, so a few lines
+     of words cost a whole screen of blended pixels every frame of every move (4.4 → 2.6 screens a frame
+     with the two fixes beside it: .pv's focus ring above, the side rail's veil in tv.css). ~13 layers of
+     ~400x45 are about 1MB on the GPU. */
+  width: max-content;
+  will-change: opacity;
 }
 /* EACH STRIP IS ONE LAYER, and two things here keep it so (measured: 35 extra layers without them).
    The strip is as wide as its tiles: a tile that hangs past the strip's own box, 37px from the last one,
@@ -410,9 +424,23 @@ body.pv-page .tv-det-art img { object-position: center top; }
   transition: opacity 300ms ease-in-out;
 }
 
-/* While a title screen is up (pv-landed) the rows have sunk and faded to nothing, but the track is still a
-   promoted, on-screen layer the compositor keeps flattening under the title's own fades (its cast and
-   buttons come in ~800ms after the press, over the dead track). Drop it from the paint until Back brings
-   it home — pv-landed is removed on close (PrimeTest's modal subscribe), which restores it for the fade back.
-   The two rings sink and fade with the rows and sit at 0 while landed too, so drop them from the paint with it. */
-body.pv-page.pv-landed :is(.pv-track, .pv-ring) { visibility: hidden; }
+/* While a title screen is up the rows and rings sit at opacity 0 (OK's sink), and are left painted: hiding
+   them (visibility, under pv-landed) cost a repaint of every strip in the first frames of Back — measured
+   Nov 8 at 6x CPU, close drops 6-7 → 2-4 without it, the open no worse. */
+
+/* Continue Watching: how far in, as a bar along the tile's foot (Prime Video's, in white — the site's
+   own colour; red was tried and dropped, Nov 8). In the tile's one grid cell like the pill, so the strip stays one layer. */
+.pv-resume {
+  align-self: end; justify-self: stretch;
+  margin: 0 calc(12 * var(--p)) calc(10 * var(--p));
+  height: calc(5 * var(--p)); border-radius: calc(3 * var(--p));
+  background: rgba(255, 255, 255, .22);
+  box-shadow: 0 0 calc(8 * var(--p)) rgba(0, 0, 0, .55);
+  overflow: hidden;
+}
+.pv-resume > i { display: block; height: 100%; background: #fff; }
+
+/* MY SPACE (kind 'myspace'): the My List row on black — no picture behind it, no title panel (the user, Nov 9).
+   Hidden, not removed, and only while no title is open: OK measures the panel to place the title screen's
+   column (--pv-head-x), the panel becomes its words, and the picture box becomes its picture. */
+body:not(.pv-titled) .pv.is-myspace :is(.pv-row-art, .pv-trailer-slot, .pv-art-fade, .pv-info) { visibility: hidden; }

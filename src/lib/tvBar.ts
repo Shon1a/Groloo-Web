@@ -40,3 +40,15 @@ export function pageEntry(): HTMLElement | null {
   const el = entryFn?.() ?? null;
   return el && el.isConnected ? el : null;
 }
+
+/* ---- AND INTO THE SIDE RAIL (TvTopNav's RAIL), from the left edge of a page ------------------------
+ *
+ * Left off a row's first card, as the reference does. The rail's items are tabindex -1, so geometry
+ * never lands there by itself; this is the one way in. On the page's own item when it is one of the
+ * rail's (Search, My Space), else on Search. False when there is no rail (the web build). */
+export function openRail(): boolean {
+  const el = document.querySelector<HTMLElement>('.tv-rail-item[data-current]')
+    || document.querySelector<HTMLElement>('.tv-rail-search');
+  el?.focus({ preventScroll: true });
+  return !!el;
+}

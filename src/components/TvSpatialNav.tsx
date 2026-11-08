@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { pageY, pageMax, setPageY, beginPageMove, endPageMove, usingTransformScroll, flipScroll, flipTo, flipOffset, stopFlip } from '../lib/tvPageScroll';
 import { stepRow, rowBelowHero, prepareRowWindow, rowIndexOf, getRowsEpoch, firstRow } from '../lib/tvRowRegistry';
 import { setActiveRowIndex } from '../lib/tvRowWindow';
-import { barItemHere, pageEntry } from '../lib/tvBar';
+import { barItemHere, openRail, pageEntry } from '../lib/tvBar';
 import { onBootRevealing } from '../lib/bootGate';
 import { HELD } from '../lib/tvMotionFlags';
 
@@ -924,7 +924,10 @@ export default function TvSpatialNav() {
           scroller.to(null, 0, !smoothScroll);
         } else if (parked !== null) {
           scroller.to(null, parked, !smoothScroll, held);
-        } else {
+        } else if (!next.hasAttribute('data-tv-noscroll')) {
+          /* (`data-tv-noscroll`: a page that IS the screen and moves itself — PrimeTest's root. In a window
+             shorter than 16:9 it is taller than the viewport, and nudging it into view slid the whole page
+             up under the bar on Down out of the bar.) */
           // Nudge-into-view only, and on the same easing so it never feels like a different app.
           // Both edges read the element's own scroll-margin now — see scrollMarginBottom for the
           // half of that which used to be a constant.
@@ -1088,6 +1091,8 @@ export default function TvSpatialNav() {
        * rect read a second time on any press that found nothing ahead of it, which on this page
        * is every press that reaches the first row. It now costs arithmetic and nothing else. */
       if (!next && !curInNav) next = pick(dir, from, rest);
+      /* Nothing to the left of the page's left edge but the side rail (TvTopNav's RAIL) — on a tap. */
+      if (!next && !curInNav && dir === 'left' && !held && openRail()) return true;
 
       /* ARRIVING IN THE TOP BAR LANDS ON THE PAGE YOU ARE ON, not on whatever happens to be
        * geometrically nearest. The bar is a set of tabs; the tab you are already on is the only

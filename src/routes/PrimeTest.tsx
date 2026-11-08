@@ -8,11 +8,13 @@ import { HOME_ROWS, PROVIDER_CATS } from '../lib/home';
 import { api } from '../lib/api';
 import { gridUrl } from '../lib/grid';
 import { imgW } from '../lib/img';
-import { barItemHere, setPageEntry } from '../lib/tvBar';
+import { barItemHere, openRail, setPageEntry } from '../lib/tvBar';
+import { bootRowsStaged } from '../lib/bootGate';
 import { registerBackHandler } from '../lib/tvKeys';
 import { PAGE_EXIT, registerPageExit, takeArrival } from '../lib/tvPageSlide';
 import { quietFor, whenQuiet } from '../lib/tvQuiet';
 import { useModal, openItem, type PvHead } from '../stores/modal';
+import { useContinueItems, useMyListItems, entryTarget } from '../lib/continueItems';
 import { usePlayer } from '../stores/player';
 import type { MediaItem, MetaDetail } from '../lib/types';
 import '../styles/prime.css';
@@ -60,7 +62,8 @@ import '../styles/prime.css';
  * of transforms, classes and text nodes; React does not render, and no picture arrives, while
  * anything moves. */
 
-type PvRow = { key: string; title: string; items: MediaItem[]; feat?: boolean };
+/* `resume`: Continue Watching's watched fraction per item (0-1), drawn as a bar on the tile. */
+type PvRow = { key: string; title: string; items: MediaItem[]; feat?: boolean; resume?: number[] };
 
 /* x is where the focused tile starts. */
 const TILE = { w: 384, h: 216, pitch: 416, x: 144 };
@@ -108,6 +111,13 @@ const GENRE_ROWS: Record<'movie' | 'series', string[]> = {
    animation). Primary genre barely splits them — ~90% read "Animation" — so the body comes from
    ERAS, which do split cleanly (measured: 2020s/2010s/2000s/pre-2000 all clear MIN_ROW), plus
    whatever non-Animation genre bucket is large enough to stand on its own. */
+/* A row's genre (TMDB's movie label) against a title's main genre as the server names it: the server
+   shortens Science Fiction to Sci-Fi, and a series' TV genre folds onto the movie label it maps to. */
+const GENRE_SAME: Record<string, string[]> = {
+  'Science Fiction': ['Sci-Fi', 'Sci-Fi & Fantasy'],
+  Action: ['Action & Adventure'],
+};
+const sameGenre = (row: string, main?: string) => !!main && (main === row || !!GENRE_SAME[row]?.includes(main));
 const ANIME_POOLS = ['trending_anime', 'top_anime'];
 const ANIME_ERAS: { key: string; title: string; lo: number; hi: number }[] = [
   { key: 'era_2020', title: 'New Releases', lo: 2020, hi: 9999 },
@@ -205,10 +215,19 @@ const CLOSE_EASE = 'cubic-bezier(.2, .6, .3, 1)';
    comes 185ms into that (150ms, linear). However long the pictures take, the page shows SKEL_MAX_MS
    after its rows came, with what it has. x, y, width, height, corner. */
 const SKELETON: [number, number, number, number, number][] = [
-  [144, 253, 300, 33, 12], [144, 310, 500, 120, 16], [144, 454, 300, 33, 12], [144, 508, 246, 86, 12],
-  /* Same forms as before; only the two tile rows moved up (was 666/946) to land on the real rows — row 0's
-     tiles sit at y 612, and the row below (the featured row) at y 894. */
-  ...[612, 894].flatMap((y) => [0, 1, 2, 3, 4].map((k): [number, number, number, number, number] => [TILE.x + k * TILE.pitch, y, TILE.w, TILE.h, 12])),
+  /* The panel's four forms sit on the real panel (.pv-info, measured at 1920): the big one over the
+     wordmark (~190-301), the third on the facts line (317), the last on the synopsis (369-441). Was
+     137px lower (253/310/454/508), running into the first row's title. */
+  [147, 116, 300, 33, 12], [147, 173, 500, 120, 16], [147, 317, 300, 33, 12], [147, 371, 246, 86, 12],
+  /* Row 0's tiles sit at y 612. The row below is always the featured row (y 894): its card (prime.css
+     .pv-card, 1024x576) and then its posters (576 tall, the strip's first in view at x 1200). */
+  ...[0, 1, 2, 3, 4].map((k): [number, number, number, number, number] => [TILE.x + k * TILE.pitch, 612, TILE.w, TILE.h, 12]),
+  [144, 894, 1024, 576, 12], [1200, 894, TILE.w, 576, 12], [1200 + TILE.pitch, 894, TILE.w, 576, 12],
+];
+/* My Space (kind 'myspace') is one featured row, My List, on the focus line from the start: its card and
+   the two posters right of it. */
+const SKELETON_MYSPACE: [number, number, number, number, number][] = [
+  [144, 252, 1024, 576, 12], [1200, 252, TILE.w, 576, 12], [1200 + TILE.pitch, 252, TILE.w, 576, 12],
 ];
 const SKEL_SHIFT = 200;
 const SKEL_GLIDE_AT = 16;
@@ -345,6 +364,8 @@ const factsOf = (el: HTMLElement): PvHead['facts'] =>
    title that panel held. */
 const notLeaving = () => ({
   id: '' as string | number, anims: [] as Animation[], faded: [] as Element[], panel: null as HTMLElement | null, syn: '', held: '', dy: 0,
+  /* The opened title's picture top-right ('' from the featured card, where none shows). */
+  art: '',
 });
 
 /* A picture's pixels, decoded off the main thread, to be drawn into a canvas once — at the size it is
@@ -439,12 +460,14 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
   /* A twin's canvases have no address of their own: the loader draws them from their originals. */
   const strip = (twin = false) => (
     <div className={twin ? 'pv-strip is-twin' : 'pv-strip'}>
-      {row.items.map((m) => {
+      {row.items.map((m, k) => {
         const tag = badgeOf(m);
+        const pct = row.resume?.[k];
         return (
           <div key={m.id} className={row.feat ? 'pv-tile is-poster' : 'pv-tile'}>
             <canvas className="pv-tile-art" data-src={twin ? undefined : tileSrc(row, m)} />
             {tag && <span className="pv-tag">{tag}</span>}
+            {pct != null && <span className="pv-resume"><i style={{ width: `${Math.round(Math.min(1, Math.max(0, pct)) * 100)}%` }} /></span>}
           </div>
         );
       })}
@@ -492,16 +515,36 @@ const PvRowView = memo(function PvRowView({ row, i, setRowEl }: {
 /* The same Prime-Video layout serves four pages — the Prime test page and the Series / Movies / Anime
    tabs — differing only in which rows they build. `kind` picks that: 'prime' keeps the mixed home feed;
    the others keep ONE kind of content (a Movies tab shows only movies, etc.). */
-export type PvKind = 'prime' | 'movie' | 'series' | 'anime';
+/* Where Up off the first row (and Back) lands in the bar: its current item, or — on a page the bar has no
+ * item for (My Space) — its first. */
+const barTarget = () => barItemHere() || document.querySelector<HTMLElement>('.tv-topnav button.tv-nav-item');
+
+export type PvKind = 'prime' | 'movie' | 'series' | 'anime' | 'myspace';
 
 /* Each kind's path on the top bar — the key the page-slide stores its arrival direction under, so the
    arriving tab reads back the side it came from (takeArrival). Must match the routes in App.tsx and the
    PRIME_LIKE set in tvPageSlide.ts. */
-const ROUTE_OF: Record<PvKind, string> = { prime: '/prime', movie: '/movies', series: '/tv', anime: '/anime' };
+const ROUTE_OF: Record<PvKind, string> = { prime: '/', movie: '/movies', series: '/tv', anime: '/anime', myspace: '/library' };
 
 export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   const t = useT();
   const { data } = useHome();
+  /* CONTINUE WATCHING leads the home page (kind 'prime'). Its titles are taken ONCE, when the history's
+     art has answered, and kept: a row coming or going after the build would move every row under it
+     (the imperative draw keys on a row's index). Only the bars follow the progress. */
+  const cw = useContinueItems();
+  const [cwItems, setCwItems] = useState<MediaItem[] | null>(kind === 'prime' ? null : []);
+  useEffect(() => {
+    if (cwItems === null && cw.ready) setCwItems(cw.tvItems.slice(0, ROW_CAP));
+  }, [cwItems, cw.ready, cw.tvItems]);
+  /* MY SPACE's one row, My List, in the featured row's form (the user's call, Nov 9). Taken once its art has
+     answered and frozen like Continue Watching's: the imperative draw keys on a title's place in the row,
+     so a title saved or removed meanwhile shows on the next visit. */
+  const ml = useMyListItems();
+  const [mlItems, setMlItems] = useState<MediaItem[] | null>(kind === 'myspace' ? null : []);
+  useEffect(() => {
+    if (mlItems === null && ml.ready) setMlItems(ml.items);
+  }, [mlItems, ml.ready, ml.items]);
   const openModal = useModal((s) => s.open);
   const warm = useWarmDetail();
   const metaOf = useMetaOf();
@@ -551,11 +594,23 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   const extraRows = useMemo<PvRow[]>(() => {
     void sig;   // recompute marker: `sig` moves exactly when a query's data lands (read below via ref)
     const f = fetchedRef.current;
-    const withArt = (arr: MediaItem[]) => arr.filter((m) => m.backdrop).slice(0, ROW_CAP);
     if (kind === 'movie' || kind === 'series') {
+      /* ONE ROW PER TITLE: a title is in several genres, so the catalogue answers put it in several
+         rows (The Mentalist under Crime AND Mystery). Each title goes to the row of its main genre
+         when the page has one, otherwise to the first row whose answer held it; each row keeps its
+         answer's order. No anime (the Anime tab's). */
+      const answers = fetchSpecs.map((_, i) => (f[i]?.data?.results ?? []).filter((m) => m.backdrop && !m.anime));
+      const rowOf = new Map<string, number>();
+      answers.forEach((arr) => arr.forEach((m) => {
+        const id = String(m.id);
+        if (rowOf.has(id)) return;
+        const main = GENRE_ROWS[kind].findIndex((g) => sameGenre(g, m.genre));
+        rowOf.set(id, main >= 0 && answers[main].some((x) => String(x.id) === id) ? main : -1);
+      }));
+      answers.forEach((arr, i) => arr.forEach((m) => { const id = String(m.id); if (rowOf.get(id) === -1) rowOf.set(id, i); }));
       const out: PvRow[] = [];
       fetchSpecs.forEach((s, i) => {
-        const items = withArt(f[i]?.data?.results ?? []);
+        const items = answers[i].filter((m) => rowOf.get(String(m.id)) === i).slice(0, ROW_CAP);
         if (items.length >= MIN_ROW) out.push({ key: s.key, title: s.title, items, feat: false });
       });
       return out;
@@ -599,7 +654,8 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
      that count grows a row per frame (the build effect below), so the main thread is never held for one
      long task. The shapes glide over it on the compositor the whole time. */
   const allRows = useMemo(() => {
-    const list =(cat: string) => (data?.rows?.[cat]?.results ?? []).filter((m) => m.backdrop).slice(0, ROW_CAP);
+    /* TV Shows and Movies leave Japanese animation to the Anime tab. */
+    const list =(cat: string) => (data?.rows?.[cat]?.results ?? []).filter((m) => m.backdrop && !(m.anime && (kind === 'movie' || kind === 'series'))).slice(0, ROW_CAP);
     const out: PvRow[] = [];
     const push = (key: string, title: string, items: MediaItem[], feat = false) => { if (items.length) out.push({ key, title, items, feat }); };
 
@@ -612,12 +668,16 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
        Featured MUST stay within the first BUILD_FIRST rows (it is row 2, index 1): its card art is
        written once, on the first apply() while the opening rows mount, so a featured row that is not
        yet built at that moment would never get its first picture and would open black. */
+    if (kind === 'myspace') {
+      if (mlItems) push('mylist', t('myspace.my_list'), mlItems, true);
+      return out;
+    }
     if (kind !== 'prime') {
       const meta = {
         movie: { T: 'movie', tr: 'sec.trending_movies', tp: 'sec.top_movies' },
         series: { T: 'tv', tr: 'sec.trending_shows', tp: 'sec.top_shows' },
         anime: { T: 'anime', tr: 'sec.trending_anime', tp: 'sec.top_anime' },
-      }[kind];
+      }[kind as 'movie' | 'series' | 'anime'];
       const T = meta.T;
       push(`trending_${T}`, t(meta.tr), list(`trending_${T}`));
       const feat = list(`top_${T}`).filter((m) => m.poster);
@@ -640,15 +700,25 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
       return out;
     }
 
-    push('trending_movie', t('sec.trending_movies'), list('trending_movie'));
-    push('featured', t('tv.featured'), list('top_tv').filter((m) => m.poster), true);
+    /* Held till Continue Watching is settled, so the first build already has it. With it, it is row 0
+       and the featured card stays row 1 (the skeleton's shapes and the first build expect a tile row
+       then the card); Trending Movies comes after the card instead. */
+    if (!cwItems) return out;
+    if (cwItems.length) {
+      out.push({ key: 'continue', title: t('sec.continue'), items: cwItems, resume: cwItems.map((m) => cw.resumeOf(m)?.pct ?? 0) });
+      push('featured', t('tv.featured'), list('top_tv').filter((m) => m.poster), true);
+      push('trending_movie', t('sec.trending_movies'), list('trending_movie'));
+    } else {
+      push('trending_movie', t('sec.trending_movies'), list('trending_movie'));
+      push('featured', t('tv.featured'), list('top_tv').filter((m) => m.poster), true);
+    }
     push('top10', 'Top 10', list('trending_tv').slice(0, 10));
     for (const row of HOME_ROWS) {
       if (row.cat === 'trending_movie' || row.cat === 'top_tv' || row.cat === 'trending_tv') continue;
       push(row.cat, t(row.key), list(row.cat));
     }
     return out;
-  }, [data?.rows, t, kind, extraRows]);
+  }, [data?.rows, t, kind, extraRows, cwItems, cw.resumeOf, mlItems]);
   /* 0 until a frame after the first paint (the shapes are on screen first, as the whole build used to
      wait); then the first screen's rows together, then one more each frame. A press does not race this:
      the remote is in the bar until the page shows itself, which waits for the first screen's pictures —
@@ -836,7 +906,9 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   const held = useRef({ key: '', lastRepeat: 0, timer: 0 });
   /* OK's tap-vs-hold: `timer` fires at TRAILER_HOLD_MS and plays the trailer; `held` then suppresses
      the tap-open on key-up. A quick release (before the timer) is a tap and opens the title. */
-  const enter = useRef({ timer: 0, held: false });
+  /* `down`: this page saw the OK go down. A keyup without it is a press that began elsewhere — OK on the side
+   * rail's My Space, whose page mounts under the still-held key — and opens nothing. */
+  const enter = useRef({ timer: 0, held: false, down: false });
   const keyHeld = () => !!held.current.key && performance.now() - held.current.lastRepeat < REPEAT_GONE_MS;
 
   /* The next title is written WRITE_AT after a tap. `holding`: a hold steps again before the title
@@ -1115,6 +1187,27 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     };
     tryIn();
   }, [artPic, artPx]);
+  /* OK: the opened title's picture NOW. After a quick move the one on screen was still the last title's,
+     waiting out the move's rest — it stayed up under the opening title, faded to black, and only then
+     did the right one come (the user's recording, Nov 8). So the one on screen crosses straight to it:
+     a pending, delayed fade-out starts now, and the new one comes in with no rest, faded a little
+     quicker than the old goes so the cross never dips to black. */
+  const artNow = useCallback((want: string) => {
+    const a = art.current;
+    const tm = timers.current;
+    if (tm.artOut && a.shown !== want) {
+      window.clearTimeout(tm.artOut);
+      tm.artOut = 0;
+      const el = rowArtRefs.current[a.layer];
+      if (el) {
+        const now = getComputedStyle(el).opacity;   // read BEFORE the transition goes, or it reads its end
+        el.style.transition = 'none';
+        el.style.opacity = now;
+        void getComputedStyle(el).opacity;   // the delayed fade cancelled here, so the next one starts now
+      }
+    }
+    artTo(want, { outAt: 0, outMs: ART_OUT_MS + ART_PRIME_MS + 60, rest: 0 });
+  }, [artTo]);
   /* On the featured row the picture top-right is gone, and the boxes take, hidden, the pictures that come
      back out of it, up and down: whichever it is is then cut in drawn already, with nothing decoded or
      drawn inside the move (measured: decoded twice, ~10ms each on the PC at 4x, and drawn, as the rows
@@ -1323,7 +1416,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     document.body.classList.add('pv-page');
     const tm = timers.current;
     return () => {
-      document.body.classList.remove('pv-page', 'pv-deep', 'pv-titled', 'pv-landed');
+      document.body.classList.remove('pv-page', 'pv-deep', 'pv-titled', 'pv-landed', 'pv-art-same');
       ['--p', '--pv-head-x', '--pv-head-y'].forEach((v) => document.body.style.removeProperty(v));
       Object.values(tm).forEach((id) => window.clearTimeout(id));
     };
@@ -1485,6 +1578,8 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     const root = rootRef.current;
     if (revealed.current || !root) return;
     revealed.current = true;
+    /* As the TV home page, its first screen being whole is what the boot splash waits on (lib/bootGate). */
+    bootRowsStaged();
     /* Hold the deferrable work (off-screen rows' build, off-screen tiles' canvas draws) off the thread
        until the fade is done — see the build effect and the picture pump. Released a beat past the
        skeleton's fade so nothing lands through it. */
@@ -1502,9 +1597,9 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     let decouple = true;
     try { decouple = localStorage.getItem('groloo.primedecouple') !== '0'; } catch { /* storage blocked: on */ }
     if (decouple) {
-      /* PRE-LIGHT: the page goes live under the still, opaque skeleton (is-lit). Every layer takes its
-         one-time upload now — nothing is animating, the shapes hide it — so when the skeleton fades two
-         frames later the page beneath it is already whole and the fade carries no upload work. */
+      /* PRE-LIGHT: the page is drawn at 1% over the still skeleton (is-lit). Every layer takes its
+         one-time upload now — nothing is animating, 1% is invisible — so when the page fades in two
+         frames later it is already whole and the fade carries no upload work. */
       root.classList.add('is-lit');
       warmLayers();
       requestAnimationFrame(() => requestAnimationFrame(showPage));
@@ -1610,6 +1705,8 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
    * player is open over the page, whose own Back comes first. */
   useEffect(() => registerBackHandler(() => {
     if (useModal.getState().target || usePlayer.getState().source) return false;
+    /* OK pressed, its title screen not mounted yet (openPv): the press is spent on nothing. */
+    if (leaving.current.id !== '') return true;
     /* A playing trailer takes Back first: it stops and the page stays where it is. */
     if (playingRef.current) { stopTrailer(); return true; }
     const root = rootRef.current;
@@ -1628,7 +1725,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     }
     /* The bar comes back with the remote in it — after the layout forced above, so it takes the quick
        fade the bar has while it holds the remote, not the late one of a move up. */
-    barItemHere()?.focus({ preventScroll: true });
+    barTarget()?.focus({ preventScroll: true });
     document.body.classList.remove('pv-deep');
     return true;
   }, 100), [apply, trackAt]);
@@ -1685,6 +1782,12 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     }
     const take = () => {
       if (leaving.current !== L) return;
+      /* The page's own picture top-right IS the title screen's (same art, same w1280): when it is up,
+         the screen draws none of its own — no second decode, no second 1300x731 layer faded in over
+         the first on the set's GPU (prime.css). */
+      const a = art.current;
+      const cv = rowArtRefs.current[a.layer]?.querySelector('canvas');
+      if (L.art && a.visible && a.shown === L.art && cv?.dataset.on === L.art) document.body.classList.add('pv-art-same');
       document.body.classList.add('pv-landed');
       if (L.panel) L.panel.style.visibility = 'hidden';
       /* A standard-row trailer is NOT stopped here: it plays on as the title screen's backdrop (the
@@ -1707,6 +1810,19 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
       facts: factsOf(el),
       synopsis: q('.pv-synopsis')?.textContent ?? '',
     };
+  };
+  /* What OK opens: a Continue Watching title resumes where it was left (its episode, its add-on). */
+  const targetOf = (row: PvRow, it: MediaItem) => {
+    const e = row.key === 'continue' ? cw.byId.get(String(it.id)) : undefined;
+    return e ? entryTarget(e) : openItem(it);
+  };
+  /* OK opens the title: the page clears itself away at once (openTitle), and the title screen mounts a
+     frame later, once those animations are on the compositor — React building it in the press's own
+     task held up the first frames of the rise (traced at 6x: 7 dropped frames in its first 100ms). */
+  const openPv = (row: PvRow, it: MediaItem) => {
+    const target = { ...targetOf(row, it), backdrop: it.bgArt, pv: openTitle(it) };
+    const L = leaving.current;
+    requestAnimationFrame(() => window.setTimeout(() => { if (leaving.current === L) openModal(target); }, 0));
   };
   const openTitle = (it: MediaItem): PvHead => {
     const L = leaving.current;
@@ -1736,6 +1852,8 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     if (feat) L.held = I.keys[I.front];
     writeInfo(I.front, it, rows[s.row], s.col);
     L.panel = panel;
+    L.art = feat || !it.bgArt ? '' : bgSrc(it);
+    if (!feat) artNow(bgSrc(it));
     /* The panel from where it is (it may still be on its way in), held by its top from here, so that
        what opens in it opens downward; the title screen's block where it will rise to, a whole number
        of pixels above, so the two are drawn alike. The other panel, if it is still going out, is left to
@@ -1786,7 +1904,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     }
     const tm = timers.current;
     [tm.land, tm.hand].forEach((id) => window.clearTimeout(id));
-    document.body.classList.remove('pv-titled', 'pv-landed');
+    document.body.classList.remove('pv-titled', 'pv-landed', 'pv-art-same');
     stopTrailer();                             // safety: never leave a bridge trailer running behind Back
     const feat = info.current.hidden;
     const sank = L.faded as HTMLElement[];
@@ -1839,12 +1957,13 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     const col = s.cols[s.row] ?? 0;
     if (dir === 'up') {
       /* Up off the first row goes to the bar — on a tap; a held Up stops there. */
-      if (s.row === 0) { if (!held) barItemHere()?.focus({ preventScroll: true }); return; }
+      if (s.row === 0) { if (!held) barTarget()?.focus({ preventScroll: true }); return; }
       s.row -= 1;
     } else if (dir === 'down') {
       if (s.row < rows.length - 1) s.row += 1; else return;
     } else if (dir === 'left') {
-      if (col === 0) return;
+      /* Left off the first card opens the side rail — on a tap; a held Left stops there. */
+      if (col === 0) { if (!held) openRail(); return; }
       s.cols[s.row] = col - 1;
     } else if (col < rows[s.row].items.length - 1) s.cols[s.row] = col + 1;
     else return;
@@ -1876,6 +1995,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     if (!rows.length || leaving.current.id !== '') return;
     if (e.key === 'Enter') {
       if (e.repeat) return;                    // the OS repeats a held OK; the hold timer is enough
+      enter.current.down = true;
       /* OK while a trailer plays opens the title — never a sound toggle. On the featured row the card
          rises into the title head, so its trailer is stopped first and the title opens with no trailer.
          On a standard row the trailer plays on in the top-right backdrop and is handed to the title's
@@ -1885,14 +2005,14 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
         enter.current.held = true;             // this press is spent; the keyup must not also tap-open
         if (s.row === featAt) stopTrailer();    // featured: the card rises into the head; no carry-over
         else document.body.classList.add('pv-trailer-bg'); // standard: the trailer plays on as the backdrop
-        openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
+        openPv(rows[s.row], it);
         return;
       }
       const it = rows[s.row].items[s.cols[s.row] ?? 0];
       const canTrail = trailersOn && !!trailerUrl && !!it.imdb && it.imdb === dwelt?.imdb;
       if (!canTrail) {
         /* No trailer to offer — open at once, as OK always did. */
-        openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
+        openPv(rows[s.row], it);
         return;
       }
       /* A trailer is ready: wait to tell a tap (opens the title) from a hold (plays the trailer). */
@@ -1923,13 +2043,15 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
       const en = enter.current;
       window.clearTimeout(en.timer);
       en.timer = 0;
-      /* Released before the hold fired, and nothing is playing: it was a tap — open the title. */
-      if (!en.held && !playingRef.current) {
+      /* Released before the hold fired, and nothing is playing: it was a tap — open the title. (Not if
+         the press itself opened it: its title screen mounts a frame later, so this keyup still lands here.) */
+      if (en.down && !en.held && !playingRef.current && leaving.current.id === '') {
         const s = st.current;
         const it = rows[s.row]?.items[s.cols[s.row] ?? 0];
-        if (it) openModal({ ...openItem(it), backdrop: it.bgArt, pv: openTitle(it) });
+        if (it) openPv(rows[s.row], it);
       }
       en.held = false;
+      en.down = false;
       return;
     }
     const h = held.current;
@@ -1943,13 +2065,36 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
   return (
     <div
       ref={rootRef}
-      className="pv"
+      className={kind === 'myspace' ? 'pv is-myspace' : 'pv'}
       tabIndex={-1}
+      data-tv-noscroll=""
       style={{ ['--p' as string]: `${p}px` }}
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
       onFocus={() => { reveal(); apply(); }}
+      /* The key that took the remote out (Left into the rail, Up into the bar) is let go out there: its
+         keyup never comes here, so it is let go here, or the next press of it reads as a hold. */
+      onBlur={() => {
+        const h = held.current;
+        if (!h.key) return;
+        h.key = '';
+        window.clearTimeout(h.timer);
+        h.timer = 0;
+        fillPending();
+      }}
     >
+      {/* THE PAGE BEFORE ITS PICTURES: grey shapes UNDER it (first in paint order); the page fades in over them. */}
+      <div className="pv-skel" ref={skelRef} aria-hidden="true">
+        <div className="pv-skel-glide">
+          {(kind === 'myspace' ? SKELETON_MYSPACE : SKELETON).map(([x, y, w, h, r], i) => (
+            <div
+              key={i}
+              className="pv-sk"
+              style={{ left: `calc(${x} * var(--p))`, top: `calc(${y} * var(--p))`, width: `calc(${w} * var(--p))`, height: `calc(${h} * var(--p))`, borderRadius: `calc(${r} * var(--p))` }}
+            />
+          ))}
+        </div>
+      </div>
       <div className="pv-show">
         {/* THE BACKGROUND: two boxes top-right that the focused title's picture alternates between. */}
         {[0, 1].map((i) => (
@@ -2000,18 +2145,6 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
             </div>
           )} */}
 
-      {/* THE PAGE BEFORE ITS PICTURES: grey shapes over it until it shows itself. */}
-      <div className="pv-skel" ref={skelRef} aria-hidden="true">
-        <div className="pv-skel-glide">
-          {SKELETON.map(([x, y, w, h, r], i) => (
-            <div
-              key={i}
-              className="pv-sk"
-              style={{ left: `calc(${x} * var(--p))`, top: `calc(${y} * var(--p))`, width: `calc(${w} * var(--p))`, height: `calc(${h} * var(--p))`, borderRadius: `calc(${r} * var(--p))` }}
-            />
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

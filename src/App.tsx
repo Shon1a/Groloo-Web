@@ -9,6 +9,7 @@ import { useHistory } from './stores/history';
 import { useLibrary } from './stores/library';
 import { useRatings } from './stores/ratings';
 import { useOfficial } from './stores/official';
+import { useT } from './i18n/i18n';
 import { initHeartLibrary } from './lib/heartLibrary';
 import { initHeartCatalog } from './lib/heartCatalog';
 import { onBootRevealing } from './lib/bootGate';
@@ -46,6 +47,11 @@ const Categories = import.meta.env.MODE === 'tv'
   ? (() => null)
   : lazy(() => import('./routes/Categories'));
 const Library = lazy(() => import('./routes/Library'));
+/* The TV's Settings page, Prime Video's (a list on the left, the chosen section on the right): Add-ons,
+   the settings sections and the account. TV only — on the web /settings stays a pane of My Space. */
+const TvSettings = import.meta.env.MODE === 'tv'
+  ? lazy(() => import('./routes/TvSettings'))
+  : (() => null);
 /* The Prime-layout page — TV only. One component serves the Prime test page and the Series / Movies /
    Anime tabs; a `kind` prop picks which content it builds (routes/PrimeTest.tsx, routes/primeTestPage.ts). */
 const PrimeTest = PrimeTestPage ?? ((_props: { kind?: PvKind }) => null);
@@ -81,6 +87,20 @@ const IS_TV = import.meta.env.MODE === 'tv';
  * looking at. The shell (rail + background) stays painted throughout because Suspense sits
  * INSIDE the AppShell layout route, not around it. */
 const routeFallback = null;
+
+/* MY SPACE ON A TV: the Prime layout with My List as its one, featured-style row (PrimeTest kind
+   'myspace'). An empty list has no row to build, so it says so instead. */
+function TvMySpace() {
+  const n = useLibrary((s) => s.mylist.length);
+  const t = useT();
+  if (n) return <Suspense fallback={routeFallback}><PrimeTest key="pv-myspace" kind="myspace" /></Suspense>;
+  return (
+    <section className="page active tv-ms-empty" aria-label={t('myspace.title')}>
+      <h2 className="tv-ms-empty-title">{t('myspace.my_list')}</h2>
+      <p className="tv-ms-empty-text">{t('mylist.empty')}</p>
+    </section>
+  );
+}
 
 /* Hash routing (React Router in hash mode) — needs zero server config, so any static
  * host works with no catch-all rewrite. */
@@ -133,7 +153,8 @@ export default function App() {
     <HashRouter>
       <Routes>
         <Route element={<AppShell />}>
-          <Route index element={<Home />} />
+          {/* On a TV the home page IS the Prime-Video layout (the mixed home feed, routes/PrimeTest.tsx). */}
+          <Route index element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-prime" /></Suspense> : <Home />} />
           {/* discover surfaces */}
           <Route path="explore" element={<Suspense fallback={routeFallback}><Explore /></Suspense>} />
           {/* NOT ON A TELEVISION — see the note in TvTopNav for why the destination went. The
@@ -149,13 +170,14 @@ export default function App() {
           <Route path="movies" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-movie" kind="movie" /></Suspense> : <Browse cat="trending_movie" topLevel />} />
           <Route path="anime" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-anime" kind="anime" /></Suspense> : <Browse cat="trending_anime" topLevel />} />
           <Route path="browse/:cat" element={<Browse />} />
-          <Route path="prime" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-prime" /></Suspense> : <Navigate to="/" replace />} />
+          {/* The Prime test tab became the TV home page; the address stays so a stale entry lands somewhere real. */}
+          <Route path="prime" element={<Navigate to="/" replace />} />
           {/* library / add-ons / settings */}
-          <Route path="library" element={<Suspense fallback={routeFallback}><Library /></Suspense>} />
-          {/* Kept as addresses so a bookmark or a stale history entry still lands somewhere real:
-              My Space, with the pane they named already open. */}
-          <Route path="addons" element={<Navigate to="/library" replace state={{ section: 'addons' }} />} />
-          <Route path="settings" element={<Navigate to="/library" replace state={{ section: 'settings' }} />} />
+          <Route path="library" element={IS_TV ? <TvMySpace /> : <Suspense fallback={routeFallback}><Library /></Suspense>} />
+          {/* Web: kept as addresses so a bookmark or a stale history entry still lands somewhere real —
+              My Space, with the pane they named already open. TV: the Settings page (the rail's gear). */}
+          <Route path="addons" element={IS_TV ? <Navigate to="/settings" replace state={{ section: 'addons' }} /> : <Navigate to="/library" replace state={{ section: 'addons' }} />} />
+          <Route path="settings" element={IS_TV ? <Suspense fallback={routeFallback}><TvSettings /></Suspense> : <Navigate to="/library" replace state={{ section: 'settings' }} />} />
           {/* Device-link claim page. Deliberately NOT gated in AppShell's GATED list:
               the URL is typed off a TV screen by a user who may not be signed in yet,
               and the route itself has to hold the code they came to enter while the

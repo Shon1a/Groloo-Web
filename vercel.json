@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["fra1"],
+  "redirects": [
+    { "source": "/link", "destination": "/#/link", "permanent": false }
+  ],
   "rewrites": [
     { "source": "/t/(.*)", "destination": "/index.html" }
   ],

@@ -59,6 +59,8 @@ export interface MediaItem {
   /** detail/hero: the synopsis */
   overview?: string;
   genre?: string;
+  /** Japanese animation (server.js mapMovie) — the Anime tab's, so TV Shows and Movies leave it out. */
+  anime?: boolean;
   /** hero: admin-set focal point (0–100%) so the full-bleed banner crops around
    *  the subject instead of the fixed center/20%. Unset → the historical default. */
   heroFocusX?: number;

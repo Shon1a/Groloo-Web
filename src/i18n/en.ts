@@ -25,8 +25,6 @@ const SEED: Record<string, string> = {
   'nav.my_list': 'My List',
   'nav.search': 'Search',
   'nav.anime': 'Anime',
-  // TV bar: the Prime-layout test page.
-  'nav.prime_test': 'Prime',
   // Plural: it labels the rail item for /categories, which lists many. It read
   // "Category" among Movies/Anime/Settings, and was the only key in this group that
   // diverged from en-base — every sibling above restates it. Not a width workaround
@@ -329,6 +327,18 @@ const SEED: Record<string, string> = {
   'myspace.sign_in': 'Sign in',
   'myspace.sign_out': 'Sign out',
 
+  // TV Settings page (routes/TvSettings.tsx) — Prime Video's list on the left, in sentence case
+  // (the settings cards' own heads are all-caps eyebrows). And the side rail's Main menu.
+  'tvset.interface': 'Interface',
+  'tvset.autoplay': 'Autoplay',
+  'tvset.subtitles': 'Subtitles',
+  'tvset.playback': 'Playback',
+  'tvset.advanced': 'Advanced',
+  'tvset.account': 'Account',
+  'tvset.about': 'About',
+  'tvset.guest': 'You are not signed in. Sign in to keep your list, history and add-ons on every screen.',
+  'nav.main_menu': 'Main menu',
+
   // settings
   'settings.title': 'Settings',
   // AUDIO language, not the UI's. It labels the select bound to settings.audioLang
@@ -493,6 +503,17 @@ const SEED: Record<string, string> = {
    * account and approving a code are the same three steps on the same web page, and
    * describing them as two things would double the apparent cost of getting in. */
   'tvauth.title': 'Sign In From Another Device',
+  // Prime Video's "Two ways to sign in" (TvAuthModal, Nov 9).
+  'tvauth.two_ways': 'Two ways to sign in',
+  'tvauth.scan_head': 'Scan QR code',
+  'tvauth.scan_text': 'Use your camera app or QR code reader on your mobile device.',
+  'tvauth.scan_note': 'Make sure the QR code is clearly visible on your device’s screen. When connected, this page automatically updates.',
+  'tvauth.or': 'OR',
+  'tvauth.web_head': 'On the web',
+  'tvauth.web_1': 'Go to {url} on your mobile device or computer.',
+  'tvauth.web_2': 'Sign in or create an account.',
+  'tvauth.web_3': 'Enter the following code:',
+  'tvauth.web_note': 'When connected, this page automatically updates.',
   // 'tvauth.kicker' and 'tvauth.step_open' are no longer rendered on TV: the kicker restated the
   // title, and "go to <url>" is the QR code's job now. Both keys stay so the external
   // groloo-translations files that already carry them do not 404 against a missing entry.
