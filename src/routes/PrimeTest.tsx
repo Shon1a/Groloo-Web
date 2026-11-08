@@ -8,7 +8,7 @@ import { HOME_ROWS, PROVIDER_CATS } from '../lib/home';
 import { api } from '../lib/api';
 import { gridUrl } from '../lib/grid';
 import { imgW } from '../lib/img';
-import { barItemHere, openRail, setPageEntry } from '../lib/tvBar';
+import { barItemHere, openRail, setPageEntry, setPageToBar } from '../lib/tvBar';
 import { bootRowsStaged } from '../lib/bootGate';
 import { registerBackHandler } from '../lib/tvKeys';
 import { PAGE_EXIT, registerPageExit, takeArrival } from '../lib/tvPageSlide';
@@ -1730,6 +1730,16 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
     return true;
   }, 100), [apply, trackAt]);
 
+  /* The rail's Main menu (lib/tvBar.ts pageToBar): the bar shows with the remote in it, the rows stay
+     where they are. */
+  useEffect(() => setPageToBar(() => {
+    const el = barTarget();
+    if (!el) return false;
+    el.focus({ preventScroll: true });
+    document.body.classList.remove('pv-deep');
+    return true;
+  }), []);
+
   /* ---- OK: THE TITLE SCREEN (TvDetail, over this page) comes out of the panel (OPEN_MS). What is on
      screen goes at the press, whether or not the title screen is ready — no spinner however long it
      takes (the user's call, Oct 29) — and the page takes no keys till it is closed. The rows and the
@@ -2071,7 +2081,7 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
       style={{ ['--p' as string]: `${p}px` }}
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
-      onFocus={() => { reveal(); apply(); }}
+      onFocus={() => { document.body.classList.toggle('pv-deep', st.current.row > 0); reveal(); apply(); }}
       /* The key that took the remote out (Left into the rail, Up into the bar) is let go out there: its
          keyup never comes here, so it is let go here, or the next press of it reads as a hold. */
       onBlur={() => {

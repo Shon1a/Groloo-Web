@@ -41,6 +41,22 @@ export function pageEntry(): HTMLElement | null {
   return el && el.isConnected ? el : null;
 }
 
+/* ---- AND UP TO THE BAR, when the page has to bring it back first -------------------------------------
+ *
+ * The rail's Main menu. Focusing the bar item is enough on most pages, but a Prime page hides its bar
+ * while the rows are below the first (body.pv-deep) and so must show it itself — the rows stay where
+ * they are. It registers that here; true when it did it (the remote is then on the bar). */
+let toBarFn: (() => boolean) | null = null;
+
+export function setPageToBar(fn: () => boolean): () => void {
+  toBarFn = fn;
+  return () => { if (toBarFn === fn) toBarFn = null; };
+}
+
+export function pageToBar(): boolean {
+  return toBarFn?.() ?? false;
+}
+
 /* ---- AND INTO THE SIDE RAIL (TvTopNav's RAIL), from the left edge of a page ------------------------
  *
  * Left off a row's first card, as the reference does. The rail's items are tabindex -1, so geometry

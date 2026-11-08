@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useT } from '../i18n/i18n';
 import { useAuth } from '../stores/auth';
 import { flushPageSwitch, pageSwitchPending, slideTo } from '../lib/tvPageSlide';
-import { barItemHere, openRail, pageEntry } from '../lib/tvBar';
+import { barItemHere, openRail, pageEntry, pageToBar } from '../lib/tvBar';
 import { registerBackHandler } from '../lib/tvKeys';
 import { PrimeTestPage } from '../routes/primeTestPage';
 
@@ -311,6 +311,7 @@ export default function TvTopNav() {
        remote arriving there opens nothing); on a page with no bar (Settings), Home's, at Home. */
     if (to === 'menu') {
       railFrom.current = null;
+      if (pageToBar()) return;
       const here = barItemHere() || groupRef.current?.querySelector<HTMLElement>('button.tv-nav-item') || null;
       if (here && here.offsetParent) { here.focus({ preventScroll: true }); return; }
       railGoing.current = '/';
