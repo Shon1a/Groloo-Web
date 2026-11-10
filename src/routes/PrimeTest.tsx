@@ -334,7 +334,7 @@ const US_AGE: Record<string, string> = {
   'TV-Y7': '7+', 'TV-Y7-FV': '7+', PG: '7+', 'TV-PG': '7+',
   'PG-13': '13+', 'TV-14': '16+', R: '18+', 'NC-17': '18+', 'TV-MA': '18+',
 };
-const ageOf = (m: MediaItem, d?: MetaDetail) => {
+export const ageOf = (m: MediaItem, d?: MetaDetail) => {
   const c = (d ? d.certification : m.certification)?.trim().toUpperCase();
   if (!c) return '';
   const n = /^\d+/.exec(c)?.[0];

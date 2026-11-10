@@ -4368,6 +4368,7 @@ body.tv-bar-off .tv-shell .tv-topnav { display: none; }
   /* The search page's box, column and grid arrive at once. */
   .tv-shell #explore .tv-srch-ring.is-armed,
   .tv-shell #explore .tv-sk-in,
+  .tv-shell #explore .tv-sg-chipsin,
   .tv-shell #explore .tv-sg-rows,
   .tv-shell #explore .tv-sg-view { transition: none; }
   .tv-hero-layer { transition: none; }
@@ -6093,32 +6094,41 @@ body.tv-bar-off .tv-shell .tv-topnav { display: none; }
 }
 
 /* ============================================================================================
-   THE SEARCH PAGE — keyboard and list on the left, posters on the right (components/TvSearch).
+   THE SEARCH PAGE — keyboard and genres on the left, results on the right (components/TvSearch).
 
-   Laid out from the reference, Netflix's TV search measured frame by frame at 16:9: square keys
-   about 6% of the screen's height, six across with hairline gaps; a list of lines under them; four
-   portrait posters across, two rows and the top of a third on screen. The page is one screen tall
-   and never scrolls the document — the column and the grid each move their own contents.
+   The left is Netflix's TV search, measured frame by frame at 16:9: square keys about 6% of the
+   screen's height, six across with hairline gaps, a list of lines under them. The right is Prime
+   Video's (its TV app on an Android TV emulator, Nov 11, in TV pixels at 1920x1080 times --u): a row
+   of chips 48 tall, the grid 39 under it, three 384x216 tiles across, 30 apart and rows 36 apart; on
+   a tile, the grid drops so that row's top is at 464 on screen, the title's name and facts take the
+   chips' place, and its picture comes up top-right. The page is one screen tall and never scrolls
+   the document — the column, the chips and the grid each move their own contents.
 
    Sized by the height first and capped by the width, so a narrow window (the dev browser) shrinks
-   the posters rather than pushing the fourth column off the edge. The whole composition is centred:
-   the reference's keyboard sits right of an icon rail this build does not have. */
+   the tiles rather than pushing the third column off the edge. The whole composition is centred:
+   the reference's keyboard sits right of an icon rail this build does not have. The page starts at
+   the top of the screen, under the top bar (as the Prime page does), so the picture can reach it. */
 .tv-shell #explore.tv-srch {
+  --u: calc(100vh / 1080);
   --sk-key: clamp(30px, min(6.2vh, 3.5vw), 68px);
   --sk-gap: 2px;
   --sk-w: calc(var(--sk-key) * 6 + var(--sk-gap) * 5);
   --srch-gap: clamp(28px, 3.4vw, 72px);
-  --sg-gap: clamp(6px, .55vw, 12px);
-  /* A poster's width: 0.7 of a height that fits two rows and a peek, or a quarter of what is left. */
-  --sg-w: min(calc(39vh * .7), calc((100vw - var(--page-pad) * 2 - var(--sk-w) - var(--srch-gap) - var(--sg-gap) * 3) / 4));
+  --sg-gap: calc(30 * var(--u));
+  /* A tile's width: the reference's 384, or a third of what is left. */
+  --sg-w: min(calc(384 * var(--u)), calc((100vw - var(--page-pad) * 2 - var(--sk-w) - var(--srch-gap) - var(--sg-gap) * 2) / 3));
+  /* The grid's top under the chips, and the focus line it drops to — from the right column's top. */
+  --sg-top: calc(87 * var(--u));
+  --sg-line: calc(317 * var(--u));
   --sk-ring: clamp(2px, .32vh, 4px);
   position: relative;
   display: flex;
   justify-content: center;
   gap: var(--srch-gap);
-  height: calc(100vh - var(--tv-topbar-pad));
+  height: 100vh;
   min-height: 0;
-  padding: clamp(10px, 2.4vh, 30px) var(--page-pad) 0;
+  margin-top: calc(var(--tv-topbar-pad) * -1);
+  padding: calc(var(--tv-topbar-pad) + clamp(10px, 2.4vh, 30px)) var(--page-pad) 0;
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -6221,7 +6231,8 @@ body.tv-bar-off .tv-shell .tv-topnav { display: none; }
   opacity: 0;
   pointer-events: none;
 }
-.tv-shell #explore .tv-srch-ring.is-tile { border-radius: 6px; }
+.tv-shell #explore .tv-srch-ring.is-tile { border-radius: calc(7 * var(--u)); }
+.tv-shell #explore .tv-srch-ring.is-chip { border-radius: calc(8 * var(--u)); }
 .tv-shell #explore .tv-srch-ring.is-on { opacity: 1; }
 .tv-shell #explore .tv-srch-ring.is-armed {
   transition:
@@ -6231,61 +6242,190 @@ body.tv-bar-off .tv-shell .tv-topnav { display: none; }
     border-radius .48s cubic-bezier(.25, .7, .5, 1);
 }
 
-/* ---- THE GRID ------------------------------------------------------------------------------ */
+/* ---- THE RESULTS: chips (or a heading), then the grid ------------------------------------- */
 .tv-shell #explore .tv-sg {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
-  width: calc(var(--sg-w) * 4 + var(--sg-gap) * 3);
+  width: calc(var(--sg-w) * 3 + var(--sg-gap) * 2);
   height: 100%;
   min-width: 0;
 }
+.tv-shell #explore .tv-sg-top {
+  flex: 0 0 var(--sg-top);
+  height: var(--sg-top);
+  transition: opacity .2s linear;
+}
+.tv-shell #explore.is-info .tv-sg-top { opacity: 0; }
 .tv-shell #explore .tv-sg-head {
-  flex: 0 0 auto;
-  margin: 0 0 clamp(10px, 1.8vh, 22px);
+  margin: 0;
   font-size: var(--sp-title);
   font-weight: 600;
-  line-height: 1.2;
+  line-height: calc(48 * var(--u));
   color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tv-shell #explore .tv-sg-note { font-size: .7em; font-weight: 400; color: var(--text-muted); }
+/* The chips run off the right edge, fading into it, as the reference's do. */
+.tv-shell #explore .tv-sg-chips {
+  height: calc(48 * var(--u));
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 80 * var(--u)), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 80 * var(--u)), transparent);
+}
+.tv-shell #explore .tv-sg-chipsin {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  white-space: nowrap;
+  transition: transform .48s cubic-bezier(.25, .7, .5, 1);
+  will-change: transform;
+}
+.tv-shell #explore .tv-sg-chip {
+  flex: none;
+  height: 100%;
+  margin: 0 calc(10 * var(--u)) 0 0;
+  padding: 0 calc(16 * var(--u));
+  border: 0;
+  border-radius: calc(8 * var(--u));
+  background: none;
+  color: #fff;
+  font-size: calc(26 * var(--u));
+  line-height: 1;
+  cursor: pointer;
+}
+/* The chip whose results are on screen. */
+.tv-shell #explore .tv-sg-chip.is-on { background: rgb(48, 52, 59); }
+.tv-shell #explore .tv-sg-chip:focus-visible { outline: none; }
+.tv-shell #explore .tv-sg-note { flex: none; font-size: calc(22 * var(--u)); color: var(--text-muted); }
+
+/* ---- THE TITLE THE REMOTE IS ON: name and facts in the chips' place, picture top-right ------- */
+.tv-shell #explore .tv-sg-line { position: absolute; top: var(--sg-line); left: 0; width: 0; height: 0; }
+.tv-shell #explore .tv-sg-info {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s linear;
+}
+.tv-shell #explore.is-info .tv-sg-info { opacity: 1; }
+.tv-shell #explore .tv-sg-title {
+  margin: 0;
+  max-width: calc(900 * var(--u));
+  font-size: calc(46 * var(--u));
+  font-weight: 700;
+  line-height: calc(56 * var(--u));
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tv-shell #explore .tv-sg-facts {
+  display: flex;
+  align-items: center;
+  gap: calc(24 * var(--u));
+  height: calc(36 * var(--u));
+  margin: calc(14 * var(--u)) 0 0;
+  font-size: calc(24 * var(--u));
+  color: rgb(179, 179, 179);
+}
+.tv-shell #explore .tv-sg-facts > :empty { display: none; }
+.tv-shell #explore .tv-sg-genre { color: rgb(241, 241, 241); }
+.tv-shell #explore .tv-sg-age {
+  display: flex;
+  align-items: center;
+  height: calc(36 * var(--u));
+  padding: 0 calc(10 * var(--u));
+  border-radius: calc(6 * var(--u));
+  background: rgb(51, 55, 61);
+  color: #fff;
+  font-size: calc(20 * var(--u));
+  font-weight: 700;
+}
+/* The picture: 800x450 in the screen's top-right corner, its left and bottom edges darkened into the
+   black (as the Prime page's are, .pv-art-fade). Dimmed at every move; back once the remote rests. */
+.tv-shell #explore .tv-sg-art {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: calc(800 * var(--u));
+  height: calc(450 * var(--u));
+  pointer-events: none;
+}
+.tv-shell #explore .tv-sg-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  opacity: 0;
+  transition: opacity .19s linear;
+}
+.tv-shell #explore.is-info .tv-sg-art img.rdy { opacity: 1; }
+.tv-shell #explore .tv-sg-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, #000 0%, rgba(0, 0, 0, .9) 8%, rgba(0, 0, 0, .5) 18%, rgba(0, 0, 0, .1) 30%, rgba(0, 0, 0, 0) 40%),
+    linear-gradient(0deg, #000 0%, rgba(0, 0, 0, .9) 8%, rgba(0, 0, 0, .5) 18%, rgba(0, 0, 0, .1) 30%, rgba(0, 0, 0, 0) 40%);
+}
+
+/* ---- THE GRID ------------------------------------------------------------------------------ */
 .tv-shell #explore .tv-sg-view {
   position: relative;
-  /* Basis 0: the rows inside are many screens tall, and an `auto` basis let them squeeze the heading. */
+  /* Basis 0: the rows inside are many screens tall, and an `auto` basis let them squeeze the top. */
   flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
-  transition: opacity .2s linear;
+  transition: opacity .2s linear, transform .48s cubic-bezier(.25, .7, .5, 1);
 }
-/* Dimmed while what is on screen is about to change: the remote resting on a line, or new results
-   on their way. */
+/* With the remote on a tile, the grid drops to the focus line (TvSearch's `place` adds the same). The
+   rows above the one it is on are scrolled up out of the view, so they are gone under the name. */
+.tv-shell #explore.is-info .tv-sg-view { transform: translate3d(0, calc(var(--sg-line) - var(--sg-top)), 0); }
+/* Dimmed while what is on screen is about to change: the remote resting on a line or chip, or new
+   results on their way. */
 .tv-shell #explore .tv-sg.is-dim .tv-sg-view,
 .tv-shell #explore .tv-sg-view.is-stale { opacity: .4; }
 .tv-shell #explore .tv-sg-rows {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, var(--sg-w));
-  gap: var(--sg-gap);
+  grid-template-columns: repeat(3, var(--sg-w));
+  column-gap: var(--sg-gap);
+  row-gap: calc(36 * var(--u));
   transition: transform .48s cubic-bezier(.25, .7, .5, 1);
   will-change: transform;
 }
-/* Portrait at 0.7, the reference's box art. `padding-bottom` and not `aspect-ratio`, which the set's
-   Chromium 87 does not have. */
+/* 16:9, the reference's tiles, with its grey before the picture. `padding-bottom` and not
+   `aspect-ratio`, which the set's Chromium 87 does not have. */
 .tv-shell #explore .tv-sg-tile {
   position: relative;
   display: block;
   width: 100%;
   height: 0;
   margin: 0;
-  padding: 0 0 142.86%;
+  padding: 0 0 56.25%;
   border: 0;
-  border-radius: 6px;
+  border-radius: calc(7 * var(--u));
   overflow: hidden;
+  background: #33373d;
   cursor: pointer;
 }
+.tv-shell #explore .tv-sg-pic {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity .2s linear;
+}
+.tv-shell #explore .tv-sg-pic.rdy { opacity: 1; }
 .tv-shell #explore .tv-sg-tile:focus-visible { outline: none; }
 .tv-shell #explore .tv-sg-view > .cat-loader {
   position: absolute;

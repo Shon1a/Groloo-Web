@@ -4,29 +4,34 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { gridUrl, type GridDesc } from '../lib/grid';
 import { imgW } from '../lib/img';
-import { heroFallbackGradient } from '../lib/hero';
 import { barItemHere, openRail, setPageEntry } from '../lib/tvBar';
 import { useGenres } from '../lib/queries';
 import { useT, useGenre, useLang } from '../i18n/i18n';
 import { useModal, openItem } from '../stores/modal';
 import { useAddonSearch } from './AddonSearchRows';
-import { tilePictureOf, LOGO_RENDITION } from './TvSpotlight';
+import { ageOf } from '../routes/PrimeTest';
 import type { MediaItem } from '../lib/types';
 
-/* THE TV SEARCH PAGE — Netflix's, laid out the way its TV app lays it out: an on-screen keyboard at
- * the left with a list under it, and the results as a grid of posters filling the rest of the screen.
+/* THE TV SEARCH PAGE — an on-screen keyboard at the left with the genres under it (Netflix's), and the
+ * results at the right as Prime Video's TV app draws them (its search on an Android TV emulator, Nov 11):
+ * the query's suggestions as a row of chips on top, then three 16:9 tiles across. With the remote on a
+ * tile, the chips give way to the title's name and facts, its picture comes up top-right, and the grid
+ * drops so the row the remote is on sits on one line under them — rows above it gone.
+ *
+ * Nothing typed (or a genre chosen), the chips' place is the heading of what the grid shows.
  *
  * THE KEYBOARD IS OURS, NOT THE PLATFORM'S. The page used to be a text field, and a text field on a TV
  * is a negotiation with whichever IME the set ships (see lib/tvIme.ts for what it took to raise one at
  * all). Here every letter is a button the remote already knows how to walk to and press, so typing
  * works the same on every set, and the results stay on screen while the query grows.
  *
- * THE LIST UNDER IT CHANGES WITH THE QUERY. Empty, it is the genres; typing, it is the titles the query
- * is finding. Resting on a line shows it (DWELL, the same follow-focus the top bar uses), OK shows it at
- * once — a genre's titles, or the query's results with that title moved to the front — and while the
- * remote rests, the grid dims, so a viewer can see that what is on screen is about to change.
+ * THE GENRES UNDER THE KEYBOARD, THE QUERY'S TITLES IN THE CHIPS. The first chip is the query itself, the
+ * rest the titles it is finding. Resting on a line or a chip shows it (DWELL, the same follow-focus the
+ * top bar uses), OK shows it at once — a genre's titles, or the query's results with that title moved to
+ * the front — and while the remote rests, the grid dims, so a viewer can see that what is on screen is
+ * about to change.
  *
- * THE PAGE OWNS ALL FOUR ARROWS. Keys, lines and tiles are three regular shapes, and walking them is
+ * THE PAGE OWNS ALL FOUR ARROWS. Keys, lines, chips and tiles are regular shapes, and walking them is
  * arithmetic over row and column; TvSpatialNav's geometry would answer the edges between them by
  * whichever box happens to score nearest. Up from the top of the keyboard or of the grid goes to the
  * bar, and Down from the bar comes back to whatever the remote left (`setPageEntry`). */
@@ -36,7 +41,9 @@ const samePick = (a: Pick | null, b: Pick | null) => !!a && !!b && a.kind === b.
 
 const KEYS = ['abcdef', 'ghijkl', 'mnopqr', 'stuvwx', 'yz1234', '567890'].map((r) => r.split(''));
 const LAST_ROW = KEYS.length - 1;
-const COLS = 4;
+const COLS = 3;
+/* The title's picture top-right comes once the remote has rested on a tile this long. */
+const ART_REST = 300;
 /** How long the remote rests on a line before the grid follows it. The reference swaps ~600ms after. */
 const DWELL = 600;
 /** Letters come off the keyboard slowly enough that most of a longer wait lands after the last one. */
@@ -163,15 +170,18 @@ export default function TvSearch() {
   const lastSug = useRef<string[]>([]);
   if (!typing) lastSug.current = [];
   else if (fresh) lastSug.current = fresh;
-  const list: Pick[] = typing
-    ? lastSug.current.map((value) => ({ kind: 'title' as const, value }))
-    : (genresData?.genres ?? []).map((value) => ({ kind: 'genre' as const, value }));
+  const list: Pick[] = (genresData?.genres ?? []).map((value) => ({ kind: 'genre' as const, value }));
+  /* The first chip (value '') is the query as typed: its results with nothing moved to the front. */
+  const chips: Pick[] = typing
+    ? [{ kind: 'title' as const, value: '' }, ...lastSug.current.map((value) => ({ kind: 'title' as const, value }))]
+    : [];
 
-  /* A title line is not searched for on its own: an exact title finds that title and little else, and
-     a grid that shrank to one poster each time the remote passed a line read as broken. The query's
+  /* A title chip is not searched for on its own: an exact title finds that title and little else, and
+     a grid that shrank to one poster each time the remote passed a chip read as broken. The query's
      results stay, with that title first — while it is one of the titles they are suggesting. */
-  const shown = pick && (pick.kind === 'genre' || list.some((p) => samePick(p, pick))) ? pick : null;
+  const shown = pick && (pick.kind === 'genre' || chips.some((p) => samePick(p, pick))) ? pick : null;
   const front = shown?.kind === 'title' ? shown.value : '';
+  const showChips = chips.length > 0 && shown?.kind !== 'genre';
 
   const { items: addonHits, searching } = useAddonSearch(desc.kind === 'search' ? desc.query : '');
   const heading = shown ? (shown.kind === 'genre' ? genreT(shown.value) : shown.value) : (typing ? typed : t('explore.trending'));
@@ -186,7 +196,9 @@ export default function TvSearch() {
   };
   const choose = (p: Pick) => { window.clearTimeout(dwell.current); setPick(p); };
   const leaveLine = () => { window.clearTimeout(dwell.current); setHover(null); };
-  const pending = !!hover && !samePick(hover, shown);
+  /* Whether a line or chip is what the grid shows: the query's own chip is, while nothing else is chosen. */
+  const isShown = (p: Pick) => samePick(p, shown) || (!shown && p.kind === 'title' && !p.value);
+  const pending = !!hover && !isShown(hover);
 
   // Typing ends any rest; on a line, the remote rests again on whatever the line now says (below).
   const press = (k: string) => {
@@ -194,6 +206,9 @@ export default function TvSearch() {
       : k === ' ' ? (typed && !typed.endsWith(' ') ? `${typed} ` : typed)
         : `${typed}${k}`.slice(0, 100);
     if (next === typed) return;
+    // A new query's chips start from the first.
+    chipX.current = 0;
+    if (chipsInRef.current) chipsInRef.current.style.transform = '';
     setTyped(next);
     setPick(null);
     leaveLine();
@@ -213,12 +228,24 @@ export default function TvSearch() {
   const innerRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const sgRef = useRef<HTMLDivElement>(null);
+  const lineRef = useRef<HTMLSpanElement>(null);
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const chipsInRef = useRef<HTMLDivElement>(null);
+  const chipX = useRef(0);
   const grid = useRef<GridApi | null>(null);
   const kbCol = useRef(0);
   /** Where the remote last was on the page — what Left out of the grid and Down out of the bar return to. */
   const side = useRef<HTMLElement | null>(null);
   const last = useRef<HTMLElement | null>(null);
 
+  /* Into the chips, on the one whose results are showing. False when there are none. */
+  const toChip = useCallback(() => {
+    const box = chipsRef.current;
+    const to = box?.querySelector<HTMLElement>('.tv-sg-chip.is-on') ?? box?.querySelector<HTMLElement>('.tv-sg-chip');
+    to?.focus({ preventScroll: true });
+    return !!to;
+  }, []);
   const keyAt = useCallback((r: number, c: number) => (
     innerRef.current?.querySelector<HTMLElement>(`.tv-sk-key[data-r="${r}"][data-c="${c}"]`) ?? null
   ), []);
@@ -234,9 +261,26 @@ export default function TvSearch() {
     const inner = innerRef.current;
     if (!page || !ring || !view || !inner) return;
     const tile = el.classList.contains('tv-sg-tile');
+    const chip = el.classList.contains('tv-sg-chip');
     let scroll = 0;
-    if (tile) scroll = grid.current?.y() ?? 0;
-    else {
+    let dx = 0;
+    if (tile) {
+      /* With the remote in the grid, the grid has dropped to the focus line (.tv-sg.is-info): offsets
+         do not see that move, so it is added here. */
+      const gv = sgRef.current?.querySelector<HTMLElement>('.tv-sg-view');
+      scroll = (grid.current?.y() ?? 0) - Math.max(0, (lineRef.current?.offsetTop ?? 0) - (gv?.offsetTop ?? 0));
+    } else if (chip) {
+      // The chips slide sideways to keep the one the remote is on inside their row.
+      const box = chipsRef.current;
+      const w = box?.clientWidth ?? 0;
+      let sx = chipX.current;
+      if (el.offsetLeft === 0) sx = 0;
+      else if (el.offsetLeft + el.offsetWidth > sx + w) sx = el.offsetLeft + el.offsetWidth - w;
+      else if (el.offsetLeft < sx) sx = el.offsetLeft;
+      chipX.current = sx;
+      if (chipsInRef.current) chipsInRef.current.style.transform = sx ? `translate3d(${-sx}px, 0, 0)` : '';
+      dx = -sx;
+    } else {
       /* In the list, the keyboard rolls up out of the way (its last row stays, as the reference's does)
          and the column follows the remote down from there, a whole key row or line at a time — never
          part of one left under the top edge. On the keyboard it is all the way back. */
@@ -248,13 +292,14 @@ export default function TvSearch() {
       }
       inner.style.transform = scroll ? `translate3d(0, ${-scroll}px, 0)` : '';
     }
-    let x = 0;
+    let x = dx;
     let y = -scroll;
     for (let n: HTMLElement | null = el; n && n !== page; n = n.offsetParent as HTMLElement | null) {
       x += n.offsetLeft;
       y += n.offsetTop;
     }
     ring.classList.toggle('is-tile', tile);
+    ring.classList.toggle('is-chip', chip);
     ring.style.transform = `translate(${x}px, ${y}px)`;
     ring.style.width = `${el.offsetWidth}px`;
     ring.style.height = `${el.offsetHeight}px`;
@@ -265,16 +310,47 @@ export default function TvSearch() {
     }
   }, [keyAt]);
 
+  /* ---- THE TITLE THE REMOTE IS ON: its name and facts over the grid, its picture top-right ---------- */
+  const infoRef = useRef<HTMLDivElement>(null);
+  const artRef = useRef<HTMLImageElement>(null);
+  const artTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(artTimer.current), []);
+  const showInfo = useCallback((m: MediaItem | null) => {
+    // On the section: its className never changes, so React never writes over this.
+    pageRef.current?.classList.toggle('is-info', !!m);
+    const art = artRef.current;
+    window.clearTimeout(artTimer.current);
+    art?.classList.remove('rdy');
+    const el = infoRef.current;
+    if (!m || !el || !art) return;
+    const q = (s: string) => el.querySelector<HTMLElement>(s)!;
+    q('.tv-sg-title').textContent = m.title ?? '';
+    q('.tv-sg-age').textContent = ageOf(m);
+    // '—' is the server's word for no genre.
+    q('.tv-sg-genre').textContent = m.genre && m.genre !== '—' ? genreT(m.genre) : '';
+    q('.tv-sg-year').textContent = m.year ? String(m.year).slice(0, 4) : '';
+    el.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'linear' });
+    const src = imgW(m.bgArt ?? m.backdrop ?? '', 'w1280');
+    artTimer.current = window.setTimeout(() => {
+      if (!src) return;
+      if (art.getAttribute('src') === src && art.complete) art.classList.add('rdy');
+      else art.src = src;
+    }, ART_REST);
+  }, [genreT]);
+
   const onPageFocus = (e: ReactFocusEvent<HTMLElement>) => {
     const el = e.target as HTMLElement;
-    if (!el.matches('.tv-sk-key, .tv-sk-item, .tv-sg-tile')) return;
+    if (!el.matches('.tv-sk-key, .tv-sk-item, .tv-sg-chip, .tv-sg-tile')) return;
     last.current = el;
-    if (!el.classList.contains('tv-sg-tile')) side.current = el;
+    const tile = el.classList.contains('tv-sg-tile');
+    if (el.matches('.tv-sk-key, .tv-sk-item')) side.current = el;
+    showInfo(tile ? grid.current?.item(Number(el.dataset.gi)) ?? null : null);
     place(el);
   };
   const onPageBlur = (e: ReactFocusEvent<HTMLElement>) => {
     if (e.currentTarget.contains(e.relatedTarget as Node)) return;
     ringRef.current?.classList.remove('is-on', 'is-armed');
+    showInfo(null);
   };
   // A window that changes size moves everything under the box.
   useEffect(() => {
@@ -286,22 +362,22 @@ export default function TvSearch() {
     return () => window.removeEventListener('resize', onResize);
   }, [place]);
 
-  /* THE LIST IS REWRITTEN UNDER THE REMOTE as the query's titles come in. A line that now says something
-     else is rested on afresh — what was being rested on is gone — and a line that went altogether hands
-     the remote to the last one left, or to the keyboard. */
+  /* THE CHIPS ARE REWRITTEN UNDER THE REMOTE as the query's titles come in. A chip that now says
+     something else is rested on afresh — what was being rested on is gone — and a chip that went
+     altogether hands the remote to the last one left, or to the keyboard. */
   useLayoutEffect(() => {
     const a = document.activeElement as HTMLElement | null;
-    if (a?.classList.contains('tv-sk-item')) {
-      const p = list[Number(a.dataset.i)];
+    if (a?.classList.contains('tv-sg-chip')) {
+      const p = chips[Number(a.dataset.i)];
       if (p && !samePick(p, hover)) rest(p);
       return;
     }
-    const s = side.current;
-    if (!s || s.isConnected || !s.classList.contains('tv-sk-item')) return;
+    const s = last.current;
+    if (!s || s.isConnected || !s.classList.contains('tv-sg-chip')) return;
     if (a && a !== document.body) return;
     leaveLine();
-    const lines = listRef.current?.querySelectorAll<HTMLElement>('.tv-sk-item');
-    (lines?.length ? lines[lines.length - 1] : keyAt(LAST_ROW, kbCol.current))?.focus({ preventScroll: true });
+    const all = chipsRef.current?.querySelectorAll<HTMLElement>('.tv-sg-chip');
+    (all?.length ? all[all.length - 1] : keyAt(0, 5))?.focus({ preventScroll: true });
   });
 
   const onColKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -356,12 +432,34 @@ export default function TvSearch() {
       if (r < 0) { if (c === 3) go(keyAt(-1, 0)); else if (!e.repeat) openRail(); } else if (c > 0) go(keyAt(r, c - 1)); else if (!e.repeat) openRail();
     } else if (r < 0 ? c === 0 : c < 5) {
       go(r < 0 ? keyAt(-1, 3) : keyAt(r, c + 1));
-    } else {
+    } else if (!toChip()) {
       grid.current?.enter();
     }
   };
 
+  const onChipKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!ARROWS.includes(e.key)) return;
+    const el = e.target as HTMLElement;
+    if (!el.classList.contains('tv-sg-chip')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const i = Number(el.dataset.i);
+    const chip = (n: number) => chipsRef.current?.querySelector<HTMLElement>(`.tv-sg-chip[data-i="${n}"]`);
+    if (e.key === 'ArrowLeft') (i > 0 ? chip(i - 1) : side.current?.isConnected ? side.current : keyAt(0, 5))?.focus({ preventScroll: true });
+    else if (e.key === 'ArrowRight') chip(i + 1)?.focus({ preventScroll: true });
+    else if (e.key === 'ArrowUp') (barItemHere() || document.querySelector<HTMLElement>('button.tv-nav-item'))?.focus({ preventScroll: true });
+    else {
+      // Down off a chip means "show me these", as Right off a genre does.
+      const p = chips[i];
+      if (p && !isShown(p)) { choose(p); grid.current?.enter(true); } else grid.current?.enter();
+    }
+  };
+
   const onOpen = useCallback((m: MediaItem) => openModal(openItem(m)), [openModal]);
+  // Up off the grid's first row: the chips, or the bar when there are none.
+  const onGridUp = useCallback(() => {
+    if (!toChip()) (barItemHere() || document.querySelector<HTMLElement>('button.tv-nav-item'))?.focus({ preventScroll: true });
+  }, [toChip]);
 
   return (
     <section className="page active tv-srch" id="explore" aria-label="Explore" ref={pageRef} onFocus={onPageFocus} onBlur={onPageBlur}>
@@ -395,11 +493,40 @@ export default function TvSearch() {
           )}
         </div>
       </div>
-      <div className={`tv-sg${pending ? ' is-dim' : ''}`}>
-        <h2 className="tv-sg-head" aria-live="polite">
-          {heading}
-          {searching && <span className="tv-sg-note"> · {t('search.addons_searching')}</span>}
-        </h2>
+      <div className="tv-sg-art" aria-hidden="true">
+        <img ref={artRef} alt="" decoding="async" onLoad={(e) => e.currentTarget.classList.add('rdy')} />
+      </div>
+      <div className={`tv-sg${pending ? ' is-dim' : ''}`} ref={sgRef}>
+        <span className="tv-sg-line" ref={lineRef} aria-hidden="true" />
+        <div className="tv-sg-info" ref={infoRef} aria-hidden="true">
+          <p className="tv-sg-title" />
+          <p className="tv-sg-facts"><span className="tv-sg-age" /><span className="tv-sg-genre" /><span className="tv-sg-year" /></p>
+        </div>
+        <div className="tv-sg-top">
+          {showChips ? (
+            <div className="tv-sg-chips" ref={chipsRef} onKeyDown={onChipKey}>
+              <div className="tv-sg-chipsin" ref={chipsInRef}>
+                {/* Keyed by position, so chips that change under the remote keep its focus where it is. */}
+                {chips.map((p, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className={`tv-sg-chip${isShown(p) ? ' is-on' : ''}`}
+                    data-i={i}
+                    onFocus={() => rest(p)}
+                    onBlur={leaveLine}
+                    onClick={() => choose(p)}
+                  >
+                    {p.value || typed.trim()}
+                  </button>
+                ))}
+                {searching && <span className="tv-sg-note">{t('search.addons_searching')}</span>}
+              </div>
+            </div>
+          ) : (
+            <h2 className="tv-sg-head" aria-live="polite">{heading}</h2>
+          )}
+        </div>
         <SearchGrid
           desc={desc}
           front={front}
@@ -407,6 +534,7 @@ export default function TvSearch() {
           emptyText={desc.kind === 'search' ? t('grid.no_results', { q: desc.query }) : t('grid.no_titles')}
           onOpen={onOpen}
           onExitLeft={backToSide}
+          onExitUp={onGridUp}
           apiRef={grid}
         />
       </div>
@@ -422,6 +550,8 @@ interface GridApi {
   enter(later?: boolean): void;
   /** How far the rows are scrolled — where they are going, not where they are mid-move. */
   y(): number;
+  /** The title on the tile at this index. */
+  item(i: number): MediaItem | null;
 }
 
 interface SearchGridProps {
@@ -432,15 +562,16 @@ interface SearchGridProps {
   emptyText: string;
   onOpen: (m: MediaItem) => void;
   onExitLeft: () => void;
+  onExitUp: () => void;
   apiRef: MutableRefObject<GridApi | null>;
 }
 
-const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onOpen, onExitLeft, apiRef }: SearchGridProps) {
+const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onOpen, onExitLeft, onExitUp, apiRef }: SearchGridProps) {
   const t = useT();
   const { lang } = useLang();
   const q = useGridPages(desc, lang);
-  // Posterless cards are dropped, as on every TV row: the grid is nothing but artwork.
-  const all = useMemo(() => (q.data?.pages ?? []).flatMap((p) => p.results ?? []).filter((m) => m.poster), [q.data]);
+  // Cards with no wide picture are dropped, as on every TV row: the grid is nothing but artwork.
+  const all = useMemo(() => (q.data?.pages ?? []).flatMap((p) => p.results ?? []).filter((m) => m.tileArt || m.backdrop), [q.data]);
   const stale = q.isPlaceholderData;
 
   /* ONE ORDER PER SET OF RESULTS, ONLY EVER ADDED TO. The catalogue's pages and the add-ons' answers land
@@ -460,10 +591,14 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
     kept.current = { desc, front, extra, list };
     return list;
   }, [desc, front, all, extra, stale]);
+  /* Read by the page when a tile takes focus, which can happen in an effect before `apiRef` is redone
+     (the owed Right below): so the items on screen are kept here as they are rendered. */
+  const shownItems = useRef(items);
+  shownItems.current = items;
 
-  /* SCROLLED BY TRANSFORM, ONE ROW AT A TIME. The row the remote is on sits second from the top, with
-     the row it came from above it and the next one peeking below — the same "nearest" the rest of the
-     build scrolls by, and a single composited move per press. */
+  /* SCROLLED BY TRANSFORM, ONE ROW AT A TIME. The row the remote is on sits at the top, on the focus
+     line the grid drops to (.tv-srch.is-info), with the next ones under it — Prime Video's search: the
+     rows above it are gone under the title's name. A single composited move per press. */
   const rowsRef = useRef<HTMLDivElement>(null);
   const top = useRef(0);
   const y = useRef(0);
@@ -471,10 +606,10 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
     const rows = rowsRef.current;
     if (!rows) return;
     const r = Math.floor(i / COLS);
-    const anchor = r > 0 ? rows.children[(r - 1) * COLS] as HTMLElement | undefined : undefined;
+    const anchor = r > 0 ? rows.children[r * COLS] as HTMLElement | undefined : undefined;
     y.current = anchor?.offsetTop ?? 0;
     rows.style.transform = y.current ? `translate3d(0, ${-y.current}px, 0)` : '';
-    top.current = Math.max(0, r - 1);
+    top.current = r;
   };
   /* A RIGHT PRESSED BEFORE THE RESULTS ARE IN IS OWED, NOT REFUSED. Landing in results that are about to
      be replaced would leave the remote on a tile that vanishes under it, and dropping the press made Right
@@ -512,6 +647,7 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
         (rowsRef.current?.children[top.current * COLS] as HTMLElement | undefined)?.focus({ preventScroll: true });
       },
       y: () => y.current,
+      item: (i) => shownItems.current[i] ?? null,
     };
   });
 
@@ -530,7 +666,7 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
     } else if (e.key === 'ArrowRight') {
       if (c < COLS - 1 && i + 1 < n) to = i + 1;
     } else if (e.key === 'ArrowUp') {
-      if (i < COLS) { (barItemHere() || document.querySelector<HTMLElement>('button.tv-nav-item'))?.focus({ preventScroll: true }); return; }
+      if (i < COLS) { onExitUp(); return; }
       to = i - COLS;
     } else if (i + COLS < n) {
       to = i + COLS;
@@ -560,60 +696,27 @@ const SearchGrid = memo(function SearchGrid({ desc, front, extra, emptyText, onO
   );
 });
 
-/* THE WORDMARK LOADS WITH ITS PICTURE. Both are `lazy`, and lazy waits until an image is inside the
-   grid's clip: the row peeking under the grid had its pictures, but its wordmarks — at the foot of the
-   tile, still under the edge — were fetched only as the row slid up, so every row arrived without its
-   names. A picture that has loaded lets its tile's wordmark load too. */
-const pictureReady = (img: HTMLImageElement) => {
-  img.classList.add('rdy');
-  const mark = img.parentElement?.querySelector<HTMLImageElement>('.tv-spot-thumbmark');
-  if (mark) mark.loading = 'eager';
-};
-
-/* One poster, drawn as a closed row draws it (TvSpotlight's Tile): the same picture choice, and the
-   wordmark — or the title in type — over it. */
+/* One tile, drawn as the Prime page's rows draw theirs: the backdrop with the title lettered in
+   (`tileArt`), else the title's backdrop. No name is laid over it (lettered art, never stamped). */
 const GridTile = memo(function GridTile({ item: it, index, onOpen }: { item: MediaItem; index: number; onOpen: (m: MediaItem) => void }) {
-  const { src, fallbackSrc, pos, own } = tilePictureOf(it);
-  const mark = imgW(it.titleLogo || it.logo || '', LOGO_RENDITION);
-  const name: 'mark' | 'text' | null = mark ? 'mark' : (own ? 'text' : null);
+  const src = imgW(it.tileArt ?? it.backdrop ?? '', 'w500');
   return (
     <button
       type="button"
       role="listitem"
       className="tv-sg-tile"
       data-gi={index}
-      style={{ background: heroFallbackGradient(it) }}
       aria-label={it.title}
       onClick={() => onOpen(it)}
     >
       {src && (
         <img
-          className="tv-spot-thumbimg"
+          className="tv-sg-pic"
           src={src}
-          loading="lazy"
-          decoding="async"
-          style={{ objectPosition: pos }}
-          alt=""
-          ref={(el) => { if (el?.complete && el.naturalWidth > 0) pictureReady(el); }}
-          onLoad={(e) => pictureReady(e.currentTarget)}
-          onError={(e) => {
-            const img = e.currentTarget;
-            if (!fallbackSrc || img.dataset.fell) return;
-            img.dataset.fell = '1';
-            img.src = fallbackSrc;
-          }}
-        />
-      )}
-      {name === 'text' && <span className="tv-spot-thumbtitle" aria-hidden="true">{it.title}</span>}
-      {!!mark && (
-        <img
-          className="tv-spot-thumbmark"
-          src={mark}
           loading="lazy"
           decoding="async"
           alt=""
           onLoad={(e) => e.currentTarget.classList.add('rdy')}
-          onError={(e) => { e.currentTarget.style.display = 'none'; }}
         />
       )}
     </button>
