@@ -310,6 +310,30 @@ const SEED: Record<string, string> = {
   // continue watching
   'sec.continue': 'Continue Watching',
 
+  // page rows (/api/rows — server row keys)
+  'rows.because': 'Because You Watched {title}',
+  'rows.new': 'What’s new?',
+  'rows.new_episodes': 'New Episodes Weekly',
+  'rows.trending': 'What’s everyone watching right now?',
+  'rows.top10': 'What do others rate highly?',
+  'rows.action': 'Blockbuster Action & Adventure',
+  'rows.horror': 'Horror & Supernatural',
+  'rows.awards': 'Award-Winning Cinema',
+  'rows.scifi': 'Mind-Bending Sci-Fi & Thrillers',
+  'rows.comedy': 'Comedy Hits',
+  'rows.family': 'Family & Kids',
+  'rows.binge': 'Binge-Worthy Series',
+  'rows.limited': 'Limited Series (1 Season)',
+  'rows.crime': 'Crime, Mystery & Legal Dramas',
+  'rows.sitcom': 'Sitcoms & Workplace Comedies',
+  'rows.worlds': 'Sci-Fi & Fantasy Worlds',
+  'rows.shonen': 'Shonen Action & Adventure',
+  'rows.isekai': 'Isekai & Fantasy Worlds',
+  'rows.dark': 'Dark Fantasy & Psychological',
+  'rows.romance': 'Slice of Life & Romance',
+  'rows.films': 'Anime Feature Films',
+  'rows.short': 'Short & Complete (12–24 Episodes)',
+
   // my space / my list
   'mylist.empty': 'Your list is empty. Add titles with the + button.',
   'myspace.my_list': 'My List',

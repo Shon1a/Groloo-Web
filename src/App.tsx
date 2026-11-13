@@ -17,6 +17,7 @@ import { slowLink } from './lib/slowLink';
 import AppShell from './layout/AppShell';
 import Home from './routes/Home';
 import Browse from './routes/Browse';
+import RowsPage from './routes/RowsPage';
 import { PrimeTestPage } from './routes/primeTestPage';
 import type { PvKind } from './routes/PrimeTest';
 
@@ -163,12 +164,12 @@ export default function App() {
               land somewhere real. `Categories` is a lazy import, so the redirect also means the
               chunk is never fetched on that build. */}
           <Route path="categories" element={IS_TV ? <Navigate to="/" replace /> : <Suspense fallback={routeFallback}><Categories /></Suspense>} />
-          {/* On a TV these tabs are the Prime-Video layout kept to one kind of content; on the web they
-              stay the grid Browse (routes/PrimeTest.tsx `kind`). A distinct key per kind forces a fresh
+          {/* On a TV these tabs are the Prime-Video layout kept to one kind of content
+              (routes/PrimeTest.tsx `kind`); on the web, the same curated rows (routes/RowsPage.tsx). A distinct key per kind forces a fresh
               mount on each switch, since the page is imperative and must not inherit another's state. */}
-          <Route path="tv" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-series" kind="series" /></Suspense> : <Browse cat="trending_tv" topLevel />} />
-          <Route path="movies" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-movie" kind="movie" /></Suspense> : <Browse cat="trending_movie" topLevel />} />
-          <Route path="anime" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-anime" kind="anime" /></Suspense> : <Browse cat="trending_anime" topLevel />} />
+          <Route path="tv" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-series" kind="series" /></Suspense> : <RowsPage key="rows-series" kind="series" />} />
+          <Route path="movies" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-movie" kind="movie" /></Suspense> : <RowsPage key="rows-movie" kind="movie" />} />
+          <Route path="anime" element={IS_TV ? <Suspense fallback={routeFallback}><PrimeTest key="pv-anime" kind="anime" /></Suspense> : <RowsPage key="rows-anime" kind="anime" />} />
           <Route path="browse/:cat" element={<Browse />} />
           {/* The Prime test tab became the TV home page; the address stays so a stale entry lands somewhere real. */}
           <Route path="prime" element={<Navigate to="/" replace />} />

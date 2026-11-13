@@ -806,6 +806,10 @@
   /* rail card = cover + permanent caption below (title, then ★rating · year · type);
      the hover interaction is the lift above. */
   .pcard{flex:0 0 auto;width:200px;scroll-snap-align:start}
+  /* Because You Watched — the page's featured row: the same rail, its covers half as large again. */
+  .strip.is-featured .pcard,.strip.is-featured .poster{width:300px}
+  .strip.is-featured .poster{height:450px}
+  .strip.is-featured .strip-arrow{height:458px}
   /* home rail cards have NO outline in any state — the poster border is transparent both
      at rest and on hover/focus; feedback comes from the lift + soft shadow only (no ring). */
   .pcard .poster{width:100%;border-color:transparent}
@@ -2740,12 +2744,18 @@
     .poster{width:156px;height:234px}
     .pcard{width:156px}
     .strip-arrow{height:242px}   /* cover(234)+8px lift; keeps top:6 aligned to shorter cover */
+    .strip.is-featured .pcard,.strip.is-featured .poster{width:220px}
+    .strip.is-featured .poster{height:330px}
+    .strip.is-featured .strip-arrow{height:338px}
   }
   @media(max-width:420px){
     .grid{grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:11px}
     .poster{width:144px;height:216px}
     .pcard{width:144px}
     .strip-arrow{height:224px}   /* cover(216)+8px lift */
+    .strip.is-featured .pcard,.strip.is-featured .poster{width:200px}
+    .strip.is-featured .poster{height:300px}
+    .strip.is-featured .strip-arrow{height:308px}
   }
 
   /* ---------- a11y utility ---------- */

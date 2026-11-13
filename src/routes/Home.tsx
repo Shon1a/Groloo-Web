@@ -4,17 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { useHome } from '../lib/queries';
 import { ApiError } from '../lib/api';
 import { useT } from '../i18n/i18n';
-import { HOME_ROWS, CATALOG_CATS, PROVIDER_CATS } from '../lib/home';
-import { useHomeConfig, rowOn } from '../stores/homeConfig';
-import { visibleRows } from '../lib/heartCatalog';
+import { usePageRows } from '../lib/pageRows';
 import Row from '../components/Row';
 import Hero from '../components/Hero';
 import TvHero from '../components/TvHero';
-import UpcomingMarquee from '../components/UpcomingMarquee';
-import StudioRow from '../components/StudioRow';
 import ContinueRow from '../components/ContinueRow';
-import PicksRow from '../components/PicksRow';
-import AddonRows from '../components/AddonRows';
 import { useModal, openItem } from '../stores/modal';
 import { useLibrary } from '../stores/library';
 import { registerRowStager, prepareRowWindow, firstRow } from '../lib/tvRowRegistry';
@@ -62,7 +56,7 @@ const HOME_RAIL_CAP = IS_TV ? 40 : 14;
 const STAGE_FIRST = 1;
 const STAGE_GAP_MS = 32;
 
-type StripRow = { cat: string; title: string; items: MediaItem[] };
+type StripRow = { cat: string; title: string; items: MediaItem[]; featured?: boolean };
 
 function StagedStrips({ rows, tail, onSelect, onSeeAll }: {
   rows: StripRow[];
@@ -118,7 +112,7 @@ function StagedStrips({ rows, tail, onSelect, onSeeAll }: {
   return (
     <>
       {rows.slice(0, limit).map((r) => (
-        <Row key={r.cat} cat={r.cat} title={r.title} items={r.items} onSelect={onSelect} onSeeAll={onSeeAll} />
+        <Row key={r.cat} cat={r.cat} title={r.title} items={r.items} onSelect={onSelect} onSeeAll={onSeeAll} featured={r.featured} plainTitle />
       ))}
       {limit === Infinity && tail}
     </>
@@ -131,7 +125,6 @@ export default function Home() {
   const openModal = useModal((s) => s.open);
   const nav = useNavigate();
   const toggleList = useLibrary((s) => s.toggle);
-  const config = useHomeConfig((s) => s.config);
   /* STABLE, because every row on the page receives these. A fresh closure per render used to
    * reach every TV row as a new `onSelect` prop, which sat in the strip's memo dependencies — so
    * any render of Home (a refetch, a config change) rebuilt every poster tile on the screen for a
@@ -148,27 +141,14 @@ export default function Home() {
     () => (data?.hero?.results ?? []).filter((m) => m.backdrop || m.poster),
     [data?.hero?.results],
   );
-  /* THE SAME STABILITY FOR THE ROWS. `rows[cat].results` keeps its identity across refetches
-   * (structural sharing again), but the `.filter().slice()` below built a new array per row per
-   * render — and a TV row's whole strip memo hangs off `items`. Sliced once per payload here, so a
-   * row's list only changes identity when its titles do. */
-  const rowsData = data?.rows;
-  const rowLists = useMemo(() => {
-    const out: Record<string, MediaItem[]> = {};
-    for (const row of HOME_ROWS) {
-      const list = (rowsData?.[row.cat]?.results ?? []).filter((m) => m.poster).slice(0, HOME_RAIL_CAP);
-      if (list.length) out[row.cat] = list;
-    }
-    return out;
-  }, [rowsData]);
-  const upMovies = data?.upcoming?.movie;
-  const upSeries = data?.upcoming?.series;
-  const upcomingTvRail = useMemo(() => (IS_TV
-    ? Array.from({ length: Math.max(upMovies?.length ?? 0, upSeries?.length ?? 0) }, (_, i) => [upMovies?.[i], upSeries?.[i]])
-      .flat()
-      .filter((m): m is MediaItem => !!m && !!m.poster)
-      .slice(0, HOME_RAIL_CAP)
-    : []), [upMovies, upSeries]);
+  /* THE ROWS ARE THE CURATED HOME SET (/api/rows, lib/pageRows.ts): Continue Watching, then
+   * Because You Watched (larger, the featured row), What's new, Trending, Top 10 — and nothing else.
+   * Sliced once per payload, so a row's list only changes identity when its titles do. */
+  const pageRows = usePageRows('home').rows;
+  const stripRows: StripRow[] = useMemo(() => pageRows.map((r) => ({
+    cat: r.key, title: r.title, featured: r.style === 'featured',
+    items: r.items.filter((m) => m.poster).slice(0, HOME_RAIL_CAP),
+  })).filter((r) => r.items.length), [pageRows]);
 
   /* BACK FROM THE RETRY PANEL ON A TELEVISION. The remote was on its button, and the button has
    * just gone — which leaves focus on <body>, nowhere the D-pad can start from. Put it where launch
@@ -225,45 +205,6 @@ export default function Home() {
     );
   }
 
-  // home-row visibility via the Heart core when available, else the identical JS gating
-  const heartVisible = visibleRows(config);
-  const rowVisible = (cat: string) => (heartVisible
-    ? heartVisible.includes(cat)
-    : CATALOG_CATS.includes(cat) ? (config.catalog && rowOn(config.catalogRows, cat))
-      : PROVIDER_CATS.includes(cat) ? (config.providers && rowOn(config.providerRows, cat))
-        : true);
-  const studiosVisible = heartVisible ? heartVisible.includes('studios') : config.studios;
-
-  /* UPCOMING ON TV IS AN ORDINARY RAIL, not the marquee.
-   *
-   * The web build renders this add-on as two strips of landscape cards that scroll themselves
-   * on a WAAPI loop. That is a website flourish and it is wrong on a TV twice over: nothing on
-   * a 10-foot UI should drift while the remote is trying to land on it, and an infinite
-   * animation is a compositor loop that never idles — the one cost a TV GPU pays for the whole
-   * time the home screen is open. So the TV build shows the same titles through the same <Row>
-   * every other rail uses, which also makes it a normal D-pad stop.
-   *
-   * Movies and series are INTERLEAVED rather than concatenated, and it is no longer the cap that
-   * makes that matter — HOME_RAIL_CAP now clears the whole feed on TV. It is the WALK: the API
-   * returns ~10 of each, and concatenating would put every series past the tenth card, which on a
-   * row nobody walks to the end of is a row labelled "Movies & Series" that only ever shows
-   * movies. Built in the memo above, beside the row lists, for the same identity reason. */
-
-  const stripRows: StripRow[] = [];
-  for (const row of HOME_ROWS) {
-    if (!rowVisible(row.cat)) continue; // add-on gating (Heart core / JS fallback)
-    // Cap each home rail. The API returns ~20 per row and Row renders every one as a
-    // live poster tile, so ~13 rows put ~260 decoded bitmaps on the home screen —
-    // the largest passive memory load in the app and a real out-of-memory risk on a
-    // webOS TV. HOME_RAIL_CAP fills the viewport (~9 cards at 1080p) with comfortable
-    // scroll beyond it, and nothing is lost: on the web every rail's "See all" opens the
-    // full browse grid, and on TV the card at the end of the row lengthens it in place
-    // from the same catalogue (TvHomeRow). Invisible on screen — the first ~9 cards are
-    // unchanged, which is all a rest-state view or a screenshot ever shows.
-    const list = rowLists[row.cat];
-    if (list) stripRows.push({ cat: row.cat, title: t(row.key), items: list });
-  }
-
   return (
     <section className="page active" id="browse" aria-label="Browse catalog">
       <div id="home">
@@ -272,35 +213,9 @@ export default function Home() {
           // title, and adding to the list happens inside it, the same as for any poster in a row.
           ? <TvHero items={heroItems} onPlay={onSelect} />
           : <Hero items={heroItems} onPlay={onSelect} onAdd={onAdd} />)}
-        {config.upcoming && (IS_TV
-          ? (upcomingTvRail.length > 0 && (
-            <Row
-              cat="upcoming_movie"
-              title={t('sec.upcoming_movies')}
-              items={upcomingTvRail}
-              onSelect={onSelect}
-              onSeeAll={onSeeAll}
-            />
-          ))
-          : <UpcomingMarquee movies={upMovies ?? []} series={upSeries ?? []} onSelect={onSelect} onSeeAll={onSeeAll} />)}
         <ContinueRow onSelect={onSelect} />
-        {/* Top Picks for You — hidden until the viewer's history or thumbs give it something
-            personal to say; see PicksRow. */}
-        <PicksRow onSelect={onSelect} />
         <div id="strips">
-          <StagedStrips
-            rows={stripRows}
-            onSelect={onSelect}
-            onSeeAll={onSeeAll}
-            tail={(
-              <>
-                {/* Studios logo row — after the category/provider rows, as in the vanilla layout */}
-                {studiosVisible && <StudioRow onOpen={(key) => nav(`/browse/studio:${key}`)} />}
-                {/* rows supplied by installed community catalog add-ons */}
-                <AddonRows onSelect={onSelect} />
-              </>
-            )}
-          />
+          <StagedStrips rows={stripRows} onSelect={onSelect} onSeeAll={onSeeAll} tail={null} />
         </div>
       </div>
     </section>

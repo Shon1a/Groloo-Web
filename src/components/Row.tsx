@@ -24,9 +24,13 @@ export interface RowProps {
   items: MediaItem[];
   onSelect?: (item: MediaItem) => void;
   onSeeAll?: (cat: string) => void;
+  /** Because You Watched: drawn larger than the rows around it (web) / as the featured row (TV pages). */
+  featured?: boolean;
+  /** A curated page row (/api/rows) is all there is: its title is a heading, not a "see all" link. */
+  plainTitle?: boolean;
 }
 
-export default function Row({ title, cat, items, onSelect, onSeeAll }: RowProps) {
+export default function Row({ title, cat, items, onSelect, onSeeAll, featured, plainTitle }: RowProps) {
   const t = useT();
   if (!items.length) return null;
   if (IS_TV) {
@@ -42,11 +46,15 @@ export default function Row({ title, cat, items, onSelect, onSeeAll }: RowProps)
     return <TvSpotlight items={items} title={title} onSelect={onSelect} />;
   }
   return (
-    <div className="strip reveal in" data-row={cat}>
+    <div className={featured ? 'strip reveal in is-featured' : 'strip reveal in'} data-row={cat}>
       <div className="strip-head">
-        <button className="strip-title mono" type="button" data-cat={cat} onClick={() => onSeeAll?.(cat)} aria-label={`${title} — ${t('cat.see_all')}`}>
-          {title} <span className="arr" aria-hidden="true" />
-        </button>
+        {plainTitle
+          ? <span className="strip-title static mono">{title}</span>
+          : (
+            <button className="strip-title mono" type="button" data-cat={cat} onClick={() => onSeeAll?.(cat)} aria-label={`${title} — ${t('cat.see_all')}`}>
+              {title} <span className="arr" aria-hidden="true" />
+            </button>
+          )}
       </div>
       <Rail>{items.map((m, i) => <PosterCard key={`${m.id}-${i}`} item={m} seed={i} onSelect={onSelect} />)}</Rail>
     </div>
