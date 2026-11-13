@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import { useLang, useT } from '../i18n/i18n';
 import { useHistory, type WatchEntry } from '../stores/history';
+import { useAuth } from '../stores/auth';
 import type { MediaItem } from './types';
 
 /* THE PAGE ROWS — Home, Movies, TV Shows and Anime, as /api/rows curates them (server rows.js):
@@ -26,15 +27,17 @@ const refOf = (e: WatchEntry) => {
   return r ? `${e.type === 'tv' || e.type === 'series' ? 'tv' : 'movie'}/${r}` : '';
 };
 
-const storeKey = (kind: PageKind, lang: string) => `groloo.rows:${IS_TV ? 'tv' : 'web'}:${kind}:${lang}`;
-function readKept(kind: PageKind, lang: string): RowsPayload | undefined {
+/* Kept per ACCOUNT: Because You Watched and Home's Continue Watching exclusions are the account's, so a
+ * sign-in or sign-out must not reuse the other one's rows. */
+const storeKey = (kind: PageKind, lang: string, who: string) => `groloo.rows:${IS_TV ? 'tv' : 'web'}:${kind}:${lang}:${who}`;
+function readKept(kind: PageKind, lang: string, who: string): RowsPayload | undefined {
   try {
-    const v = JSON.parse(sessionStorage.getItem(storeKey(kind, lang)) || 'null') as RowsPayload | null;
+    const v = JSON.parse(sessionStorage.getItem(storeKey(kind, lang, who)) || 'null') as RowsPayload | null;
     return v && v.refreshAt > Date.now() && Array.isArray(v.rows) ? v : undefined;
   } catch { return undefined; }
 }
-function keep(kind: PageKind, lang: string, v: RowsPayload) {
-  try { sessionStorage.setItem(storeKey(kind, lang), JSON.stringify(v)); } catch { /* quota / private mode */ }
+function keep(kind: PageKind, lang: string, who: string, v: RowsPayload) {
+  try { sessionStorage.setItem(storeKey(kind, lang, who), JSON.stringify(v)); } catch { /* quota / private mode */ }
 }
 
 /* Continue Watching's titles: the server keeps them out of Home's other rows. */
@@ -46,23 +49,25 @@ export function usePageRows(kind: PageKind, enabled = true) {
   const { lang } = useLang();
   const t = useT();
   const history = useHistory((s) => s.history);
-  /* Read once per mount: the history only picks the rows when they are fetched. */
+  /* Because You Watched is the ACCOUNT's: signed out, no history is sent for it. Continue Watching's titles
+   * (a signed-out TV still shows this device's own) are kept out of Home's other rows either way. */
+  const who = useAuth((s) => s.user?.email) || '';
   const refs = useMemo(() => continueRefs(history), [history]);
   const query = useQuery({
-    queryKey: ['page-rows', kind, lang],
+    queryKey: ['page-rows', kind, lang, who],
     enabled,
     queryFn: async () => {
-      const kept = readKept(kind, lang);
+      const kept = readKept(kind, lang, who);
       if (kept) return kept;
       const q = new URLSearchParams({ page: kind, lang });
       if (IS_TV) q.set('logos', '1');
-      if (refs.length) q.set('history', refs.slice(0, 12).join(','));
+      if (who && refs.length) q.set('history', refs.slice(0, 12).join(','));
       if (kind === 'home' && refs.length) q.set('exclude', refs.join(','));
       const v = await api<RowsPayload>(`/api/rows?${q}`);
-      keep(kind, lang, v);
+      keep(kind, lang, who, v);
       return v;
     },
-    initialData: () => readKept(kind, lang),
+    initialData: () => readKept(kind, lang, who),
     /* Fresh until the server says the set changes; never refetched behind a page on show. */
     staleTime: (q) => Math.max(0, (q.state.data?.refreshAt ?? 0) - Date.now()),
     refetchOnWindowFocus: false,
