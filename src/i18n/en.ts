@@ -332,7 +332,7 @@ const SEED: Record<string, string> = {
   'rows.dark': 'Dark Fantasy & Psychological',
   'rows.romance': 'Slice of Life & Romance',
   'rows.films': 'Anime Feature Films',
-  'rows.short': 'Short & Complete (12–24 Episodes)',
+  'rows.short': 'Short & Complete',
 
   // my space / my list
   'mylist.empty': 'Your list is empty. Add titles with the + button.',
