@@ -535,11 +535,15 @@ export default function PrimeTest({ kind = 'prime' }: { kind?: PvKind } = {}) {
       if (!cwItems) return out;
       if (cwItems.length) out.push({ key: 'continue', title: t('sec.continue'), items: cwItems, resume: cwItems.map((m) => cw.resumeOf(m)?.pct ?? 0) });
     }
-    for (const r of page.rows) {
-      const feat = r.style === 'featured';
+    /* No Because You Watched (signed out, no history): the page's second row takes the featured card in
+       its place, so every page keeps the card at the same spot (e.g. Trending under What's new) — counted
+       with Continue Watching, which keeps it inside BUILD_FIRST. */
+    const hasFeat = page.rows.some((r) => r.style === 'featured');
+    page.rows.forEach((r) => {
+      const feat = r.style === 'featured' || (!hasFeat && out.length === 1);
       // A featured card shows the poster; a tile row, the backdrop.
       push(r.key, r.title, r.items.filter((m) => (feat ? m.poster : m.backdrop)).slice(0, ROW_CAP), feat);
-    }
+    });
     return out;
   }, [page.ready, page.rows, t, kind, cwItems, cw.resumeOf, mlItems]);
   /* 0 until a frame after the first paint (the shapes are on screen first, as the whole build used to
